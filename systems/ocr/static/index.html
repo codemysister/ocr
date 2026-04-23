@@ -3,15 +3,303 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>OCR — placeholder</title>
+  <title>OCR — PaddleOCR-VL-1.5</title>
   <style>
-    body { font-family: system-ui, sans-serif; max-width: 40rem; margin: 2rem auto; padding: 0 1rem; color: #1a1a1a; }
-    a { color: #2563eb; }
+    :root {
+      --bg: #0f1419;
+      --surface: #1a222d;
+      --border: #2d3a4d;
+      --text: #e8eef5;
+      --muted: #8b9cb3;
+      --accent: #3d9cf5;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "DM Sans", system-ui, -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }
+    header {
+      padding: 1.5rem clamp(1rem, 4vw, 2.5rem);
+      border-bottom: 1px solid var(--border);
+      background: linear-gradient(180deg, #151c26 0%, var(--bg) 100%);
+    }
+    header h1 {
+      margin: 0;
+      font-size: clamp(1.15rem, 2.5vw, 1.5rem);
+      font-weight: 600;
+      letter-spacing: -0.02em;
+    }
+    header p {
+      margin: 0.35rem 0 0;
+      color: var(--muted);
+      font-size: 0.9rem;
+      max-width: 52rem;
+    }
+    .nav-top { margin-top: 0.75rem; }
+    .nav-top a { color: var(--accent); font-size: 0.875rem; }
+    main {
+      padding: clamp(1rem, 3vw, 2rem);
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+    .panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.25rem;
+      margin-bottom: 1.25rem;
+    }
+    .panel h2 {
+      margin: 0 0 1rem;
+      font-size: 0.85rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--muted);
+    }
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+      align-items: center;
+    }
+    input[type="file"] { font-size: 0.875rem; color: var(--muted); }
+    button {
+      font-family: inherit;
+      font-size: 0.9rem;
+      font-weight: 600;
+      padding: 0.6rem 1.2rem;
+      border-radius: 8px;
+      border: none;
+      cursor: pointer;
+    }
+    button.primary {
+      background: var(--accent);
+      color: #061018;
+    }
+    button.primary:hover:not(:disabled) { background: #5aadff; }
+    button:disabled { opacity: 0.45; cursor: not-allowed; }
+    .hint { font-size: 0.8rem; color: var(--muted); width: 100%; }
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+    }
+    @media (max-width: 800px) { .grid { grid-template-columns: 1fr; } }
+    .preview-box {
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: #0a0e14;
+      min-height: 220px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: auto;
+      padding: 0.75rem;
+    }
+    .preview-box img { max-width: 100%; height: auto; border-radius: 4px; }
+    .placeholder { color: var(--muted); font-size: 0.875rem; text-align: center; padding: 1rem; }
+    .status { font-size: 0.85rem; margin-top: 0.75rem; min-height: 1.25rem; }
+    .status.error { color: #f87171; }
+    .status.ok { color: #6ee7b7; }
+    code.endpoint {
+      font-size: 0.78rem;
+      background: #0a0e14;
+      padding: 0.2rem 0.45rem;
+      border-radius: 4px;
+      border: 1px solid var(--border);
+    }
+    textarea.out {
+      width: 100%;
+      min-height: 180px;
+      font-family: ui-monospace, monospace;
+      font-size: 0.8rem;
+      background: #0a0e14;
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.75rem;
+      resize: vertical;
+    }
+    .tabs {
+      display: flex;
+      gap: 0.5rem;
+      margin-bottom: 0.75rem;
+    }
+    .tabs button.tab {
+      background: transparent;
+      color: var(--muted);
+      border: 1px solid var(--border);
+    }
+    .tabs button.tab.active {
+      color: var(--accent);
+      border-color: var(--accent);
+    }
   </style>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;600&display=swap" rel="stylesheet" />
 </head>
 <body>
-  <h1>Sistem OCR</h1>
-  <p>Modul ini siap diisi (endpoint OCR, UI, dll.).</p>
-  <p><a href="/">← Kembali ke beranda</a></p>
+  <header>
+    <h1>OCR — PaddleOCR-VL-1.5</h1>
+    <p>
+      Layanan gambar → teks terpisah: satu unggahan menjalankan inferensi VL lalu
+      <strong>satu kali parsing layout</strong> (<code>restructure_pages</code>). Model:
+      <strong>PaddleOCR-VL-1.5</strong>. API:
+      <code class="endpoint">POST /systems/ocr/api/v1/ocr</code> (field <code>file</code>).
+    </p>
+    <p class="nav-top"><a href="/">← Beranda platform</a> · <a href="/systems/preprocessing/">Preprocessing</a></p>
+  </header>
+  <main>
+    <section class="panel">
+      <h2>Input</h2>
+      <div class="controls">
+        <input type="file" id="file" accept="image/*" />
+        <button type="button" class="primary" id="run" disabled>Jalankan OCR</button>
+        <span class="hint">Butuh PaddlePaddle (layout tetap lokal). OCR_VL_BACKEND + OCR_VL_SERVER_URL hanya mengalihkan inferensi VL. GET /systems/ocr/health: status=ok = HTTP hidup; lihat inference_ready / paddlepaddle_importable — POST /api/v1/ocr yang memuat model (tanpa Paddle → 503).</span>
+      </div>
+      <div class="status" id="status" role="status"></div>
+    </section>
+
+    <div class="grid">
+      <section class="panel">
+        <h2>Gambar asli</h2>
+        <div class="preview-box" id="previewOriginal">
+          <span class="placeholder">Belum ada gambar.</span>
+        </div>
+      </section>
+      <section class="panel">
+        <h2>Hasil visual OCR</h2>
+        <div class="preview-box" id="previewVis">
+          <span class="placeholder">Jalankan OCR untuk menampilkan deteksi layout / visualisasi.</span>
+        </div>
+      </section>
+    </div>
+
+    <section class="panel">
+      <h2>Teks keluaran</h2>
+      <div class="tabs">
+        <button type="button" class="tab active" data-tab="md">Markdown</button>
+        <button type="button" class="tab" data-tab="txt">Teks polos</button>
+      </div>
+      <textarea class="out" id="outMd" readonly placeholder="Markdown hasil parsing…"></textarea>
+      <textarea class="out" id="outTxt" readonly placeholder="Gabungan blok teks…" style="display:none"></textarea>
+    </section>
+  </main>
+
+  <script>
+    const fileInput = document.getElementById("file");
+    const runBtn = document.getElementById("run");
+    const statusEl = document.getElementById("status");
+    const previewOriginal = document.getElementById("previewOriginal");
+    const previewVis = document.getElementById("previewVis");
+    const outMd = document.getElementById("outMd");
+    const outTxt = document.getElementById("outTxt");
+
+    let objectUrlOriginal = null;
+
+    function setStatus(msg, type) {
+      statusEl.textContent = msg || "";
+      statusEl.className = "status" + (type ? " " + type : "");
+    }
+
+    function clearBox(el, text) {
+      el.innerHTML = "";
+      const s = document.createElement("span");
+      s.className = "placeholder";
+      s.textContent = text;
+      el.appendChild(s);
+    }
+
+    function pickVisB64(data) {
+      const imgs = data.ocr_images_png_base64 || {};
+      const order = ["layout_det_res", "layout_det_res_0"];
+      for (const k of order) {
+        if (imgs[k]) return imgs[k];
+      }
+      const keys = Object.keys(imgs);
+      if (keys.length) return imgs[keys[0]];
+      return null;
+    }
+
+    document.querySelectorAll(".tabs .tab").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        document.querySelectorAll(".tabs .tab").forEach((b) => b.classList.remove("active"));
+        btn.classList.add("active");
+        const t = btn.getAttribute("data-tab");
+        outMd.style.display = t === "md" ? "block" : "none";
+        outTxt.style.display = t === "txt" ? "block" : "none";
+      });
+    });
+
+    fileInput.addEventListener("change", () => {
+      if (objectUrlOriginal) URL.revokeObjectURL(objectUrlOriginal);
+      const f = fileInput.files[0];
+      outMd.value = "";
+      outTxt.value = "";
+      if (!f) {
+        runBtn.disabled = true;
+        clearBox(previewOriginal, "Belum ada gambar.");
+        clearBox(previewVis, "Jalankan OCR untuk menampilkan deteksi layout / visualisasi.");
+        setStatus("");
+        return;
+      }
+      objectUrlOriginal = URL.createObjectURL(f);
+      previewOriginal.innerHTML = "";
+      const img = document.createElement("img");
+      img.src = objectUrlOriginal;
+      img.alt = "Asli";
+      previewOriginal.appendChild(img);
+      clearBox(previewVis, "Jalankan OCR untuk menampilkan deteksi layout / visualisasi.");
+      runBtn.disabled = false;
+      setStatus("Gambar siap. Klik Jalankan OCR.", "ok");
+    });
+
+    runBtn.addEventListener("click", async () => {
+      const f = fileInput.files[0];
+      if (!f) return;
+      runBtn.disabled = true;
+      setStatus("Memproses (model besar, bisa memakan waktu)…");
+
+      const fd = new FormData();
+      fd.append("file", f);
+
+      try {
+        const res = await fetch("/systems/ocr/api/v1/ocr", { method: "POST", body: fd });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          const d = data.detail;
+          let msg;
+          if (typeof d === "string") msg = d;
+          else if (d && typeof d === "object" && typeof d.message === "string") msg = d.message;
+          else msg = JSON.stringify(d || res.statusText);
+          throw new Error(msg);
+        }
+        outMd.value = data.markdown || "";
+        outTxt.value = data.text || "";
+
+        const b64 = pickVisB64(data);
+        previewVis.innerHTML = "";
+        if (b64) {
+          const im = document.createElement("img");
+          im.src = "data:image/png;base64," + b64;
+          im.alt = "Visualisasi OCR";
+          previewVis.appendChild(im);
+        } else {
+          clearBox(previewVis, "Tidak ada gambar visual dari model (cek log server).");
+        }
+        setStatus("Selesai — " + (data.model || "OCR"), "ok");
+      } catch (e) {
+        setStatus(e.message || String(e), "error");
+        clearBox(previewVis, "Gagal memuat visual.");
+      } finally {
+        runBtn.disabled = !fileInput.files[0];
+      }
+    });
+  </script>
 </body>
 </html>

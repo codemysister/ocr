@@ -1,0 +1,85 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+pip-log.txt
+pip-delete-this-directory.txt
+
+# --- Virtual environments ---
+.venv/
+venv/
+ENV/
+env/
+.env/
+.conda/
+
+# --- Environment & secrets (uncomment .env if you never commit secrets) ---
+.env
+.env.*
+!.env.example
+
+# --- Test / coverage / typing ---
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.ruff_cache/
+.pytype/
+
+# --- IDE / editor ---
+.idea/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+.settings/
+*.sublime-project
+*.sublime-workspace
+
+# VS Code — hapus baris berikut jika Anda ingin commit .vscode/
+.vscode/
+
+# --- OS ---
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# --- Logs & temp ---
+*.log
+logs/
+tmp/
+temp/
+*.tmp
+.cache/
+
+# --- Jupyter ---
+.ipynb_checkpoints/
+
+# --- Uvicorn / local run (jika ada) ---
+*.pid

@@ -1,5 +1,19 @@
+# Pasang dependensi (setelah: python3.12 -m venv .venv):
+#   source .venv/bin/activate && pip install -r requirements.txt
+# Tanpa aktivasi venv, gunakan: .venv/bin/pip install -r requirements.txt
+# (Perintah "pip" saja gagal jika venv belum diaktifkan — pip hanya di PATH setelah activate.)
+#
+# Penting: jangan menjalankan `python3.12 -m venv .venv` di atas folder .venv lama (mis. yang
+# dibuat dengan Python 3.14) — symlink `python` bisa tetap menunjuk ke 3.14 sementara pip
+# memasang paket ke 3.12 → `import paddle` gagal. Hapus dulu: rm -rf .venv
+# Lalu venv baru, atau jalankan: bash scripts/recreate_venv_312.sh
+
 fastapi>=0.115.0
 uvicorn[standard]>=0.32.0
 python-multipart>=0.0.9
 opencv-python-headless>=4.10.0
-numpy>=2.0.0
+numpy>=2.0.0,<2.4
+paddleocr[doc-parser]>=3.5.0
+# PaddlePaddle: wajib untuk PaddleOCR-VL-1.5 (layout + VL native). Baris di bawah
+# diabaikan pip pada Python >=3.14 (belum ada wheel). Untuk OCR jalan, pakai Python 3.11–3.12 lalu pip install -r requirements.txt
+paddlepaddle>=3.0.0; python_version < "3.14"
