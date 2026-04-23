@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OCR Platform</title>
+  <style>
+    body {
+      font-family: "DM Sans", system-ui, sans-serif;
+      margin: 0;
+      min-height: 100vh;
+      background: #0f1419;
+      color: #e8eef5;
+      padding: 2rem clamp(1rem, 4vw, 3rem);
+    }
+    h1 { font-size: 1.5rem; margin: 0 0 0.5rem; }
+    p { color: #8b9cb3; margin: 0 0 1.5rem; max-width: 36rem; line-height: 1.5; }
+    ul { list-style: none; padding: 0; margin: 0; max-width: 28rem; }
+    li { margin-bottom: 0.75rem; }
+    a {
+      display: block;
+      padding: 1rem 1.25rem;
+      background: #1a222d;
+      border: 1px solid #2d3a4d;
+      border-radius: 10px;
+      color: #3d9cf5;
+      text-decoration: none;
+      font-weight: 600;
+    }
+    a:hover { border-color: #3d9cf5; background: #1e2836; }
+    a span { display: block; font-weight: 400; font-size: 0.85rem; color: #8b9cb3; margin-top: 0.35rem; }
+  </style>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;600&display=swap" rel="stylesheet" />
+</head>
+<body>
+  <h1>OCR platform</h1>
+  <p>Pilih subsistem. Tiap folder di repositori di bawah <code style="color:#6ee7b7;">systems/</code> memetakan ke satu layanan.</p>
+  <ul>
+    <li>
+      <a href="/systems/preprocessing/">
+        Preprocessing
+        <span>Gambar → peningkatan kualitas untuk input OCR</span>
+      </a>
+    </li>
+    <li>
+      <a href="/systems/ocr/">
+        OCR
+        <span>Ekstraksi teks dari gambar (placeholder)</span>
+      </a>
+    </li>
+    <li>
+      <a href="/systems/ai-parsing/">
+        AI parsing
+        <span>Opsional — struktur / semantik dari teks (placeholder)</span>
+      </a>
+    </li>
+  </ul>
+</body>
+</html>

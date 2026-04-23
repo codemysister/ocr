@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Preprocessing Gambar — OCR</title>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --surface: #1a222d;
+      --border: #2d3a4d;
+      --text: #e8eef5;
+      --muted: #8b9cb3;
+      --accent: #3d9cf5;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "DM Sans", system-ui, -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }
+    header {
+      padding: 1.5rem clamp(1rem, 4vw, 2.5rem);
+      border-bottom: 1px solid var(--border);
+      background: linear-gradient(180deg, #151c26 0%, var(--bg) 100%);
+    }
+    header h1 {
+      margin: 0;
+      font-size: clamp(1.15rem, 2.5vw, 1.5rem);
+      font-weight: 600;
+      letter-spacing: -0.02em;
+    }
+    header p {
+      margin: 0.35rem 0 0;
+      color: var(--muted);
+      font-size: 0.9rem;
+      max-width: 52rem;
+    }
+    .nav-top { margin-top: 0.75rem; }
+    .nav-top a { color: var(--accent); font-size: 0.875rem; }
+    main {
+      padding: clamp(1rem, 3vw, 2rem);
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+    .panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.25rem;
+      margin-bottom: 1.25rem;
+    }
+    .panel h2 {
+      margin: 0 0 1rem;
+      font-size: 0.85rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--muted);
+    }
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+      align-items: center;
+    }
+    input[type="file"] {
+      font-size: 0.875rem;
+      color: var(--muted);
+    }
+    button {
+      font-family: inherit;
+      font-size: 0.9rem;
+      font-weight: 600;
+      padding: 0.6rem 1.2rem;
+      border-radius: 8px;
+      border: none;
+      cursor: pointer;
+      transition: background 0.15s, transform 0.1s, opacity 0.15s;
+    }
+    button.primary {
+      background: var(--accent);
+      color: #061018;
+    }
+    button.primary:hover:not(:disabled) { background: #5aadff; }
+    button.secondary {
+      background: transparent;
+      color: var(--accent);
+      border: 1px solid var(--border);
+    }
+    button.secondary:hover:not(:disabled) {
+      border-color: var(--accent);
+      background: rgba(61, 156, 245, 0.08);
+    }
+    button:active:not(:disabled) { transform: scale(0.98); }
+    button:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
+    .hint {
+      font-size: 0.8rem;
+      color: var(--muted);
+      width: 100%;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+    }
+    @media (max-width: 800px) {
+      .grid { grid-template-columns: 1fr; }
+    }
+    .preview-box {
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: #0a0e14;
+      min-height: 220px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: auto;
+      padding: 0.75rem;
+    }
+    .preview-box img {
+      max-width: 100%;
+      height: auto;
+      display: block;
+      border-radius: 4px;
+    }
+    .placeholder {
+      color: var(--muted);
+      font-size: 0.875rem;
+      text-align: center;
+      padding: 1rem;
+    }
+    .status {
+      font-size: 0.85rem;
+      margin-top: 0.75rem;
+      min-height: 1.25rem;
+    }
+    .status.error { color: #f87171; }
+    .status.ok { color: #6ee7b7; }
+    code.endpoint {
+      font-size: 0.78rem;
+      background: #0a0e14;
+      padding: 0.2rem 0.45rem;
+      border-radius: 4px;
+      border: 1px solid var(--border);
+    }
+  </style>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;600&display=swap" rel="stylesheet" />
+</head>
+<body>
+  <header>
+    <h1>Image preprocessing</h1>
+    <p>
+      Untuk foto KTP di latar (bukan scan): otomatis cari bidang kartu lalu luruskan (warp). Setelah itu
+      pencahayaan diratakan, bilateral, CLAHE, dan sharpening ringan — output <strong>grayscale 8-bit</strong>
+      (bukan hitam-putih keras) agar teks tidak melebar dan watermark tidak “meledak”. Layanan ini dapat
+      dipanggil dari sistem OCR melalui <code class="endpoint">POST /api/v1/preprocess</code> (field <code>file</code>).
+      Header <code>X-Preprocess-Card-Warped</code>: 1 jika bidang kartu terdeteksi.
+    </p>
+    <p class="nav-top"><a href="/">← Beranda platform</a></p>
+  </header>
+  <main>
+    <section class="panel" aria-labelledby="input-heading">
+      <h2 id="input-heading">Input &amp; aksi</h2>
+      <div class="controls">
+        <input type="file" id="file" accept="image/*" />
+        <button type="button" class="primary" id="run" disabled>Jalankan preprocessing</button>
+        <button type="button" class="secondary" id="download" disabled>Unduh hasil (PNG)</button>
+        <span class="hint">Pilih gambar → pratinjau asli → jalankan sekali. Unduh tersedia setelah ada hasil.</span>
+      </div>
+      <div class="status" id="status" role="status"></div>
+    </section>
+
+    <div class="grid">
+      <section class="panel" aria-labelledby="orig-heading">
+        <h2 id="orig-heading">Pratinjau asli</h2>
+        <div class="preview-box" id="previewOriginal">
+          <span class="placeholder">Belum ada gambar.</span>
+        </div>
+      </section>
+      <section class="panel" aria-labelledby="out-heading">
+        <h2 id="out-heading">Hasil preprocessing</h2>
+        <div class="preview-box" id="previewResult">
+          <span class="placeholder">Jalankan preprocessing untuk menampilkan hasil.</span>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <script>
+    const fileInput = document.getElementById("file");
+    const runBtn = document.getElementById("run");
+    const downloadBtn = document.getElementById("download");
+    const statusEl = document.getElementById("status");
+    const previewOriginal = document.getElementById("previewOriginal");
+    const previewResult = document.getElementById("previewResult");
+
+    let objectUrlOriginal = null;
+    let objectUrlResult = null;
+
+    function setStatus(msg, type) {
+      statusEl.textContent = msg || "";
+      statusEl.className = "status" + (type ? " " + type : "");
+    }
+
+    function clearBox(el, placeholderText) {
+      el.innerHTML = "";
+      const s = document.createElement("span");
+      s.className = "placeholder";
+      s.textContent = placeholderText;
+      el.appendChild(s);
+    }
+
+    function baseDownloadName() {
+      const f = fileInput.files[0];
+      if (!f || !f.name) return "preprocessed";
+      return f.name.replace(/\.[^.\\/]+$/, "") || "preprocessed";
+    }
+
+    fileInput.addEventListener("change", () => {
+      if (objectUrlOriginal) URL.revokeObjectURL(objectUrlOriginal);
+      if (objectUrlResult) {
+        URL.revokeObjectURL(objectUrlResult);
+        objectUrlResult = null;
+      }
+      const f = fileInput.files[0];
+      downloadBtn.disabled = true;
+      if (!f) {
+        runBtn.disabled = true;
+        clearBox(previewOriginal, "Belum ada gambar.");
+        clearBox(previewResult, "Jalankan preprocessing untuk menampilkan hasil.");
+        setStatus("");
+        return;
+      }
+      objectUrlOriginal = URL.createObjectURL(f);
+      previewOriginal.innerHTML = "";
+      const img = document.createElement("img");
+      img.src = objectUrlOriginal;
+      img.alt = "Gambar asli";
+      previewOriginal.appendChild(img);
+      clearBox(previewResult, "Jalankan preprocessing untuk menampilkan hasil.");
+      runBtn.disabled = false;
+      setStatus("Gambar siap. Klik jalankan preprocessing.", "ok");
+    });
+
+    runBtn.addEventListener("click", async () => {
+      const f = fileInput.files[0];
+      if (!f) return;
+      runBtn.disabled = true;
+      downloadBtn.disabled = true;
+      setStatus("Memproses…");
+
+      const fd = new FormData();
+      fd.append("file", f);
+
+      try {
+        const res = await fetch("/api/v1/preprocess", {
+          method: "POST",
+          body: fd,
+        });
+        if (!res.ok) {
+          let detail = res.statusText;
+          try {
+            const j = await res.json();
+            if (j.detail) detail = typeof j.detail === "string" ? j.detail : JSON.stringify(j.detail);
+          } catch (_) {}
+          throw new Error(detail || "Permintaan gagal");
+        }
+        const blob = await res.blob();
+        if (objectUrlResult) URL.revokeObjectURL(objectUrlResult);
+        objectUrlResult = URL.createObjectURL(blob);
+        previewResult.innerHTML = "";
+        const out = document.createElement("img");
+        out.src = objectUrlResult;
+        out.alt = "Hasil preprocessing";
+        previewResult.appendChild(out);
+        downloadBtn.disabled = false;
+        const w = res.headers.get("X-Preprocess-Width");
+        const h = res.headers.get("X-Preprocess-Height");
+        const cw = res.headers.get("X-Preprocess-Card-Warped");
+        let msg = "Selesai.";
+        if (w && h) msg = "Selesai. Output: " + w + " × " + h + " px (grayscale).";
+        if (cw === "1") msg += " Bidang kartu diluruskan.";
+        else if (cw === "0") msg += " Kartu tidak terdeteksi — seluruh foto diproses.";
+        setStatus(msg, "ok");
+      } catch (e) {
+        setStatus(e.message || "Terjadi kesalahan.", "error");
+      } finally {
+        runBtn.disabled = !fileInput.files[0];
+      }
+    });
+
+    downloadBtn.addEventListener("click", () => {
+      if (!objectUrlResult) return;
+      const a = document.createElement("a");
+      a.href = objectUrlResult;
+      a.download = baseDownloadName() + "_preprocessed.png";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    });
+  </script>
+</body>
+</html>
