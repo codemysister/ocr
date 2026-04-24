@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Validasi dokumen &amp; nama (fuzzy)</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 42rem; margin: 2rem auto; padding: 0 1rem; color: #1a1a1a; }
+    h1 { font-size: 1.25rem; }
+    label { display: block; font-weight: 600; margin-top: 1rem; }
+    textarea, input[type="number"], input[type="text"] { width: 100%; box-sizing: border-box; margin-top: 0.35rem; padding: 0.5rem; font: inherit; }
+    textarea { min-height: 4rem; resize: vertical; }
+    button { margin-top: 1.25rem; padding: 0.6rem 1rem; font-weight: 600; cursor: pointer; }
+    pre { background: #f4f4f5; padding: 1rem; overflow: auto; border-radius: 8px; font-size: 0.85rem; }
+    .ok { color: #15803d; font-weight: 600; }
+    .no { color: #b91c1c; font-weight: 600; }
+    a { color: #2563eb; }
+    .hint { font-weight: 400; color: #555; font-size: 0.9rem; margin-top: 0.25rem; }
+  </style>
+</head>
+<body>
+  <h1>Validasi dokumen (RapidFuzzy)</h1>
+  <p>
+    Pilih jenis dokumen — daftar keyword diambil di server (profil KTP, NPWP, dll.).
+    Isi hasil OCR dan nama referensi (opsional). Tiap keyword dicek fuzzy terhadap teks OCR;
+    nama dicek seperti endpoint <code>compare-names</code>.
+  </p>
+  <form id="f">
+    <label for="doc">Jenis dokumen <span class="hint">(mis. KTP, NPWP — lihat <code>/systems/validation/health</code>)</span></label>
+    <input id="doc" type="text" name="doc" placeholder="KTP" required />
+    <label for="ocr">Hasil OCR</label>
+    <textarea id="ocr" name="ocr" placeholder="Teks lengkap hasil OCR…" required></textarea>
+    <label for="expected">Nama referensi <span class="hint">(opsional)</span></label>
+    <textarea id="expected" name="expected" placeholder="Deva Apriana"></textarea>
+    <label for="thr">Threshold (0–100)</label>
+    <input id="thr" name="thr" type="number" min="0" max="100" step="0.5" value="85" />
+    <button type="submit">Validasi</button>
+  </form>
+  <pre id="out" hidden></pre>
+  <p><a href="/">← Kembali ke beranda</a></p>
+  <script>
+    const f = document.getElementById("f");
+    const out = document.getElementById("out");
+    f.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      out.hidden = true;
+      const ocr_text = document.getElementById("ocr").value;
+      const document_type = document.getElementById("doc").value;
+      const expected_name = document.getElementById("expected").value;
+      const threshold = parseFloat(document.getElementById("thr").value) || 85;
+      const res = await fetch("/systems/validation/api/v1/validate-document", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ocr_text,
+          document_type,
+          expected_name,
+          threshold,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        out.textContent = JSON.stringify(data, null, 2);
+        out.hidden = false;
+        return;
+      }
+      const ok = data.document_matched;
+      const line = ok
+        ? `<span class="ok">Dokumen cocok</span> (document_matched = true)`
+        : `<span class="no">Dokumen tidak cocok</span> (document_matched = false)`;
+      out.innerHTML = line + "\n\n" + JSON.stringify(data, null, 2);
+      out.hidden = false;
+    });
+  </script>
+</body>
+</html>

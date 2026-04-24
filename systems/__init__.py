@@ -1,1 +1,1 @@
-"""Modul terpisah per subsistem: preprocessing, ocr, ai_parsing."""
+"""Modul terpisah per subsistem: preprocessing, ocr, validation."""

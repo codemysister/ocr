@@ -9,6 +9,7 @@
 # Lalu venv baru, atau jalankan: bash scripts/recreate_venv_312.sh
 
 fastapi>=0.115.0
+rapidfuzz>=3.10.0
 uvicorn[standard]>=0.32.0
 python-multipart>=0.0.9
 opencv-python-headless>=4.10.0

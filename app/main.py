@@ -8,8 +8,8 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, RedirectResponse
 
-from systems.ai_parsing.routes import router as ai_parsing_router
 from systems.ocr.routes import router as ocr_router
+from systems.validation.routes import router as validation_router
 from systems.preprocessing.routes import api_router as preprocessing_api_router
 from systems.preprocessing.routes import ui_router as preprocessing_ui_router
 
@@ -17,7 +17,7 @@ HUB_PATH = Path(__file__).resolve().parent / "static" / "hub.html"
 
 app = FastAPI(
     title="OCR Platform",
-    description="Preprocessing, OCR, dan AI parsing (opsional) dalam satu proses.",
+    description="Preprocessing, OCR, dan validasi nama (RapidFuzzy) dalam satu proses.",
     version="1.0.0",
 )
 
@@ -32,7 +32,7 @@ app.add_middleware(
 app.include_router(preprocessing_ui_router)
 app.include_router(preprocessing_api_router)
 app.include_router(ocr_router)
-app.include_router(ai_parsing_router)
+app.include_router(validation_router)
 
 
 @app.get("/health")
@@ -42,7 +42,7 @@ def health() -> dict:
         "systems": {
             "preprocessing": "/systems/preprocessing/health",
             "ocr": "/systems/ocr/health",
-            "ai_parsing": "/systems/ai-parsing/health",
+            "validation": "/systems/validation/health",
         },
     }
 
@@ -51,7 +51,11 @@ def health() -> dict:
 def hub() -> FileResponse:
     if not HUB_PATH.is_file():
         raise HTTPException(404, "hub.html tidak ditemukan.")
-    return FileResponse(HUB_PATH)
+    # Hindari beranda tertahan cache setelah kita mengganti tautan subsistem.
+    return FileResponse(
+        HUB_PATH,
+        headers={"Cache-Control": "no-store, max-age=0"},
+    )
 
 
 @app.get("/preprocess")
