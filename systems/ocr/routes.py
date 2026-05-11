@@ -15,6 +15,7 @@ from systems.ocr.runtime_hint import (
     ocr_inference_unavailable_detail,
     paddlepaddle_importable,
 )
+from systems.ocr.fast_runner import run_paddleocr_fast
 from systems.ocr.vl_runner import run_paddleocr_vl
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -29,7 +30,8 @@ def ocr_health() -> dict:
         "status": "ok",
         "system": "ocr",
         "model": "PaddleOCR-VL-1.5",
-        "api": "/systems/ocr/api/v1/ocr",
+        "api_vl": "/systems/ocr/api/v1/ocr",
+        "api_fast": "/systems/ocr/api/v1/ocr-fast",
         "paddlepaddle_importable": paddle_ok,
         "inference_ready": paddle_ok,
         "health_vs_inference": OCR_HEALTH_VS_INFERENCE,
@@ -57,12 +59,51 @@ async def api_ocr_vl(
         description="Jika true, lampirkan objek result_json lengkap (dapat besar).",
     ),
 ) -> JSONResponse:
+    """Respons berisi `timing` (detik): decode, get_pipeline, predict, restructure_pages, total."""
     raw = await file.read()
     if not raw:
         raise HTTPException(status_code=400, detail="File kosong.")
 
     try:
         payload = run_paddleocr_vl(raw, include_full_json=full_json)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except RuntimeError as e:
+        msg = str(e).lower()
+        if any(
+            x in msg
+            for x in (
+                "paddlepaddle",
+                "dependency",
+                "engine",
+                "unavailable",
+            )
+        ):
+            raise HTTPException(
+                status_code=503,
+                detail=ocr_inference_unavailable_detail(),
+            ) from e
+        raise HTTPException(status_code=500, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+    return JSONResponse(content=jsonable_encoder(payload))
+
+
+@router.post("/api/v1/ocr-fast")
+async def api_ocr_fast(
+    file: UploadFile = File(..., description="Gambar masukan (JPEG/PNG/WebP, dll.)"),
+) -> JSONResponse:
+    """
+    OCR ringan: PP-OCRv5 det+rec (tanpa VL). Respons: `text`, `markdown` (bullet per baris),
+    `lines` (teks + skor + poligon), `timing`. Lingkungan: OCR_FAST_LANG, OCR_FAST_DET_MODEL.
+    """
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(status_code=400, detail="File kosong.")
+
+    try:
+        payload = run_paddleocr_fast(raw)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except RuntimeError as e:

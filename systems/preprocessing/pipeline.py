@@ -8,8 +8,16 @@ from typing import Final
 import cv2
 import numpy as np
 
+from systems.preprocessing.realesrgan_infer import maybe_apply_realesrgan_bgr
+
 MAX_SIDE: Final[int] = 2400
 MIN_SIDE_TARGET: Final[int] = 900
+
+# Varians Laplacian: di bawah ambang = tambah sedikit kontras (tetap pelan untuk VL).
+# Penguatan berlebihan membuat watermark KTP + noise jadi "tekstur rumus" → halusinasi markdown.
+_BLUR_SCORE_HEAVY: Final[float] = 160.0
+# detailEnhance hanya jika sangat blur (jarang); di atas ambang ini dilewati.
+_DETAIL_ENHANCE_MAX_BLUR_SCORE: Final[float] = 55.0
 
 
 def _decode_image(data: bytes) -> np.ndarray:
@@ -137,34 +145,102 @@ def _try_extract_card_warp(bgr: np.ndarray) -> tuple[np.ndarray, bool]:
     return best_warp, True
 
 
-def _enhance_grayscale_for_ocr(gray: np.ndarray) -> np.ndarray:
+def _laplacian_blur_score(gray: np.ndarray) -> float:
     """
-    Perjelas teks tanpa binarisasi adaptif global (menghindari tebal blobby & watermark keras).
-    Output 8-bit grayscale siap OCR.
+    Metrik keburaman: varians respons Laplacian (downscale untuk stabil).
+    Nilai lebih kecil ≈ lebih blur; foto tajam biasanya ratusan ke atas.
+    """
+    if gray.size == 0:
+        return 0.0
+    h, w = gray.shape[:2]
+    m = min(h, w)
+    if m > 520:
+        s = 520.0 / float(m)
+        sw, sh = max(1, int(w * s)), max(1, int(h * s))
+        small = cv2.resize(gray, (sw, sh), interpolation=cv2.INTER_AREA)
+    else:
+        small = gray
+    return float(cv2.Laplacian(small, cv2.CV_64F).var())
+
+
+def _unsharp(eq: np.ndarray, sigma: float, amount: float) -> np.ndarray:
+    blur = cv2.GaussianBlur(eq, (0, 0), sigmaX=sigma)
+    return cv2.addWeighted(eq, 1.0 + amount, blur, -amount, 0)
+
+
+def _enhance_grayscale_for_ocr(
+    gray: np.ndarray,
+    *,
+    blur_score_hint: float | None = None,
+) -> np.ndarray:
+    """
+    Perjelas teks pelan untuk input VL/OCR: pertahankan midtone, hindari kontras ekstrem
+    pada watermark (sering memicu keluaran markdown/LaTeX berulang).
     """
     h, w = gray.shape[:2]
     min_side = min(h, w)
 
-    blur_k = _odd_kernel_from_fraction(min_side, 0.11, 121)
+    blur_score = float(blur_score_hint) if blur_score_hint is not None else _laplacian_blur_score(gray)
+    heavy = blur_score < _BLUR_SCORE_HEAVY
+
+    blur_k = _odd_kernel_from_fraction(min_side, 0.10, 101)
     illum = cv2.GaussianBlur(gray, (blur_k, blur_k), 0).astype(np.float32)
-    illum = np.maximum(illum, 20.0)
-    flat = np.clip(gray.astype(np.float32) / illum * 252.0, 0, 255).astype(np.uint8)
+    illum = np.maximum(illum, 24.0)
+    # Lebih lembut dari *252 agar tidak "membakar" pola latar KTP.
+    flat = np.clip(gray.astype(np.float32) / illum * 238.0, 0, 255).astype(np.uint8)
 
-    smooth = cv2.bilateralFilter(flat, d=5, sigmaColor=35, sigmaSpace=35)
+    # Sedikit lebih banyak penghalusan pada blur agar watermark halus sebelum CLAHE.
+    if heavy:
+        smooth = cv2.bilateralFilter(flat, d=5, sigmaColor=42, sigmaSpace=42)
+    else:
+        smooth = cv2.bilateralFilter(flat, d=5, sigmaColor=32, sigmaSpace=32)
 
-    clahe = cv2.createCLAHE(clipLimit=1.8, tileGridSize=(8, 8))
+    if heavy:
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    else:
+        clahe = cv2.createCLAHE(clipLimit=1.45, tileGridSize=(8, 8))
     eq = clahe.apply(smooth)
+    # Campur kembali dengan smooth: kurangi artefak halftone / rumus palsu pada VL.
+    eq = cv2.addWeighted(smooth, 0.32, eq, 0.68, 0)
 
-    blur = cv2.GaussianBlur(eq, (0, 0), sigmaX=0.9)
-    sharp = cv2.addWeighted(eq, 1.22, blur, -0.22, 0)
-    return sharp
+    if heavy:
+        sharp = _unsharp(eq, sigma=1.15, amount=0.22)
+    else:
+        sharp = _unsharp(eq, sigma=0.85, amount=0.16)
+
+    return np.clip(sharp, 0, 255).astype(np.uint8)
 
 
-def _preprocess_work_bgr(bgr: np.ndarray) -> tuple[np.ndarray, bool]:
+def _maybe_detail_enhance_bgr(bgr: np.ndarray, *, blur_score: float) -> np.ndarray:
+    """
+    Hampir selalu dilewati: detailEnhance + CLAHE kuat mempertegas watermark KTP
+    dan memicu halusinasi (mis. blok LaTeX) pada PaddleOCR-VL.
+    Hanya dipakai jika blur ekstrem (sangat jarang).
+    """
+    if blur_score >= _DETAIL_ENHANCE_MAX_BLUR_SCORE:
+        return bgr
+    try:
+        return cv2.detailEnhance(bgr, None, sigma_s=8, sigma_r=0.08)
+    except cv2.error:
+        return bgr
+
+
+def _preprocess_work_bgr(bgr: np.ndarray) -> tuple[np.ndarray, bool, dict]:
     work = _maybe_resize(bgr)
     cropped, card_warped = _try_extract_card_warp(work)
-    gray = cv2.cvtColor(cropped, cv2.COLOR_BGR2GRAY)
-    return _enhance_grayscale_for_ocr(gray), card_warped
+    gray_probe = cv2.cvtColor(cropped, cv2.COLOR_BGR2GRAY)
+    blur_score = _laplacian_blur_score(gray_probe)
+    cropped_sr, sr_meta = maybe_apply_realesrgan_bgr(cropped)
+    cropped_enh = _maybe_detail_enhance_bgr(cropped_sr, blur_score=blur_score)
+    gray = cv2.cvtColor(cropped_enh, cv2.COLOR_BGR2GRAY)
+    out = _enhance_grayscale_for_ocr(gray, blur_score_hint=blur_score)
+    meta = {
+        "blur_score_laplacian": round(blur_score, 2),
+        "heavy_blur_enhance": blur_score < _BLUR_SCORE_HEAVY,
+        "detail_enhance_bgr": blur_score < _DETAIL_ENHANCE_MAX_BLUR_SCORE,
+        **sr_meta,
+    }
+    return out, card_warped, meta
 
 
 def preprocess_for_ocr(bgr: np.ndarray) -> np.ndarray:
@@ -173,7 +249,7 @@ def preprocess_for_ocr(bgr: np.ndarray) -> np.ndarray:
     2) Deteksi bidang kartu + warp (menghindari tekstur kain/latar foto).
     3) Perkuat grayscale 8-bit untuk OCR (tanpa binarisasi keras).
     """
-    out, _ = _preprocess_work_bgr(bgr)
+    out, _, _ = _preprocess_work_bgr(bgr)
     return out
 
 
@@ -181,11 +257,14 @@ def preprocess_image_bytes(data: bytes) -> tuple[bytes, dict]:
     """
     Decode bytes gambar → pipeline OCR → PNG bytes (grayscale 8-bit).
 
+    Langkah opsional Real-ESRGAN (super-res): set PREPROCESS_USE_REALESRGAN=1
+    dan pasang requirements-realesrgan.txt — lihat `realesrgan_infer.py`.
+
     Returns:
-        (png_bytes, metadata) metadata berisi dimensi output.
+        (png_bytes, metadata) metadata berisi dimensi output + info blur / realesrgan.
     """
     bgr = _decode_image(data)
-    out, card_warped = _preprocess_work_bgr(bgr)
+    out, card_warped, enhance_meta = _preprocess_work_bgr(bgr)
     ok, encoded = cv2.imencode(".png", out)
     if not ok:
         raise ValueError("Gagal mengenkode hasil ke PNG.")
@@ -195,6 +274,7 @@ def preprocess_image_bytes(data: bytes) -> tuple[bytes, dict]:
         "channels": 1,
         "encoding": "grayscale_8bit",
         "card_warped": card_warped,
+        **enhance_meta,
     }
     return encoded.tobytes(), meta
 

@@ -21,19 +21,20 @@
 <body>
   <h1>Validasi dokumen (RapidFuzzy)</h1>
   <p>
-    Pilih jenis dokumen — daftar keyword diambil di server (profil KTP, NPWP, dll.).
-    Isi hasil OCR dan nama referensi (opsional). Tiap keyword dicek fuzzy terhadap teks OCR;
-    nama dicek seperti endpoint <code>compare-names</code>.
+    <strong>Tipe dokumen</strong>: keyword profil (KTP, NPWP, …) dicek terhadap OCR penuh;
+    rata-rata skor harus ≥ <strong>70%</strong> (default server: 0.7).
+    <strong>Identitas</strong> (jika nama referensi diisi): server mengekstrak nama dari OCR
+    (penanda <code>nama</code> atau segmen teks paling cocok dengan nama Anda), lalu skor gabungan harus ≥
+    <strong>65</strong> (default server, skala 0–100).
+    <strong>Dokumen cocok</strong> = tipe lolos dan (tanpa nama referensi atau identitas lolos).
   </p>
   <form id="f">
     <label for="doc">Jenis dokumen <span class="hint">(mis. KTP, NPWP — lihat <code>/systems/validation/health</code>)</span></label>
     <input id="doc" type="text" name="doc" placeholder="KTP" required />
     <label for="ocr">Hasil OCR</label>
     <textarea id="ocr" name="ocr" placeholder="Teks lengkap hasil OCR…" required></textarea>
-    <label for="expected">Nama referensi <span class="hint">(opsional)</span></label>
+    <label for="expected">Nama referensi <span class="hint">(opsional — kosongkan hanya cek keyword)</span></label>
     <textarea id="expected" name="expected" placeholder="Deva Apriana"></textarea>
-    <label for="thr">Threshold (0–100)</label>
-    <input id="thr" name="thr" type="number" min="0" max="100" step="0.5" value="85" />
     <button type="submit">Validasi</button>
   </form>
   <pre id="out" hidden></pre>
@@ -47,7 +48,6 @@
       const ocr_text = document.getElementById("ocr").value;
       const document_type = document.getElementById("doc").value;
       const expected_name = document.getElementById("expected").value;
-      const threshold = parseFloat(document.getElementById("thr").value) || 85;
       const res = await fetch("/systems/validation/api/v1/validate-document", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -55,7 +55,6 @@
           ocr_text,
           document_type,
           expected_name,
-          threshold,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -65,9 +64,32 @@
         return;
       }
       const ok = data.document_matched;
+      const dt = data.document_type_pass === true ? "tipe ✓" : "tipe ✗";
+      let idLine = "";
+      if (data.identity_pass === null || data.identity_pass === undefined) {
+        idLine = " — identitas tidak dicek (nama kosong)";
+      } else {
+        const isc =
+          data.identity && typeof data.identity.identity_combined_score === "number"
+            ? data.identity.identity_combined_score.toFixed(1)
+            : "?";
+        idLine =
+          " — identitas " +
+          (data.identity_pass ? "✓" : "✗") +
+          " (skor " +
+          isc +
+          "/" +
+          (data.identity_min_score ?? "?") +
+          ")";
+      }
+      const kw =
+        typeof data.document_type_aggregate_pass_ratio === "number"
+          ? (data.document_type_aggregate_pass_ratio * 100).toFixed(1)
+          : "?";
+      const sum = ` — keyword ~${kw}% (syarat ≥ ${(data.aggregate_min_pass_ratio * 100).toFixed(0)}%), ${dt}${idLine}`;
       const line = ok
-        ? `<span class="ok">Dokumen cocok</span> (document_matched = true)`
-        : `<span class="no">Dokumen tidak cocok</span> (document_matched = false)`;
+        ? `<span class="ok">Dokumen cocok</span>${sum}`
+        : `<span class="no">Dokumen tidak cocok</span>${sum}`;
       out.innerHTML = line + "\n\n" + JSON.stringify(data, null, 2);
       out.hidden = false;
     });

@@ -1,4 +1,6 @@
-# Pasang dependensi (setelah: python3.12 -m venv .venv):
+# Jalankan server (venv + pip + uvicorn): ./run.sh   atau   bash scripts/dev_server.sh
+#
+# Pasang dependensi manual (setelah: python3.12 -m venv .venv):
 #   source .venv/bin/activate && pip install -r requirements.txt
 # Tanpa aktivasi venv, gunakan: .venv/bin/pip install -r requirements.txt
 # (Perintah "pip" saja gagal jika venv belum diaktifkan — pip hanya di PATH setelah activate.)
@@ -18,3 +20,9 @@ paddleocr[doc-parser]>=3.5.0
 # PaddlePaddle: wajib untuk PaddleOCR-VL-1.5 (layout + VL native). Baris di bawah
 # diabaikan pip pada Python >=3.14 (belum ada wheel). Untuk OCR jalan, pakai Python 3.11–3.12 lalu pip install -r requirements.txt
 paddlepaddle>=3.0.0; python_version < "3.14"
+#
+# Real-ESRGAN (super-res HD, opsional): pip install -r requirements-realesrgan.txt
+# lalu set PREPROCESS_USE_REALESRGAN=1 — lihat systems/preprocessing/realesrgan_infer.py
+#
+# OCR cepat (PP-OCRv5 det+rec): POST /systems/ocr/api/v1/ocr-fast — env: OCR_FAST_LANG,
+# OCR_FAST_DET_MODEL, OCR_FAST_REC_MODEL, OCR_FAST_DET_LIMIT_SIDE_LEN (lihat systems/ocr/fast_runner.py).

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>OCR — PaddleOCR-VL-1.5</title>
+  <title>OCR — VL &amp; fast (PP-OCRv5)</title>
   <style>
     :root {
       --bg: #0f1419;
@@ -86,10 +86,10 @@
     .hint { font-size: 0.8rem; color: var(--muted); width: 100%; }
     .grid {
       display: grid;
-      grid-template-columns: 1fr 1fr;
+      grid-template-columns: 1fr;
       gap: 1rem;
+      max-width: 42rem;
     }
-    @media (max-width: 800px) { .grid { grid-template-columns: 1fr; } }
     .preview-box {
       border-radius: 8px;
       border: 1px solid var(--border);
@@ -139,28 +139,42 @@
       color: var(--accent);
       border-color: var(--accent);
     }
+    .mode-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 1rem;
+      align-items: center;
+      margin-bottom: 0.75rem;
+      font-size: 0.9rem;
+    }
+    .mode-row label { cursor: pointer; color: var(--text); }
+    .mode-row input { margin-right: 0.35rem; }
   </style>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;600&display=swap" rel="stylesheet" />
 </head>
 <body>
   <header>
-    <h1>OCR — PaddleOCR-VL-1.5</h1>
+    <h1>OCR — VL &amp; mode cepat</h1>
     <p>
-      Layanan gambar → teks terpisah: satu unggahan menjalankan inferensi VL lalu
-      <strong>satu kali parsing layout</strong> (<code>restructure_pages</code>). Model:
-      <strong>PaddleOCR-VL-1.5</strong>. API:
-      <code class="endpoint">POST /systems/ocr/api/v1/ocr</code> (field <code>file</code>).
+      <strong>VL</strong>: layout + PaddleOCR-VL-1.5 —
+      <code class="endpoint">POST /systems/ocr/api/v1/ocr</code>.
+      <strong>Cepat</strong>: PP-OCRv5 det+rec saja (tanpa VL), biasanya jauh lebih ringan —
+      <code class="endpoint">POST /systems/ocr/api/v1/ocr-fast</code>. Keduanya field <code>file</code>.
     </p>
     <p class="nav-top"><a href="/">← Beranda platform</a> · <a href="/systems/preprocessing/">Preprocessing</a></p>
   </header>
   <main>
     <section class="panel">
       <h2>Input</h2>
+      <div class="mode-row" role="radiogroup" aria-label="Mode OCR">
+        <label><input type="radio" name="ocrMode" value="fast" checked /> Cepat (PP-OCRv5)</label>
+        <label><input type="radio" name="ocrMode" value="vl" /> VL-1.5 (layout + markdown)</label>
+      </div>
       <div class="controls">
         <input type="file" id="file" accept="image/*" />
         <button type="button" class="primary" id="run" disabled>Jalankan OCR</button>
-        <span class="hint">Butuh PaddlePaddle (layout tetap lokal). OCR_VL_BACKEND + OCR_VL_SERVER_URL hanya mengalihkan inferensi VL. GET /systems/ocr/health: status=ok = HTTP hidup; lihat inference_ready / paddlepaddle_importable — POST /api/v1/ocr yang memuat model (tanpa Paddle → 503).</span>
+        <span class="hint">Mode cepat: unduh model det/rec pertama kali (~paddlex). VL butuh Paddle + model besar. Lingkungan cepat: OCR_FAST_LANG, OCR_FAST_DET_MODEL. GET /systems/ocr/health.</span>
       </div>
       <div class="status" id="status" role="status"></div>
     </section>
@@ -172,12 +186,6 @@
           <span class="placeholder">Belum ada gambar.</span>
         </div>
       </section>
-      <section class="panel">
-        <h2>Hasil visual OCR</h2>
-        <div class="preview-box" id="previewVis">
-          <span class="placeholder">Jalankan OCR untuk menampilkan deteksi layout / visualisasi.</span>
-        </div>
-      </section>
     </div>
 
     <section class="panel">
@@ -185,9 +193,11 @@
       <div class="tabs">
         <button type="button" class="tab active" data-tab="md">Markdown</button>
         <button type="button" class="tab" data-tab="txt">Teks polos</button>
+        <button type="button" class="tab" data-tab="lines">Baris (JSON)</button>
       </div>
       <textarea class="out" id="outMd" readonly placeholder="Markdown hasil parsing…"></textarea>
       <textarea class="out" id="outTxt" readonly placeholder="Gabungan blok teks…" style="display:none"></textarea>
+      <textarea class="out" id="outLines" readonly placeholder="Daftar baris + skor (mode cepat)…" style="display:none"></textarea>
     </section>
   </main>
 
@@ -196,9 +206,47 @@
     const runBtn = document.getElementById("run");
     const statusEl = document.getElementById("status");
     const previewOriginal = document.getElementById("previewOriginal");
-    const previewVis = document.getElementById("previewVis");
     const outMd = document.getElementById("outMd");
     const outTxt = document.getElementById("outTxt");
+    const outLines = document.getElementById("outLines");
+
+    function selectedMode() {
+      const r = document.querySelector('input[name="ocrMode"]:checked');
+      return r ? r.value : "fast";
+    }
+
+    function ocrEndpoint() {
+      return selectedMode() === "vl"
+        ? "/systems/ocr/api/v1/ocr"
+        : "/systems/ocr/api/v1/ocr-fast";
+    }
+
+    function timingSummary(data) {
+      const t = data.timing || {};
+      if (typeof t.total_wall_s !== "number") return "";
+      if (selectedMode() === "vl") {
+        return (
+          " total " +
+          t.total_wall_s +
+          "s (predict " +
+          (t.predict_s ?? "?") +
+          "s · restructure " +
+          (t.restructure_pages_s ?? "?") +
+          "s · get_pipeline " +
+          (t.get_pipeline_s ?? "?") +
+          "s)"
+        );
+      }
+      return (
+        " total " +
+        t.total_wall_s +
+        "s (predict " +
+        (t.predict_s ?? "?") +
+        "s · get_engine " +
+        (t.get_engine_s ?? "?") +
+        "s)"
+      );
+    }
 
     let objectUrlOriginal = null;
 
@@ -215,17 +263,6 @@
       el.appendChild(s);
     }
 
-    function pickVisB64(data) {
-      const imgs = data.ocr_images_png_base64 || {};
-      const order = ["layout_det_res", "layout_det_res_0"];
-      for (const k of order) {
-        if (imgs[k]) return imgs[k];
-      }
-      const keys = Object.keys(imgs);
-      if (keys.length) return imgs[keys[0]];
-      return null;
-    }
-
     document.querySelectorAll(".tabs .tab").forEach((btn) => {
       btn.addEventListener("click", () => {
         document.querySelectorAll(".tabs .tab").forEach((b) => b.classList.remove("active"));
@@ -233,6 +270,7 @@
         const t = btn.getAttribute("data-tab");
         outMd.style.display = t === "md" ? "block" : "none";
         outTxt.style.display = t === "txt" ? "block" : "none";
+        outLines.style.display = t === "lines" ? "block" : "none";
       });
     });
 
@@ -241,10 +279,10 @@
       const f = fileInput.files[0];
       outMd.value = "";
       outTxt.value = "";
+      outLines.value = "";
       if (!f) {
         runBtn.disabled = true;
         clearBox(previewOriginal, "Belum ada gambar.");
-        clearBox(previewVis, "Jalankan OCR untuk menampilkan deteksi layout / visualisasi.");
         setStatus("");
         return;
       }
@@ -254,7 +292,6 @@
       img.src = objectUrlOriginal;
       img.alt = "Asli";
       previewOriginal.appendChild(img);
-      clearBox(previewVis, "Jalankan OCR untuk menampilkan deteksi layout / visualisasi.");
       runBtn.disabled = false;
       setStatus("Gambar siap. Klik Jalankan OCR.", "ok");
     });
@@ -269,7 +306,7 @@
       fd.append("file", f);
 
       try {
-        const res = await fetch("/systems/ocr/api/v1/ocr", { method: "POST", body: fd });
+        const res = await fetch(ocrEndpoint(), { method: "POST", body: fd });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
           const d = data.detail;
@@ -281,21 +318,12 @@
         }
         outMd.value = data.markdown || "";
         outTxt.value = data.text || "";
-
-        const b64 = pickVisB64(data);
-        previewVis.innerHTML = "";
-        if (b64) {
-          const im = document.createElement("img");
-          im.src = "data:image/png;base64," + b64;
-          im.alt = "Visualisasi OCR";
-          previewVis.appendChild(im);
-        } else {
-          clearBox(previewVis, "Tidak ada gambar visual dari model (cek log server).");
-        }
-        setStatus("Selesai — " + (data.model || "OCR"), "ok");
+        outLines.value = Array.isArray(data.lines)
+          ? JSON.stringify(data.lines, null, 2)
+          : "(Mode VL: tidak ada `lines` — gunakan Markdown / Teks polos.)";
+        setStatus("Selesai — " + (data.model || data.mode || "OCR") + timingSummary(data), "ok");
       } catch (e) {
         setStatus(e.message || String(e), "error");
-        clearBox(previewVis, "Gagal memuat visual.");
       } finally {
         runBtn.disabled = !fileInput.files[0];
       }

@@ -83,3 +83,6 @@ temp/
 
 # --- Uvicorn / local run (jika ada) ---
 *.pid
+
+# --- Real-ESRGAN weights (auto-download) ---
+models/realesrgan/*.pth

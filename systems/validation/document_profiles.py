@@ -6,7 +6,7 @@ from typing import Final
 
 # id kanonik → label yang diharapkan muncul di OCR (dicek fuzzy satu per satu)
 CANONICAL_KEYWORDS: Final[dict[str, list[str]]] = {
-    "ktp": ["nik", "rt/rw", "kewarganegaraan", "agama"],
+    "ktp": ["nik", "kewarganegaraan", "agama"],
     "npwp": ["npwp", "nomor wajib pajak", "nik", "nama"],
 }
 

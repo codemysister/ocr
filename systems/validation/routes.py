@@ -39,11 +39,24 @@ class ValidateDocumentBody(BaseModel):
         "",
         description="Nama yang diharapkan; kosongkan jika hanya cek keyword profil",
     )
-    threshold: float = Field(
-        85.0,
+    aggregate_min_pass_ratio: float = Field(
+        0.7,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Minimal rata-rata skor fuzzy keyword (0–1) terhadap OCR penuh: "
+            "rata-rata best_score/100 tiap keyword profil (non-skip). Default 0.7."
+        ),
+    )
+    identity_min_score: float = Field(
+        65.0,
         ge=0.0,
         le=100.0,
-        description="Ambang fuzzy sama untuk tiap keyword dan nama",
+        description=(
+            "Minimal skor identitas 0–100: nama diekstrak dari OCR vs nama referensi, "
+            "rata-rata(token_sort_ratio, WRatio, partial_ratio) pada dua string pendek. "
+            "Hanya dipakai jika expected_name tidak kosong. Default 65."
+        ),
     )
 
     @field_validator("document_type")
@@ -66,6 +79,10 @@ def validation_health() -> dict:
             "/systems/validation/api/v1/compare-names",
             "/systems/validation/api/v1/validate-document",
         ],
+        "validate_document_note": (
+            "document_matched = document_type_pass AND (tanpa nama referensi | identity_pass). "
+            "Default aggregate_min_pass_ratio=0.7, identity_min_score=65 (opsional di body JSON)."
+        ),
     }
 
 
@@ -118,9 +135,11 @@ def api_validate_document(body: ValidateDocumentBody) -> JSONResponse:
     detail = validate_document_ocr(
         body.ocr_text,
         document_type=body.document_type.strip(),
+        document_profile_id=canonical_id,
         keywords=keywords,
         expected_name=body.expected_name,
-        threshold=body.threshold,
+        aggregate_min_pass_ratio=body.aggregate_min_pass_ratio,
+        identity_min_score=body.identity_min_score,
     )
     payload = {
         "success": True,

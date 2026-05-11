@@ -9,6 +9,7 @@ from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response
 
 from systems.preprocessing.pipeline import preprocess_image_bytes
+from systems.preprocessing.realesrgan_infer import realesrgan_status_for_health
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -18,7 +19,11 @@ api_router = APIRouter(tags=["preprocessing"])
 
 @ui_router.get("/health")
 def preprocessing_health() -> dict:
-    return {"status": "ok", "system": "preprocessing"}
+    return {
+        "status": "ok",
+        "system": "preprocessing",
+        "realesrgan": realesrgan_status_for_health(),
+    }
 
 
 @ui_router.get("/")

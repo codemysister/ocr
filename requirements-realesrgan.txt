@@ -1,0 +1,14 @@
+# Super-resolusi Real-ESRGAN untuk preprocessing (opsional, berat).
+# Pasang SETELAH requirements.txt:
+#   source .venv/bin/activate
+#   pip install -r requirements-realesrgan.txt
+# Aktifkan pipeline:
+#   export PREPROCESS_USE_REALESRGAN=1
+# Bobot diunduh otomatis ke models/realesrgan/ (besar ~64 MB untuk x4plus).
+#
+# Gunakan Python 3.11–3.14 sesuai wheel torch untuk platform Anda.
+
+torch>=2.1.0,<2.7
+torchvision>=0.16.0,<0.23
+basicsr>=1.4.2
+realesrgan>=0.3.0
