@@ -171,6 +171,174 @@ def fuzzy_keyword_against_ocr(keyword: str, ocr_normalized: str) -> dict[str, An
     }
 
 
+_EXTRACTION_METHOD_ID: dict[str, str] = {
+    "nama_inline_colon": "teks setelah label 'Nama:' pada baris yang sama",
+    "after_nama_segment": "segmen berikut setelah kata 'Nama'",
+    "regex_nama": "pola teks di sekitar kata 'nama' dalam OCR",
+    "best_person_like_vs_expected": "segmen yang paling mirip nama (heuristik, karena penanda 'Nama' tidak jelas)",
+    "person_like_segment": "segmen mirip nama dengan skor identitas tertinggi vs referensi",
+    "failed": "tidak berhasil menarik nama dari OCR",
+    "skipped_no_expected_name": "nama referensi kosong — identitas tidak diuji",
+}
+
+
+def _validation_explanation(
+    *,
+    document_matched: bool,
+    document_type_pass: bool,
+    document_type_aggregate_pass_ratio: float,
+    aggregate_min_pass_ratio: float,
+    keyword_results: list[dict[str, Any]],
+    want_identity: bool,
+    identity_pass: bool | None,
+    identity_min_score: float,
+    identity: dict[str, Any] | None,
+    name_extraction: dict[str, Any],
+    expected_name_display: str,
+) -> dict[str, Any]:
+    """Ringkasan manusiawi + kode untuk klien API."""
+    req_pct = aggregate_min_pass_ratio * 100.0
+    avg_pct = document_type_aggregate_pass_ratio * 100.0
+    blockers: list[str] = []
+    detail_lines: list[str] = []
+    hints: list[str] = []
+
+    kw_non_skipped = [k for k in keyword_results if not k.get("skipped")]
+    n_kw = len(kw_non_skipped)
+
+    if document_type_pass:
+        dt_reason = (
+            f"Profil jenis dokumen lolos: rata-rata skor keyword {avg_pct:.1f}% "
+            f"mencapai syarat minimal {req_pct:.0f}% ({n_kw} keyword dihitung)."
+        )
+    else:
+        blockers.append("DOCUMENT_TYPE")
+        dt_reason = (
+            f"Profil jenis dokumen tidak lolos: rata-rata skor keyword {avg_pct:.1f}% "
+            f"di bawah syarat {req_pct:.0f}% ({n_kw} keyword dihitung)."
+        )
+        worst = sorted(
+            (k for k in kw_non_skipped),
+            key=lambda x: float(x.get("best_score") or 0.0),
+        )[:5]
+        if worst:
+            low_bits = ", ".join(
+                f"«{w.get('keyword_raw', '')}» ~{float(w.get('best_score') or 0):.0f}%"
+                for w in worst
+            )
+            dt_reason += f" Keyword terendah: {low_bits}."
+        hints.append(
+            "Periksa apakah OCR teks profil (mis. 'REPUBLIK INDONESIA', 'KTP') terbaca utuh; "
+            "coba preprocess atau mode OCR lain bila teks keyword putus-putus.",
+        )
+    detail_lines.append(dt_reason)
+
+    id_reason = ""
+    if not want_identity:
+        id_reason = (
+            "Identitas tidak diuji karena nama referensi kosong — "
+            "`document_matched` hanya mengandalkan profil keyword."
+        )
+    elif identity_pass is True:
+        id_reason = (
+            f"Identitas lolos: skor gabungan nama ≥ ambang {identity_min_score:.0f} "
+            "(rata-rata token_sort_ratio, WRatio, partial_ratio pada nama vs referensi)."
+        )
+    else:
+        blockers.append("IDENTITY")
+        method = str(name_extraction.get("method") or "")
+        method_human = _EXTRACTION_METHOD_ID.get(method, method or "tidak diketahui")
+        raw_cand = name_extraction.get("candidate_raw")
+        if identity and identity.get("extraction_failed"):
+            id_reason = (
+                "Identitas tidak lolos: tidak menemukan cuplikan nama yang cukup meyakinkan dari OCR "
+                f"(metode ekstraksi: {method_human}). "
+                f"Nama referensi yang diharapkan: «{expected_name_display}»."
+            )
+            hints.append(
+                "Pastikan baris 'Nama' di dokumen terbaca jelas di teks OCR; "
+                "bandingkan cuplikan teks OCR dengan field nama di KTP/NPWP.",
+            )
+        elif not raw_cand:
+            id_reason = (
+                "Identitas tidak lolos: tidak ada kandidat nama terpilih dari OCR "
+                f"({method_human}). Nama referensi: «{expected_name_display}»."
+            )
+            hints.append(
+                "Isi nama referensi sama seperti di dokumen (urutan kata, tanpa gelar jika tidak ada di KTP).",
+            )
+        elif identity:
+            isc = float(identity.get("identity_combined_score") or 0.0)
+            scores = identity.get("scores") or {}
+            ts = float(scores.get("token_sort_ratio") or 0.0)
+            wr = float(scores.get("wratio") or 0.0)
+            pr = float(scores.get("partial_ratio") or 0.0)
+            ext = identity.get("extracted_normalized") or ""
+            exp = identity.get("expected_normalized") or ""
+            id_reason = (
+                "Identitas tidak lolos: nama yang dipakai dari OCR "
+                f"«{raw_cand}» (dinormalisasi: «{ext}»; cara ambil: {method_human}) "
+                f"dibandingkan dengan referensi «{expected_name_display}» (dinormalisasi: «{exp}»). "
+                f"Skor gabungan {isc:.1f} di bawah ambang {identity_min_score:.0f}. "
+                f"Rincian sub-skor — token_sort_ratio: {ts:.1f}, WRatio: {wr:.1f}, partial_ratio: {pr:.1f}. "
+                "Skor gabungan adalah rata-rata ketiga angka tersebut."
+            )
+            if isc + 15 < identity_min_score:
+                hints.append(
+                    "Kemiripan nama rendah: cek salah baca OCR, nama pendek/alias, atau nama referensi yang tidak sama dengan di dokumen.",
+                )
+            elif ts < wr and ts < pr:
+                hints.append(
+                    "token_sort_ratio rendah — urutan atau penggalan kata antara OCR dan referensi mungkin berbeda; "
+                    "samakan ejaan dan spasi.",
+                )
+        else:
+            id_reason = "Identitas tidak lolos (detail skor tidak tersedia)."
+    detail_lines.append(id_reason)
+
+    if document_matched:
+        summary_id = "Dokumen dianggap cocok: semua gate yang aktif telah lulus."
+        blockers = []
+    elif blockers == ["IDENTITY"] and document_type_pass:
+        summary_id = (
+            "Dokumen tidak cocok karena identitas: profil keyword/jenis dokumen lolos, "
+            "tetapi nama dari OCR tidak cukup mirip dengan nama referensi."
+        )
+    elif blockers == ["DOCUMENT_TYPE"]:
+        summary_id = (
+            "Dokumen tidak cocok karena profil jenis dokumen: keyword tidak mencapai ambang agregat."
+        )
+    elif "DOCUMENT_TYPE" in blockers and "IDENTITY" in blockers:
+        summary_id = (
+            "Dokumen tidak cocok: profil jenis dokumen dan identitas keduanya tidak memenuhi syarat."
+        )
+    elif "IDENTITY" in blockers:
+        summary_id = "Dokumen tidak cocok karena identitas tidak memenuhi syarat."
+    else:
+        summary_id = "Dokumen tidak cocok."
+
+    return {
+        "locale": "id",
+        "document_matched": document_matched,
+        "primary_blockers": blockers,
+        "summary": summary_id,
+        "detail_lines": detail_lines,
+        "hints": hints,
+        "gates": {
+            "document_type": {
+                "pass": document_type_pass,
+                "aggregate_percent": round(avg_pct, 4),
+                "required_percent": round(req_pct, 4),
+            },
+            "identity": {
+                "evaluated": want_identity,
+                "pass": identity_pass,
+                "min_combined_score": identity_min_score,
+            },
+        },
+    }
+
+
 def validate_document_ocr(
     ocr_text: str,
     *,
@@ -221,19 +389,33 @@ def validate_document_ocr(
     identity_pass: bool | None = None
 
     if want_identity:
-        raw_cand, method = extract_holder_name_candidate(ocr_text, profile)
-        if raw_cand is None:
-            best_seg: str | None = None
-            best_sc = -1.0
-            for seg in person_like_segments(ocr_text):
-                sc = compare_extracted_identity_scores(seg, expected_name)
-                scv = float(sc["identity_combined_score"])
-                if scv > best_sc:
-                    best_sc = scv
-                    best_seg = seg
-            if best_seg is not None:
-                raw_cand = best_seg
-                method = "best_person_like_vs_expected"
+        struct_cand, struct_method = extract_holder_name_candidate(ocr_text, profile)
+        scored: list[tuple[float, str, str]] = []
+        if struct_cand:
+            scv = float(
+                compare_extracted_identity_scores(struct_cand, expected_name)[
+                    "identity_combined_score"
+                ]
+            )
+            scored.append((scv, struct_cand, struct_method))
+        for seg in person_like_segments(ocr_text):
+            scv = float(
+                compare_extracted_identity_scores(seg, expected_name)["identity_combined_score"]
+            )
+            scored.append((scv, seg, "person_like_segment"))
+
+        by_norm: dict[str, tuple[float, str, str]] = {}
+        for scv, text, meth in scored:
+            nk = _normalize(text)
+            if nk not in by_norm or scv > by_norm[nk][0]:
+                by_norm[nk] = (scv, text, meth)
+
+        if by_norm:
+            best_scv, raw_cand, method = max(by_norm.values(), key=lambda t: t[0])
+        else:
+            raw_cand = None
+            method = "failed"
+
         name_extraction = {
             "candidate_raw": raw_cand,
             "candidate_normalized": _normalize(raw_cand) if raw_cand else "",
@@ -258,6 +440,20 @@ def validate_document_ocr(
         name_extraction["method"] = "skipped_no_expected_name"
         document_matched = bool(document_type_pass)
 
+    explanation = _validation_explanation(
+        document_matched=document_matched,
+        document_type_pass=document_type_pass,
+        document_type_aggregate_pass_ratio=document_type_aggregate_pass_ratio,
+        aggregate_min_pass_ratio=ratio_req,
+        keyword_results=keyword_results,
+        want_identity=want_identity,
+        identity_pass=identity_pass,
+        identity_min_score=id_min,
+        identity=identity,
+        name_extraction=name_extraction,
+        expected_name_display=expected_name.strip(),
+    )
+
     return {
         "document_type": (document_type or "").strip(),
         "document_profile_id": profile,
@@ -274,4 +470,5 @@ def validate_document_ocr(
         "identity_pass": identity_pass,
         "keywords": keyword_results,
         "document_matched": document_matched,
+        "explanation": explanation,
     }

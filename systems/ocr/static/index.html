@@ -174,7 +174,7 @@
       <div class="controls">
         <input type="file" id="file" accept="image/*" />
         <button type="button" class="primary" id="run" disabled>Jalankan OCR</button>
-        <span class="hint">Mode cepat: unduh model det/rec pertama kali (~paddlex). VL butuh Paddle + model besar. Lingkungan cepat: OCR_FAST_LANG, OCR_FAST_DET_MODEL. GET /systems/ocr/health.</span>
+        <span class="hint">Mode cepat (default): <code>mobile_det + server_rec</code> — lebih akurat dari full mobile, tetap ringan vs VL. Ubah lewat <code>OCR_FAST_LANG</code> (coba <code>latin</code> untuk KTP), <code>OCR_FAST_DET_MODEL</code>, <code>OCR_FAST_REC_MODEL</code>. VL: set <code>OCR_VL_MAX_LONG_SIDE</code>. GET /systems/ocr/health → <code>ocr_fast</code>.</span>
       </div>
       <div class="status" id="status" role="status"></div>
     </section>

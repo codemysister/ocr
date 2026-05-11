@@ -1,0 +1,539 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Pipeline — Preprocess → OCR → Validasi</title>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --surface: #1a222d;
+      --border: #2d3a4d;
+      --text: #e8eef5;
+      --muted: #8b9cb3;
+      --accent: #3d9cf5;
+      --ok: #6ee7b7;
+      --err: #f87171;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "DM Sans", system-ui, -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }
+    header {
+      padding: 1.5rem clamp(1rem, 4vw, 2.5rem);
+      border-bottom: 1px solid var(--border);
+      background: linear-gradient(180deg, #151c26 0%, var(--bg) 100%);
+    }
+    header h1 {
+      margin: 0;
+      font-size: clamp(1.15rem, 2.5vw, 1.5rem);
+      font-weight: 600;
+      letter-spacing: -0.02em;
+    }
+    header p {
+      margin: 0.35rem 0 0;
+      color: var(--muted);
+      font-size: 0.9rem;
+      max-width: 52rem;
+    }
+    .nav-top { margin-top: 0.75rem; }
+    .nav-top a { color: var(--accent); font-size: 0.875rem; }
+    main {
+      padding: clamp(1rem, 3vw, 2rem);
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+    .panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.25rem;
+      margin-bottom: 1.25rem;
+    }
+    .panel h2 {
+      margin: 0 0 1rem;
+      font-size: 0.85rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--muted);
+    }
+    .row {
+      display: grid;
+      gap: 1rem;
+      grid-template-columns: 1fr;
+    }
+    @media (min-width: 720px) {
+      .row.two { grid-template-columns: 1fr 1fr; }
+    }
+    label.block {
+      display: block;
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: var(--muted);
+      margin-bottom: 0.35rem;
+    }
+    input[type="text"],
+    textarea {
+      width: 100%;
+      font-family: inherit;
+      font-size: 0.9rem;
+      padding: 0.55rem 0.65rem;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: #0a0e14;
+      color: var(--text);
+    }
+    textarea { min-height: 4rem; resize: vertical; }
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+      align-items: center;
+    }
+    input[type="file"] { font-size: 0.875rem; color: var(--muted); }
+    button {
+      font-family: inherit;
+      font-size: 0.9rem;
+      font-weight: 600;
+      padding: 0.6rem 1.2rem;
+      border-radius: 8px;
+      border: none;
+      cursor: pointer;
+    }
+    button.primary {
+      background: var(--accent);
+      color: #061018;
+    }
+    button.primary:hover:not(:disabled) { background: #5aadff; }
+    button:disabled { opacity: 0.45; cursor: not-allowed; }
+    .hint { font-size: 0.8rem; color: var(--muted); width: 100%; }
+    .mode-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 1rem;
+      align-items: center;
+      margin-bottom: 0.75rem;
+      font-size: 0.9rem;
+    }
+    .mode-row label { cursor: pointer; color: var(--text); }
+    .mode-row input { margin-right: 0.35rem; }
+    .steps {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      margin-top: 0.75rem;
+      font-size: 0.8rem;
+      color: var(--muted);
+    }
+    .steps span {
+      padding: 0.25rem 0.5rem;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: #0a0e14;
+    }
+    .steps span.done { color: var(--ok); border-color: rgba(110, 231, 183, 0.35); }
+    .steps span.run { color: var(--accent); border-color: var(--accent); }
+    .steps span.fail { color: var(--err); border-color: rgba(248, 113, 113, 0.4); }
+    .status { font-size: 0.85rem; margin-top: 0.75rem; min-height: 1.25rem; }
+    .status.error { color: var(--err); }
+    .status.ok { color: var(--ok); }
+    .preview-box {
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: #0a0e14;
+      min-height: 160px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: auto;
+      padding: 0.75rem;
+    }
+    .preview-box img { max-width: 100%; height: auto; border-radius: 4px; }
+    .placeholder { color: var(--muted); font-size: 0.875rem; text-align: center; padding: 1rem; }
+    code.endpoint {
+      font-size: 0.78rem;
+      background: #0a0e14;
+      padding: 0.2rem 0.45rem;
+      border-radius: 4px;
+      border: 1px solid var(--border);
+    }
+    textarea.out {
+      width: 100%;
+      min-height: 140px;
+      font-family: ui-monospace, monospace;
+      font-size: 0.8rem;
+      background: #0a0e14;
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.75rem;
+      resize: vertical;
+    }
+    .val-summary {
+      font-size: 0.95rem;
+      margin-bottom: 0.75rem;
+      padding: 0.75rem;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: #0a0e14;
+    }
+    .val-summary ul { margin: 0.5rem 0 0; padding-left: 1.25rem; color: var(--text); font-size: 0.85rem; }
+    .val-summary li { margin-bottom: 0.35rem; }
+    .val-summary .ex-sum { font-weight: 600; margin-bottom: 0.5rem; }
+    .val-summary .ex-hint { margin-top: 0.75rem; font-size: 0.8rem; color: var(--muted); }
+    .val-summary.ok { border-color: rgba(110, 231, 183, 0.35); }
+    .val-summary.no { border-color: rgba(248, 113, 113, 0.35); }
+    .val-summary.ok .ex-sum { color: var(--ok); }
+    .val-summary.no .ex-sum { color: var(--err); }
+  </style>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;600&display=swap" rel="stylesheet" />
+</head>
+<body>
+  <header>
+    <h1>Pipeline penuh</h1>
+    <p>
+      Satu unggahan menjalankan:
+      <code class="endpoint">POST /api/v1/preprocess?format=json</code>
+      → gambar hasil preprocess ke OCR
+      (<code class="endpoint">/systems/ocr/api/v1/ocr(-fast)</code>)
+      → validasi jenis dokumen &amp; nama
+      (<code class="endpoint">POST /systems/validation/api/v1/validate-document</code>).
+      Mode VL memakan banyak RAM; untuk laptop 16GB pertimbangkan <code>OCR_VL_MAX_LONG_SIDE=2048</code> atau server vLLM — lihat <code>GET /systems/ocr/health</code> → <code>vl_memory_tuning</code>.
+    </p>
+    <p class="nav-top"><a href="/">← Beranda platform</a> · <a href="/systems/preprocessing/">Preprocessing saja</a> · <a href="/systems/ocr/">OCR saja</a> · <a href="/systems/validation/">Validasi saja</a></p>
+  </header>
+  <main>
+    <section class="panel">
+      <h2>Input</h2>
+      <div class="row two">
+        <div>
+          <label class="block" for="file">Gambar dokumen</label>
+          <input type="file" id="file" accept="image/*" />
+        </div>
+        <div>
+          <label class="block" for="doc">Jenis dokumen</label>
+          <input id="doc" type="text" placeholder="KTP, NPWP, …" autocomplete="off" />
+          <p class="hint">Lihat daftar di <code>/systems/validation/health</code> (<code>document_profiles</code>).</p>
+        </div>
+      </div>
+      <label class="block" for="expected">Nama referensi (opsional)</label>
+      <textarea id="expected" placeholder="Kosongkan bila hanya mengecek keyword profil dokumen."></textarea>
+
+      <div class="mode-row" role="radiogroup" aria-label="Mode OCR">
+        <label><input type="radio" name="ocrMode" value="fast" checked /> Cepat (PP-OCRv5 mobile det + server rec)</label>
+        <label><input type="radio" name="ocrMode" value="vl" /> VL-1.5</label>
+      </div>
+
+      <div class="controls">
+        <button type="button" class="primary" id="run" disabled>Jalankan pipeline</button>
+        <span class="hint">Urutan: preprocess → OCR pada PNG keluaran → validasi dengan teks OCR.</span>
+      </div>
+      <div class="steps" id="steps" aria-live="polite">
+        <span id="st-prep">1 Preprocess</span>
+        <span id="st-ocr">2 OCR</span>
+        <span id="st-val">3 Validasi</span>
+      </div>
+      <div class="status" id="status" role="status"></div>
+    </section>
+
+    <div class="row two">
+      <section class="panel">
+        <h2>Gambar setelah preprocess</h2>
+        <div class="preview-box" id="previewPreprocessed">
+          <span class="placeholder">Belum ada hasil.</span>
+        </div>
+      </section>
+      <section class="panel">
+        <h2>Ringkasan validasi</h2>
+        <div id="valSummary" class="placeholder">Jalankan pipeline untuk melihat hasil.</div>
+      </section>
+    </div>
+
+    <section class="panel">
+      <h2>Teks OCR</h2>
+      <textarea class="out" id="outOcr" readonly placeholder="Teks hasil OCR…"></textarea>
+    </section>
+
+    <section class="panel">
+      <h2>JSON validasi (mentah)</h2>
+      <textarea class="out" id="outVal" readonly placeholder="Respons /systems/validation/api/v1/validate-document…"></textarea>
+    </section>
+  </main>
+
+  <script>
+    const fileInput = document.getElementById("file");
+    const docInput = document.getElementById("doc");
+    const expectedInput = document.getElementById("expected");
+    const runBtn = document.getElementById("run");
+    const statusEl = document.getElementById("status");
+    const previewPre = document.getElementById("previewPreprocessed");
+    const outOcr = document.getElementById("outOcr");
+    const outVal = document.getElementById("outVal");
+    const valSummary = document.getElementById("valSummary");
+    const stPrep = document.getElementById("st-prep");
+    const stOcr = document.getElementById("st-ocr");
+    const stVal = document.getElementById("st-val");
+
+    function selectedMode() {
+      const r = document.querySelector('input[name="ocrMode"]:checked');
+      return r ? r.value : "fast";
+    }
+
+    function ocrEndpoint() {
+      return selectedMode() === "vl"
+        ? "/systems/ocr/api/v1/ocr"
+        : "/systems/ocr/api/v1/ocr-fast";
+    }
+
+    function setStatus(msg, type) {
+      statusEl.textContent = msg || "";
+      statusEl.className = "status" + (type ? " " + type : "");
+    }
+
+    function resetStepClasses() {
+      [stPrep, stOcr, stVal].forEach((el) => {
+        el.classList.remove("done", "run", "fail");
+      });
+    }
+
+    function base64ToBlob(b64, mime) {
+      const bin = atob(b64);
+      const arr = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+      return new Blob([arr], { type: mime });
+    }
+
+    function clearPrePreview() {
+      previewPre.innerHTML = "";
+      const s = document.createElement("span");
+      s.className = "placeholder";
+      s.textContent = "Belum ada hasil.";
+      previewPre.appendChild(s);
+    }
+
+    let preObjectUrl = null;
+
+    function updateRunEnabled() {
+      const hasFile = !!fileInput.files[0];
+      const hasDoc = !!(docInput.value && docInput.value.trim());
+      runBtn.disabled = !hasFile || !hasDoc;
+    }
+
+    fileInput.addEventListener("change", () => {
+      if (preObjectUrl) URL.revokeObjectURL(preObjectUrl);
+      preObjectUrl = null;
+      outOcr.value = "";
+      outVal.value = "";
+      valSummary.innerHTML = "";
+      valSummary.className = "placeholder";
+      valSummary.textContent = "Jalankan pipeline untuk melihat hasil.";
+      clearPrePreview();
+      resetStepClasses();
+      setStatus("");
+      updateRunEnabled();
+    });
+
+    function esc(s) {
+      return String(s === undefined || s === null ? "" : s)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    function renderValidationSummary(valData, ok) {
+      const kw =
+        typeof valData.document_type_aggregate_pass_ratio === "number"
+          ? (valData.document_type_aggregate_pass_ratio * 100).toFixed(1)
+          : "?";
+      const dt = valData.document_type_pass === true ? "tipe ✓" : "tipe ✗";
+      let idLine = "";
+      if (valData.identity_pass === null || valData.identity_pass === undefined) {
+        idLine = "identitas tidak dicek";
+      } else {
+        const isc =
+          valData.identity && typeof valData.identity.identity_combined_score === "number"
+            ? valData.identity.identity_combined_score.toFixed(1)
+            : "?";
+        idLine =
+          "identitas " +
+          (valData.identity_pass ? "✓" : "✗") +
+          " (skor " +
+          isc +
+          "/" +
+          (valData.identity_min_score ?? "?") +
+          ")";
+      }
+      const shortLine = "keyword ~" + kw + "% · " + dt + " · " + idLine;
+
+      let html = "";
+      html +=
+        '<p class="ex-sum">' +
+        esc(ok ? "Dokumen cocok" : "Dokumen tidak cocok") +
+        " — " +
+        esc(shortLine) +
+        "</p>";
+
+      const ex = valData.explanation;
+      if (ex && typeof ex === "object") {
+        html += "<p>" + esc(ex.summary || "") + "</p>";
+        if (Array.isArray(ex.detail_lines) && ex.detail_lines.length) {
+          html += "<ul>";
+          ex.detail_lines.forEach(function (line) {
+            html += "<li>" + esc(line) + "</li>";
+          });
+          html += "</ul>";
+        }
+        if (Array.isArray(ex.hints) && ex.hints.length) {
+          html += '<p class="ex-hint"><strong>Saran</strong></p><ul class="ex-hint">';
+          ex.hints.forEach(function (h) {
+            html += "<li>" + esc(h) + "</li>";
+          });
+          html += "</ul>";
+        }
+        if (Array.isArray(ex.primary_blockers) && ex.primary_blockers.length && !ok) {
+          html +=
+            '<p class="ex-hint">Penghalang: <code>' +
+            esc(ex.primary_blockers.join(", ")) +
+            "</code></p>";
+        }
+      }
+
+      valSummary.innerHTML = html;
+    }
+
+    docInput.addEventListener("input", updateRunEnabled);
+
+    runBtn.addEventListener("click", async () => {
+      const f = fileInput.files[0];
+      const document_type = (docInput.value || "").trim();
+      const expected_name = (expectedInput.value || "").trim();
+      if (!f || !document_type) return;
+
+      resetStepClasses();
+      outOcr.value = "";
+      outVal.value = "";
+      valSummary.innerHTML = "";
+      valSummary.className = "";
+      runBtn.disabled = true;
+      setStatus("Memproses…");
+
+      stPrep.classList.add("run");
+      const fdPre = new FormData();
+      fdPre.append("file", f);
+
+      try {
+        const rPre = await fetch("/api/v1/preprocess?format=json", {
+          method: "POST",
+          body: fdPre,
+        });
+        const preJson = await rPre.json().catch(() => ({}));
+        if (!rPre.ok) {
+          const d = preJson.detail;
+          const msg = typeof d === "string" ? d : JSON.stringify(d || preJson);
+          throw new Error("Preprocess: " + msg);
+        }
+        stPrep.classList.remove("run");
+        stPrep.classList.add("done");
+
+        if (preObjectUrl) URL.revokeObjectURL(preObjectUrl);
+        const blob = base64ToBlob(preJson.image_base64, preJson.mime || "image/png");
+        preObjectUrl = URL.createObjectURL(blob);
+        previewPre.innerHTML = "";
+        const img = document.createElement("img");
+        img.src = preObjectUrl;
+        img.alt = "Setelah preprocess";
+        previewPre.appendChild(img);
+
+        stOcr.classList.add("run");
+        const pngFile = new File([blob], "preprocessed.png", { type: "image/png" });
+        const fdOcr = new FormData();
+        fdOcr.append("file", pngFile);
+        const rOcr = await fetch(ocrEndpoint(), { method: "POST", body: fdOcr });
+        const ocrData = await rOcr.json().catch(() => ({}));
+        if (!rOcr.ok) {
+          const d = ocrData.detail;
+          let msg;
+          if (typeof d === "string") msg = d;
+          else if (d && typeof d === "object" && typeof d.message === "string") msg = d.message;
+          else msg = JSON.stringify(d || ocrData);
+          throw new Error("OCR: " + msg);
+        }
+        stOcr.classList.remove("run");
+        stOcr.classList.add("done");
+
+        const ocr_text =
+          (typeof ocrData.text === "string" && ocrData.text.trim())
+            ? ocrData.text
+            : typeof ocrData.markdown === "string"
+              ? ocrData.markdown
+              : "";
+        outOcr.value = ocr_text;
+
+        stVal.classList.add("run");
+        const rVal = await fetch("/systems/validation/api/v1/validate-document", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ocr_text,
+            document_type,
+            expected_name,
+          }),
+        });
+        const valData = await rVal.json().catch(() => ({}));
+        stVal.classList.remove("run");
+        if (!rVal.ok) {
+          stVal.classList.add("fail");
+          outVal.value = JSON.stringify(valData, null, 2);
+          valSummary.className = "val-summary no";
+          valSummary.textContent =
+            valData.detail && valData.detail.message
+              ? valData.detail.message
+              : "Validasi gagal (" + rVal.status + ").";
+          setStatus("Selesai dengan error pada validasi.", "error");
+          return;
+        }
+        stVal.classList.add("done");
+        outVal.value = JSON.stringify(valData, null, 2);
+
+        const ok = valData.document_matched === true;
+        valSummary.className = "val-summary " + (ok ? "ok" : "no");
+        renderValidationSummary(valData, ok);
+
+        setStatus(
+          "Selesai — preprocess " +
+            (preJson.width || "?") +
+            "×" +
+            (preJson.height || "?") +
+            " → OCR (" +
+            (ocrData.model || ocrData.mode || selectedMode()) +
+            ") → validasi.",
+          "ok",
+        );
+      } catch (e) {
+        const msg = e.message || String(e);
+        setStatus(msg, "error");
+        if (stPrep.classList.contains("run")) {
+          stPrep.classList.remove("run");
+          stPrep.classList.add("fail");
+        } else if (stOcr.classList.contains("run")) {
+          stOcr.classList.remove("run");
+          stOcr.classList.add("fail");
+        } else if (stVal.classList.contains("run")) {
+          stVal.classList.remove("run");
+          stVal.classList.add("fail");
+        }
+      } finally {
+        updateRunEnabled();
+      }
+    });
+  </script>
+</body>
+</html>

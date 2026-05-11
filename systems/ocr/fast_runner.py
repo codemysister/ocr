@@ -1,4 +1,9 @@
-"""OCR ringan: PaddleOCR det + rec (PP-OCRv5), tanpa PaddleOCR-VL / layout dokumen."""
+"""OCR ringan: PaddleOCR det + rec (PP-OCRv5), tanpa PaddleOCR-VL / layout dokumen.
+
+Default untuk lang ``en`` dan ``latin``: deteksi mobile + pengenalan server (lebih akurat dari full
+mobile, lebih ringan dari full server atau VL). Ganti pasangan lewat OCR_FAST_DET_MODEL /
+OCR_FAST_REC_MODEL.
+"""
 
 from __future__ import annotations
 
@@ -58,9 +63,10 @@ def _get_paddle_ocr() -> Any:
                 kw["text_detection_model_name"] = det_env
             if rec_env:
                 kw["text_recognition_model_name"] = rec_env
-        elif lang == "en":
+        elif lang in ("en", "latin"):
+            # Seimbang: deteksi mobile (ringan), pengenalan server (lebih akurat). Full server: set env di bawah.
             kw["text_detection_model_name"] = "PP-OCRv5_mobile_det"
-            kw["text_recognition_model_name"] = "en_PP-OCRv5_mobile_rec"
+            kw["text_recognition_model_name"] = "PP-OCRv5_server_rec"
         # else: biarkan Paddle memilih model default untuk `lang`
 
         lim = os.environ.get("OCR_FAST_DET_LIMIT_SIDE_LEN", "").strip()
@@ -153,11 +159,21 @@ def run_paddleocr_fast(image_bytes: bytes) -> dict[str, Any]:
         ih,
     )
 
-    lang = os.environ.get("OCR_FAST_LANG", "en")
+    lang = os.environ.get("OCR_FAST_LANG", "en").strip() or "en"
+    custom = bool(
+        (os.environ.get("OCR_FAST_DET_MODEL") or "").strip()
+        or (os.environ.get("OCR_FAST_REC_MODEL") or "").strip()
+    )
+    if custom:
+        model_str = f"PP-OCRv5 det+rec (lang={lang}, OCR_FAST_* custom)"
+    elif lang in ("en", "latin"):
+        model_str = f"PP-OCRv5 mobile_det+server_rec (lang={lang})"
+    else:
+        model_str = f"PP-OCRv5 det+rec (lang={lang}, Paddle default)"
     return {
         "success": True,
         "mode": "paddleocr_fast",
-        "model": f"PP-OCRv5 det+rec (lang={lang})",
+        "model": model_str,
         "markdown": markdown,
         "text": plain,
         "lines": line_items,

@@ -16,6 +16,16 @@
     .no { color: #b91c1c; font-weight: 600; }
     a { color: #2563eb; }
     .hint { font-weight: 400; color: #555; font-size: 0.9rem; margin-top: 0.25rem; }
+    .explain-box {
+      margin-top: 1.25rem;
+      padding: 1rem;
+      border-radius: 8px;
+      border: 1px solid #e4e4e7;
+      background: #fafafa;
+    }
+    .explain-box ul { margin: 0.5rem 0 0; padding-left: 1.25rem; }
+    .explain-box li { margin-bottom: 0.35rem; }
+    .explain-box .headline { font-size: 1rem; margin-bottom: 0.75rem; }
   </style>
 </head>
 <body>
@@ -37,14 +47,25 @@
     <textarea id="expected" name="expected" placeholder="Deva Apriana"></textarea>
     <button type="submit">Validasi</button>
   </form>
+  <div id="human" class="explain-box" hidden></div>
   <pre id="out" hidden></pre>
   <p><a href="/">← Kembali ke beranda</a></p>
   <script>
+    function esc(s) {
+      return String(s === undefined || s === null ? "" : s)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+
     const f = document.getElementById("f");
     const out = document.getElementById("out");
+    const human = document.getElementById("human");
     f.addEventListener("submit", async (e) => {
       e.preventDefault();
       out.hidden = true;
+      human.hidden = true;
       const ocr_text = document.getElementById("ocr").value;
       const document_type = document.getElementById("doc").value;
       const expected_name = document.getElementById("expected").value;
@@ -59,6 +80,7 @@
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
+        human.hidden = true;
         out.textContent = JSON.stringify(data, null, 2);
         out.hidden = false;
         return;
@@ -88,9 +110,35 @@
           : "?";
       const sum = ` — keyword ~${kw}% (syarat ≥ ${(data.aggregate_min_pass_ratio * 100).toFixed(0)}%), ${dt}${idLine}`;
       const line = ok
-        ? `<span class="ok">Dokumen cocok</span>${sum}`
-        : `<span class="no">Dokumen tidak cocok</span>${sum}`;
-      out.innerHTML = line + "\n\n" + JSON.stringify(data, null, 2);
+        ? `<span class="ok">Dokumen cocok</span>${esc(sum)}`
+        : `<span class="no">Dokumen tidak cocok</span>${esc(sum)}`;
+
+      let body = `<p class="headline">${line}</p>`;
+      const ex = data.explanation;
+      if (ex && typeof ex === "object") {
+        body += `<p>${esc(ex.summary || "")}</p>`;
+        if (Array.isArray(ex.detail_lines) && ex.detail_lines.length) {
+          body += "<ul>";
+          ex.detail_lines.forEach(function (ln) {
+            body += "<li>" + esc(ln) + "</li>";
+          });
+          body += "</ul>";
+        }
+        if (Array.isArray(ex.hints) && ex.hints.length) {
+          body += "<p><strong>Saran</strong></p><ul>";
+          ex.hints.forEach(function (h) {
+            body += "<li>" + esc(h) + "</li>";
+          });
+          body += "</ul>";
+        }
+        if (Array.isArray(ex.primary_blockers) && ex.primary_blockers.length && !ok) {
+          body +=
+            '<p class="hint">Penghalang: <code>' + esc(ex.primary_blockers.join(", ")) + "</code></p>";
+        }
+      }
+      human.innerHTML = body;
+      human.hidden = false;
+      out.textContent = JSON.stringify(data, null, 2);
       out.hidden = false;
     });
   </script>

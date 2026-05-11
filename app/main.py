@@ -14,6 +14,7 @@ from systems.preprocessing.routes import api_router as preprocessing_api_router
 from systems.preprocessing.routes import ui_router as preprocessing_ui_router
 
 HUB_PATH = Path(__file__).resolve().parent / "static" / "hub.html"
+PIPELINE_PATH = Path(__file__).resolve().parent / "static" / "pipeline.html"
 
 app = FastAPI(
     title="OCR Platform",
@@ -44,6 +45,10 @@ def health() -> dict:
             "ocr": "/systems/ocr/health",
             "validation": "/systems/validation/health",
         },
+        "last_tuning_log": {
+            "path": "logs/last_tuning.json",
+            "absolute_note": "Di root repo; override dengan env LAST_TUNING_LOG_PATH.",
+        },
     }
 
 
@@ -54,6 +59,16 @@ def hub() -> FileResponse:
     # Hindari beranda tertahan cache setelah kita mengganti tautan subsistem.
     return FileResponse(
         HUB_PATH,
+        headers={"Cache-Control": "no-store, max-age=0"},
+    )
+
+
+@app.get("/pipeline")
+def pipeline_page() -> FileResponse:
+    if not PIPELINE_PATH.is_file():
+        raise HTTPException(404, "pipeline.html tidak ditemukan.")
+    return FileResponse(
+        PIPELINE_PATH,
         headers={"Cache-Control": "no-store, max-age=0"},
     )
 

@@ -18,6 +18,45 @@ _init_lock = threading.Lock()
 _infer_lock = threading.Lock()
 
 
+def _max_long_side_from_env() -> int | None:
+    """OCR_VL_MAX_LONG_SIDE: jika diset (px), gambar diperkecil agar sisi terpanjang ≤ nilai ini."""
+    raw = (os.environ.get("OCR_VL_MAX_LONG_SIDE") or "").strip()
+    if not raw:
+        return None
+    try:
+        v = int(raw)
+        return v if v > 0 else None
+    except ValueError:
+        return None
+
+
+def _maybe_downscale_bgr(
+    bgr: np.ndarray, max_long_side: int | None
+) -> tuple[np.ndarray, dict[str, Any]]:
+    """Kurangi resolusi sebelum VL untuk menurunkan puncak RAM/waktu (trade-off kualitas)."""
+    h, w = int(bgr.shape[0]), int(bgr.shape[1])
+    meta: dict[str, Any] = {
+        "resized": False,
+        "input_hw": {"height": h, "width": w},
+    }
+    if not max_long_side or max_long_side <= 0:
+        return bgr, meta
+    long_side = max(h, w)
+    if long_side <= max_long_side:
+        return bgr, meta
+    scale = max_long_side / float(long_side)
+    new_w = max(1, int(round(w * scale)))
+    new_h = max(1, int(round(h * scale)))
+    resized = cv2.resize(bgr, (new_w, new_h), interpolation=cv2.INTER_AREA)
+    meta.update(
+        resized=True,
+        scale_rounded=round(scale, 6),
+        max_long_side=max_long_side,
+        final_hw={"height": new_h, "width": new_w},
+    )
+    return resized, meta
+
+
 def _decode_bgr(data: bytes) -> np.ndarray:
     buf = np.frombuffer(data, dtype=np.uint8)
     img = cv2.imdecode(buf, cv2.IMREAD_COLOR)
@@ -87,8 +126,15 @@ def run_paddleocr_vl(image_bytes: bytes, *, include_full_json: bool = False) -> 
     t0 = time.perf_counter()
     bgr = _decode_bgr(image_bytes)
     timing["decode_image_s"] = round(time.perf_counter() - t0, 3)
+    max_side = _max_long_side_from_env()
+    t0r = time.perf_counter()
+    bgr, resize_meta = _maybe_downscale_bgr(bgr, max_side)
+    timing["resize_s"] = round(time.perf_counter() - t0r, 3)
+    timing["resize"] = resize_meta
     ih, iw = int(bgr.shape[0]), int(bgr.shape[1])
-    timing["input_hw"] = {"height": ih, "width": iw}
+    timing["vl_input_hw"] = {"height": ih, "width": iw}
+    orig = resize_meta.get("input_hw") or {"height": ih, "width": iw}
+    timing["input_hw"] = orig
 
     t1 = time.perf_counter()
     pipe = get_vl_pipeline()

@@ -15,6 +15,8 @@
 #   HOST=0.0.0.0           Bind host.
 #   PYTHON=python3.12      Untuk membuat .venv jika belum ada.
 #   INSTALL_REALESRGAN=1  Juga: pip install -r requirements-realesrgan.txt
+#   OCR_VL_MAX_LONG_SIDE=2048  (opsional) Perkecil gambar sebelum inferensi VL — kurangi RAM/swap.
+#   OCR_FAST_LANG=latin         (opsional) Mode cepat: latin/en; default model = mobile_det + server_rec.
 
 set -euo pipefail
 

@@ -46,9 +46,23 @@ def _is_probably_field_label(seg: str) -> bool:
 _PLACE_PREFIX = re.compile(r"^(kota|kab\.?|kabupaten|kecamatan|kelurahan|provinsi|desa)\b", re.I)
 
 
+def _is_likely_tempat_tgl_ocr_noise(s: str) -> bool:
+    """Bukan nama orang: sisa OCR dari Tempat / Tgl lahir (mis. «tempattol»)."""
+    low = (s or "").casefold().replace(" ", "")
+    if "tempat" in low:
+        return True
+    if low.startswith("ttl") and len(low) <= 12:
+        return True
+    if "lahir" in low and len(low) <= 14:
+        return True
+    return False
+
+
 def _looks_like_person_name(seg: str) -> bool:
     s = (seg or "").strip()
     if len(s) < 4:
+        return False
+    if _is_likely_tempat_tgl_ocr_noise(s):
         return False
     if _PLACE_PREFIX.search(s):
         return False
@@ -104,11 +118,13 @@ def extract_holder_name_candidate(ocr_text: str, document_profile_id: str) -> tu
             if not _is_probably_field_label(nxt) and _looks_like_person_name(nxt):
                 return nxt, "after_nama_segment"
 
+    # Blob huruf kecil: pola memakai \b agar "nama" tidak cocok di dalam kata (mis. kewarganegaraan).
     blob = _normalize(ocr_text)
     m = re.search(
-        r"(?:^|[-\s|])(?:nama|nana)\s*[:-]?\s*([a-z][a-z0-9\s'.]{2,80}?)(?=\s*(?:[-|]|\n|tempat|ttl|lahir|nik|npwp|alamat|agama|gol|status|pekerjaan|kewarganegaraan|wni|wna)\b|$)",
+        r"(?:^|[\s|•/+\-])(?:nama|nana|name)\b\s*[:-]?\s*"
+        r"([a-z][a-z0-9\s'.]{2,80}?)"
+        r"(?=\s*(?:[-|]|\n|tempat|ttl|lahir|nik|npwp|alamat|agama|gol|status|pekerjaan|kewarganegaraan|wni|wna)\b|$)",
         blob,
-        re.I,
     )
     if m:
         c = m.group(1).strip()
