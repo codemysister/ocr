@@ -85,8 +85,8 @@ def validation_health() -> dict:
             "/systems/validation/api/v1/validate-document",
         ],
         "validate_document_response": (
-            "Respons validate-document menyertakan `explanation` (id): summary, detail_lines, hints, "
-            "primary_blockers (DOCUMENT_TYPE | IDENTITY), gates."
+            "Respons validate-document menyertakan `verdict` (is_own_document, document_type_current, "
+            "document_type_current_label, summary), `explanation` (id), dan field gate lama."
         ),
         "validate_document_note": (
             "document_matched = document_type_pass AND (tanpa nama referensi | identity_pass). "

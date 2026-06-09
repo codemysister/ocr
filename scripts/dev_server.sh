@@ -13,10 +13,26 @@
 # Lingkungan:
 #   PORT=8001              Port HTTP.
 #   HOST=0.0.0.0           Bind host.
+#   CORS_ORIGINS=*         Origin CORS (dev). Production: https://app.web.app,https://app.firebaseapp.com
 #   PYTHON=python3.12      Untuk membuat .venv jika belum ada.
 #   INSTALL_REALESRGAN=1  Juga: pip install -r requirements-realesrgan.txt
 #   OCR_VL_MAX_LONG_SIDE=2048  (opsional) Perkecil gambar sebelum inferensi VL — kurangi RAM/swap.
 #   OCR_FAST_LANG=latin         (opsional) Mode cepat: latin/en; default model = mobile_det + server_rec.
+#   PREPROCESS_AUTO_IMAGE_ROTATOR=1         Aktifkan putar 90° dari deteksi wajah (default: mati)
+#   PREPROCESS_AUTO_IMAGE_ROTATOR_BACKEND=dlib  Perlu requirements-auto-image-rotator.txt
+#   PREPROCESS_AUTO_ROTATE_ALLOW_180=1     Izinkan auto-rotate pilih orientasi terbalik 180° (default: mati)
+#   PREPROCESS_AUTO_ROTATE_QUARTERS=off  (default) | auto | on — auto/on: putar sebelum+sesudah warp
+#   PREPROCESS_PROJECTION_DESKEW=0       (default); set =1 untuk deskew sudut kecil tambahan (eksperimental)
+#   PREPROCESS_DISAMBIGUATE_180=1  (opsional) Flip 180° hanya jika skor teks 0°/180° seri + 2 heuristik setuju; default off
+#   PREPROCESS_SUPPLEMENT_QUARTER_PRE_WARP=1  (opsional) Pra-warp ±90° bila AUTO_ROTATE=off (default: mati).
+#   PREPROCESS_SUPPLEMENT_TIE_MIN_LEAD=78   (opsional) Seri skor ±90°: putar hanya jika max(s1,s3)−s0 ≥ ini.
+#   PREPROCESS_RIGHT_TILT_90_CCW=1        (opsional) Aktifkan putar 90° CCW ketat (default: mati — menghindari gambar tegak ikut mutar).
+#   PREPROCESS_RIGHT_TILT_90_CCW_MIN_RATIO=1.18
+#   PREPROCESS_RIGHT_TILT_90_CCW_MIN_LEAD=0.10
+#   PREPROCESS_AUTO_AXIS_ONLY_MAX_SKEW_DEG=24  (opsional) Di mode auto: skew ≤ ini → rotasi+poros, tanpa perspective.
+#   PREPROCESS_CARD_WARP=0              (opsional) Matikan perspective warp kartu.
+#   PREPROCESS_SKIP_WARP_WHEN_COVER_RATIO=0.88  (opsional) Skip warp jika kontur ≥ rasio frame (scan penuh).
+#   PREPROCESS_CARD_WARP_STYLE=auto     auto | axis_box | perspective — default auto (crop lurus bila tegak).
 
 set -euo pipefail
 

@@ -24,6 +24,36 @@ def preprocessing_health() -> dict:
         "status": "ok",
         "system": "preprocessing",
         "realesrgan": realesrgan_status_for_health(),
+        "orientation": {
+            "exif": "Dekode via Pillow + ImageOps.exif_transpose (lalu ke BGR) ketika berhasil.",
+            "full_bleed_skip_warp": (
+                "Jika kontur terluar menutupi ≥ PREPROCESS_SKIP_WARP_WHEN_COVER_RATIO (default 0.88), "
+                "perspective warp dilewati agar scan yang sudah lurus tidak distorsi."
+            ),
+            "card_warp": (
+                "PREPROCESS_CARD_WARP=0 mematikan warp kartu. "
+                "PREPROCESS_CARD_WARP_STYLE=auto|axis_box|perspective (default auto): "
+                "auto memakai crop poros bila kotak sudah hampir sejajar sumbu, supaya dokumen lurus "
+                "tidak distorsi perspective; perspective = selalu seperti sebelumnya."
+            ),
+            "axis_crop_thresholds": (
+                "Mode auto: jika skew minAreaRect ≤ PREPROCESS_AUTO_AXIS_ONLY_MAX_SKEW_DEG (default 24°), "
+                "hanya crop poros — perspective tidak dipakai untuk kontur itu. "
+                "Naikkan nilai (mis. 28) bila foto kartu agak miring tapi masih ingin tanpa perspective."
+            ),
+            "auto_rotate_quarters": (
+                "PREPROCESS_AUTO_ROTATE_QUARTERS: off (default) | auto | on. "
+                "off = jalur putar penuh lewat env dimatikan; opsional suplemen pra-warp "
+                "(PREPROCESS_SUPPLEMENT_QUARTER_PRE_WARP=1 — default mati) hanya memutar ±90° jika s1 vs s3 "
+                "menang jelas atas 0° dan **tidak** seri (menghindari tebakan arah salah). "
+                "auto/on = putar penuh sebelum + sesudah warp; override PRE_* env seperti biasa. "
+                "PREPROCESS_AUTO_ROTATE_ALLOW_180=1 mengizinkan pemilihan orientasi 180° otomatis (default mati)."
+            ),
+            "face_rotator": (
+                "PREPROCESS_AUTO_IMAGE_ROTATOR=1 mengaktifkan putar berdasarkan wajah Haar/dlib sebelum langkah lain "
+                "(default mati — mengurangi salah orientasi/terbalik pada scan dokumen)."
+            ),
+        },
         "last_tuning_log": {
             "file": "logs/last_tuning.json",
             "env_override": "LAST_TUNING_LOG_PATH",
@@ -93,5 +123,12 @@ async def api_preprocess(
         "X-Preprocess-Width": str(meta["width"]),
         "X-Preprocess-Height": str(meta["height"]),
         "X-Preprocess-Card-Warped": "1" if meta.get("card_warped") else "0",
+        "X-Preprocess-Card-Warp-Mode": str(meta.get("card_warp_mode", "")),
+        "X-Preprocess-Auto-Rotate-90ccw": str(meta.get("auto_rotate_90ccw_steps", 0)),
+        "X-Preprocess-Auto-Rotate-Pre-90ccw": str(meta.get("auto_rotate_pre_90ccw_steps", 0)),
+        "X-Preprocess-Auto-Rotate-Supplement-Pre-90ccw": str(
+            meta.get("auto_rotate_supplement_pre_90ccw_steps", 0)
+        ),
+        "X-Preprocess-Exif-Decode": str(meta.get("exif_decode", "")),
     }
     return Response(content=png_bytes, media_type="image/png", headers=hdr)

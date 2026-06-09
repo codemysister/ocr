@@ -8,6 +8,7 @@ from typing import Any
 
 from rapidfuzz import fuzz
 
+from systems.validation.document_profiles import CANONICAL_KEYWORDS, profile_label
 from systems.validation.name_extraction import extract_holder_name_candidate, person_like_segments
 
 
@@ -339,6 +340,153 @@ def _validation_explanation(
     }
 
 
+def _profile_aggregate_score(ocr_normalized: str, keywords: list[str]) -> tuple[float, list[dict[str, Any]]]:
+    keyword_results: list[dict[str, Any]] = []
+    ratios: list[float] = []
+    for raw_kw in keywords:
+        item = fuzzy_keyword_against_ocr(raw_kw, ocr_normalized)
+        keyword_results.append(item)
+        if item.get("skipped"):
+            continue
+        ratios.append(float(item["best_score"]) / 100.0)
+    aggregate = sum(ratios) / len(ratios) if ratios else 0.0
+    return aggregate, keyword_results
+
+
+def detect_document_type_from_ocr(
+    ocr_text: str,
+    *,
+    min_aggregate_ratio: float = 0.5,
+) -> dict[str, Any]:
+    """
+    Tebak jenis dokumen dari teks OCR dengan membandingkan skor keyword tiap profil.
+    """
+    ocr_n = _normalize(ocr_text)
+    min_ratio = max(0.0, min(1.0, float(min_aggregate_ratio)))
+    ranked: list[dict[str, Any]] = []
+
+    for profile_id, keywords in CANONICAL_KEYWORDS.items():
+        aggregate, keyword_results = _profile_aggregate_score(ocr_n, keywords)
+        ranked.append(
+            {
+                "document_profile_id": profile_id,
+                "document_type_label": profile_label(profile_id),
+                "aggregate_score": round(aggregate, 6),
+                "aggregate_percent": round(aggregate * 100.0, 4),
+                "keywords": keyword_results,
+            }
+        )
+
+    ranked.sort(key=lambda x: float(x["aggregate_score"]), reverse=True)
+    best = ranked[0] if ranked else None
+    second_score = float(ranked[1]["aggregate_score"]) if len(ranked) > 1 else 0.0
+    detected_profile_id: str | None = None
+    confidence = 0.0
+
+    if best and float(best["aggregate_score"]) >= min_ratio:
+        detected_profile_id = str(best["document_profile_id"])
+        confidence = float(best["aggregate_score"])
+        lead = confidence - second_score
+        if confidence < min_ratio + 0.08 and lead < 0.06:
+            detected_profile_id = None
+
+    return {
+        "detected_profile_id": detected_profile_id,
+        "detected_document_type": profile_label(detected_profile_id) if detected_profile_id else None,
+        "confidence_score": round(confidence * 100.0, 4),
+        "confidence_ratio": round(confidence, 6),
+        "min_aggregate_ratio": min_ratio,
+        "candidates": ranked,
+    }
+
+
+def build_document_verdict(
+    *,
+    requested_document_type: str,
+    requested_profile_id: str,
+    detection: dict[str, Any],
+    expected_name: str,
+    identity_pass: bool | None,
+    identity: dict[str, Any] | None,
+    identity_min_score: float,
+    document_type_pass: bool,
+    document_matched: bool,
+    name_extraction: dict[str, Any],
+) -> dict[str, Any]:
+    """Ringkasan singkat untuk klien: jenis dokumen saat ini + milik user atau tidak."""
+    ownership_checked = bool(expected_name.strip())
+    detected_profile_id = detection.get("detected_profile_id")
+    detected_label = detection.get("detected_document_type")
+    requested_label = profile_label(requested_profile_id) or requested_document_type.strip()
+
+    if detected_profile_id:
+        document_type_matches_request = detected_profile_id == requested_profile_id.casefold()
+    else:
+        document_type_matches_request = bool(document_type_pass)
+
+    if not ownership_checked:
+        is_own_document: bool | None = None
+    elif identity_pass is True:
+        is_own_document = True
+    else:
+        is_own_document = False
+
+    identity_score = None
+    if identity and ownership_checked:
+        identity_score = float(identity.get("identity_combined_score") or 0.0)
+
+    extracted_name = name_extraction.get("candidate_raw")
+    if isinstance(extracted_name, str):
+        extracted_name = extracted_name.strip() or None
+
+    if ownership_checked and is_own_document is True and document_type_matches_request:
+        summary = f"Dokumen ini adalah {detected_label or requested_label} milik user saat ini."
+    elif ownership_checked and is_own_document is True and not document_type_matches_request:
+        summary = (
+            f"Nama cocok dengan user saat ini, tetapi jenis dokumen terdeteksi "
+            f"{detected_label or 'tidak jelas'} (diminta {requested_label})."
+        )
+    elif ownership_checked and is_own_document is False and document_type_matches_request:
+        summary = (
+            f"Dokumen terdeteksi {detected_label or requested_label}, "
+            "tetapi nama di dokumen tidak cocok dengan user saat ini."
+        )
+    elif ownership_checked and is_own_document is False:
+        summary = (
+            f"Dokumen terdeteksi {detected_label or 'tidak jelas'} "
+            "dan bukan milik user saat ini (nama tidak cocok)."
+        )
+    elif not ownership_checked and document_type_matches_request:
+        summary = (
+            f"Dokumen terdeteksi {detected_label or requested_label}. "
+            "Kepemilikan belum dicek karena nama referensi kosong."
+        )
+    elif not ownership_checked:
+        summary = (
+            f"Jenis dokumen terdeteksi {detected_label or 'tidak jelas'} "
+            f"(diminta {requested_label}). Kepemilikan belum dicek."
+        )
+    else:
+        summary = "Hasil verifikasi dokumen."
+
+    return {
+        "document_type_current": detected_profile_id,
+        "document_type_current_label": detected_label,
+        "document_type_requested": requested_document_type.strip(),
+        "document_type_requested_label": requested_label,
+        "document_type_matches_request": document_type_matches_request,
+        "document_type_detection_confidence": detection.get("confidence_score"),
+        "ownership_checked": ownership_checked,
+        "is_own_document": is_own_document,
+        "expected_name": expected_name.strip() or None,
+        "extracted_name": extracted_name,
+        "ownership_confidence_score": identity_score,
+        "ownership_min_score": identity_min_score if ownership_checked else None,
+        "document_matched": document_matched,
+        "summary": summary,
+    }
+
+
 def validate_document_ocr(
     ocr_text: str,
     *,
@@ -454,6 +602,20 @@ def validate_document_ocr(
         expected_name_display=expected_name.strip(),
     )
 
+    detection = detect_document_type_from_ocr(ocr_text, min_aggregate_ratio=ratio_req)
+    verdict = build_document_verdict(
+        requested_document_type=document_type,
+        requested_profile_id=profile,
+        detection=detection,
+        expected_name=expected_name,
+        identity_pass=identity_pass,
+        identity=identity,
+        identity_min_score=id_min,
+        document_type_pass=document_type_pass,
+        document_matched=document_matched,
+        name_extraction=name_extraction,
+    )
+
     return {
         "document_type": (document_type or "").strip(),
         "document_profile_id": profile,
@@ -471,4 +633,9 @@ def validate_document_ocr(
         "keywords": keyword_results,
         "document_matched": document_matched,
         "explanation": explanation,
+        "document_type_detection": detection,
+        "verdict": verdict,
+        "is_own_document": verdict["is_own_document"],
+        "document_type_current": verdict["document_type_current"],
+        "document_type_current_label": verdict["document_type_current_label"],
     }

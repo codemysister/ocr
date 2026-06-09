@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, RedirectResponse
 
+from app.api_routes import router as public_api_router
 from systems.ocr.routes import router as ocr_router
 from systems.validation.routes import router as validation_router
 from systems.preprocessing.routes import api_router as preprocessing_api_router
@@ -15,6 +17,23 @@ from systems.preprocessing.routes import ui_router as preprocessing_ui_router
 
 HUB_PATH = Path(__file__).resolve().parent / "static" / "hub.html"
 PIPELINE_PATH = Path(__file__).resolve().parent / "static" / "pipeline.html"
+
+
+def _cors_origins() -> list[str]:
+    raw = os.environ.get("CORS_ORIGINS", "*").strip()
+    if not raw or raw == "*":
+        return ["*"]
+    return [o.strip() for o in raw.split(",") if o.strip()]
+
+
+def _cors_settings() -> tuple[list[str], bool]:
+    origins = _cors_origins()
+    # Browser menolak credentials + wildcard origin bersamaan.
+    allow_credentials = "*" not in origins
+    return origins, allow_credentials
+
+
+_cors_origins_list, _allow_credentials = _cors_settings()
 
 app = FastAPI(
     title="OCR Platform",
@@ -24,12 +43,13 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=_cors_origins_list,
+    allow_credentials=_allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+app.include_router(public_api_router)
 app.include_router(preprocessing_ui_router)
 app.include_router(preprocessing_api_router)
 app.include_router(ocr_router)
@@ -40,6 +60,9 @@ app.include_router(validation_router)
 def health() -> dict:
     return {
         "status": "ok",
+        "api": "/api/v1",
+        "docs": "/docs",
+        "cors_origins": _cors_origins_list,
         "systems": {
             "preprocessing": "/systems/preprocessing/health",
             "ocr": "/systems/ocr/health",

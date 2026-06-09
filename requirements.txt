@@ -16,6 +16,7 @@ uvicorn[standard]>=0.32.0
 python-multipart>=0.0.9
 opencv-python-headless>=4.10.0
 numpy>=2.0.0,<2.4
+Pillow>=10.0.0
 paddleocr[doc-parser]>=3.5.0
 # PaddlePaddle: wajib untuk PaddleOCR-VL-1.5 (layout + VL native). Baris di bawah
 # diabaikan pip pada Python >=3.14 (belum ada wheel). Untuk OCR jalan, pakai Python 3.11–3.12 lalu pip install -r requirements.txt
@@ -23,6 +24,18 @@ paddlepaddle>=3.0.0; python_version < "3.14"
 #
 # Real-ESRGAN (super-res HD, opsional): pip install -r requirements-realesrgan.txt
 # lalu set PREPROCESS_USE_REALESRGAN=1 — lihat systems/preprocessing/realesrgan_infer.py
+#
+# Preprocessing (lihat systems/preprocessing/pipeline.py):
+#   PREPROCESS_AUTO_IMAGE_ROTATOR=1     Aktifkan putar berdasarkan wajah (default: mati — sering salah pada dokumen).
+#   PREPROCESS_AUTO_IMAGE_ROTATOR_BACKEND=haar | dlib   (default haar; dlib: pip install -r requirements-auto-image-rotator.txt)
+#   PREPROCESS_AUTO_ROTATE_ALLOW_180=1   Izinkan putar kuartal 180° otomatis (default: mati).
+#   PREPROCESS_AUTO_ROTATE_QUARTERS=off | auto | on
+#   PREPROCESS_DISAMBIGUATE_180=1  (opsional) Hanya bila skor 0°/180° seri DAN dua heuristik ruang setuju — default off
+#   PREPROCESS_SUPPLEMENT_QUARTER_PRE_WARP=1  (opsional) Pra-warp ±90° saat AUTO_ROTATE=off (default: mati).
+#   PREPROCESS_SUPPLEMENT_TIE_MIN_LEAD=78  (opsional) Seri s1≈s3 pada suplemen: putar hanya jika lead atas s0 cukup besar.
+#   PREPROCESS_RIGHT_TILT_90_CCW=1  (opsional) Putar 90° CCW hanya jika skor k=1 jelas mengalahkan tegak (default: mati).
+#   PREPROCESS_RIGHT_TILT_90_CCW_MIN_RATIO=1.18  (opsional) s1 harus ≥ s0 × ini.
+#   PREPROCESS_RIGHT_TILT_90_CCW_MIN_LEAD=0.10   (opsional) s1 − s0 minimal.
 #
 # OCR cepat (PP-OCRv5 det+rec): POST /systems/ocr/api/v1/ocr-fast — env: OCR_FAST_LANG,
 # OCR_FAST_DET_MODEL, OCR_FAST_REC_MODEL, OCR_FAST_DET_LIMIT_SIDE_LEN (lihat systems/ocr/fast_runner.py).

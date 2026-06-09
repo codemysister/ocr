@@ -11,6 +11,12 @@ CANONICAL_KEYWORDS: Final[dict[str, list[str]]] = {
     'kk': ['kartu keluarga', 'dinas kependudukan'],
 }
 
+PROFILE_LABELS: Final[dict[str, str]] = {
+    "ktp": "KTP",
+    "npwp": "NPWP",
+    "kk": "Kartu Keluarga",
+}
+
 # Sinonim input pengguna (setelah strip + casefold, spasi tunggal antar kata)
 ALIASES: Final[dict[str, str]] = {
     "kartu tanda penduduk": "ktp",
@@ -24,6 +30,11 @@ ALIASES: Final[dict[str, str]] = {
 
 def list_supported_document_types() -> list[str]:
     return sorted(CANONICAL_KEYWORDS.keys())
+
+
+def profile_label(profile_id: str) -> str:
+    pid = (profile_id or "").strip().casefold()
+    return PROFILE_LABELS.get(pid, profile_id.upper() if profile_id else "")
 
 
 def resolve_keywords(document_type: str) -> tuple[str, list[str]] | None:

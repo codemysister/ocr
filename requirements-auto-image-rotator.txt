@@ -1,0 +1,6 @@
+# Backend dlib — sama seperti auto-image-rotator/rotate.py asli.
+#   pip install -r requirements-auto-image-rotator.txt
+#   PREPROCESS_AUTO_IMAGE_ROTATOR=1   Aktifkan rotator wajah (default mati — dokumen/KK aman dari salah putar)
+#   PREPROCESS_AUTO_IMAGE_ROTATOR_BACKEND=dlib
+
+dlib>=19.24.0
