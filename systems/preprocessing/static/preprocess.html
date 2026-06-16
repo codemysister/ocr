@@ -158,7 +158,8 @@
   <header>
     <h1>Image preprocessing</h1>
     <p>
-      Untuk foto KTP di latar (bukan scan): otomatis cari bidang kartu lalu luruskan. <strong>Orientasi:</strong>
+      Default: <strong>tanpa upscale</strong> dan <strong>tanpa crop kartu</strong> (cocok screenshot/email NPWP digital).
+      Untuk foto KTP fisik di latar: set <code>PREPROCESS_CARD_WARP=1</code>. <strong>Orientasi:</strong>
       dukungan <strong>EXIF</strong> (foto ponsel). Putaran <strong>90°/180°/270°</strong> default <code>off</code>;
       set <code>PREPROCESS_AUTO_ROTATE_QUARTERS=auto</code> atau <code>on</code> bila sering foto menyamping (sebelum + setelah warp).
       Mode <code>auto</code> warp memakai <strong>rotasi + crop poros</strong> bila kotak hampir lurus, perspective jika miring kuat;

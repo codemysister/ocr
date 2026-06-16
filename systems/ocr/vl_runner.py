@@ -1,4 +1,4 @@
-"""Jalankan PaddleOCR-VL-1.5 (satu predict + satu restructure_pages) pada bytes gambar."""
+"""Jalankan PaddleOCR-VL-1.6 (satu predict + satu restructure_pages) pada bytes gambar."""
 
 from __future__ import annotations
 
@@ -82,8 +82,21 @@ def _plain_text_from_json_res(res: dict[str, Any]) -> str:
     return "\n\n".join(lines)
 
 
+def _pipeline_version() -> str:
+    raw = (os.environ.get("OCR_VL_PIPELINE_VERSION") or "v1.6").strip()
+    return raw if raw in ("v1", "v1.5", "v1.6") else "v1.6"
+
+
+def _model_label(version: str) -> str:
+    if version == "v1":
+        return "PaddleOCR-VL"
+    if version == "v1.5":
+        return "PaddleOCR-VL-1.5"
+    return "PaddleOCR-VL-1.6"
+
+
 def get_vl_pipeline():
-    """Singleton PaddleOCR-VL-1.5 (lazy)."""
+    """Singleton PaddleOCR-VL (lazy, default v1.6)."""
     global _pipeline
     if _pipeline is not None:
         return _pipeline
@@ -100,8 +113,9 @@ def get_vl_pipeline():
 
         backend = os.environ.get("OCR_VL_BACKEND")
         server_url = os.environ.get("OCR_VL_SERVER_URL")
+        version = _pipeline_version()
         kw: dict[str, Any] = {
-            "pipeline_version": "v1.5",
+            "pipeline_version": version,
             "use_queues": False,
         }
         if backend:
@@ -178,10 +192,11 @@ def run_paddleocr_vl(image_bytes: bytes, *, include_full_json: bool = False) -> 
         ih,
     )
 
+    version = _pipeline_version()
     payload: dict[str, Any] = {
         "success": True,
-        "model": "PaddleOCR-VL-1.5",
-        "pipeline_version": "v1.5",
+        "model": _model_label(version),
+        "pipeline_version": version,
         "markdown": markdown_text,
         "text": plain,
         "timing": timing,

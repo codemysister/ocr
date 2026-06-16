@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>OCR — VL &amp; fast (PP-OCRv5)</title>
+  <title>OCR — VL, fast &amp; Mistral</title>
   <style>
     :root {
       --bg: #0f1419;
@@ -149,18 +149,31 @@
     }
     .mode-row label { cursor: pointer; color: var(--text); }
     .mode-row input { margin-right: 0.35rem; }
+    select {
+      width: 100%;
+      max-width: 28rem;
+      padding: 0.5rem 0.65rem;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--panel);
+      color: var(--text);
+      font: inherit;
+      margin-bottom: 0.75rem;
+    }
   </style>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;600&display=swap" rel="stylesheet" />
 </head>
 <body>
   <header>
-    <h1>OCR — VL &amp; mode cepat</h1>
+    <h1>OCR — VL, cepat &amp; Mistral</h1>
     <p>
-      <strong>VL</strong>: layout + PaddleOCR-VL-1.5 —
+      <strong>VL</strong>: layout + PaddleOCR-VL-1.6 —
       <code class="endpoint">POST /systems/ocr/api/v1/ocr</code>.
-      <strong>Cepat</strong>: PP-OCRv5 det+rec saja (tanpa VL), biasanya jauh lebih ringan —
-      <code class="endpoint">POST /systems/ocr/api/v1/ocr-fast</code>. Keduanya field <code>file</code>.
+      <strong>Cepat</strong>: PP-OCRv6 det+rec (lokal) —
+      <code class="endpoint">POST /systems/ocr/api/v1/ocr-fast</code>.
+      <strong>Mistral</strong>: cloud API berbayar (~$2/1000 halaman), butuh <code>MISTRAL_API_KEY</code> —
+      <code class="endpoint">POST /systems/ocr/api/v1/ocr-mistral</code>.
     </p>
     <p class="nav-top"><a href="/">← Beranda platform</a> · <a href="/systems/preprocessing/">Preprocessing</a></p>
   </header>
@@ -168,13 +181,23 @@
     <section class="panel">
       <h2>Input</h2>
       <div class="mode-row" role="radiogroup" aria-label="Mode OCR">
-        <label><input type="radio" name="ocrMode" value="fast" checked /> Cepat (PP-OCRv5)</label>
-        <label><input type="radio" name="ocrMode" value="vl" /> VL-1.5 (layout + markdown)</label>
+        <label><input type="radio" name="ocrMode" value="mistral" checked /> Mistral (cloud)</label>
+        <label><input type="radio" name="ocrMode" value="fast" /> PP-OCRv6 (lokal)</label>
+        <label><input type="radio" name="ocrMode" value="vl" /> VL-1.6 (layout)</label>
+      </div>
+      <div id="tierRow" style="display: none;">
+        <label class="block" for="ppOcrTier">Tier PP-OCRv6</label>
+        <select id="ppOcrTier">
+          <option value="balanced">balanced — small det + medium rec</option>
+          <option value="medium" selected>medium — akurasi maksimal (default)</option>
+          <option value="small">small — ringan</option>
+          <option value="tiny">tiny — paling cepat</option>
+        </select>
       </div>
       <div class="controls">
-        <input type="file" id="file" accept="image/*" />
+        <input type="file" id="file" accept="image/*,application/pdf" />
         <button type="button" class="primary" id="run" disabled>Jalankan OCR</button>
-        <span class="hint">Mode cepat (default): <code>mobile_det + server_rec</code> — lebih akurat dari full mobile, tetap ringan vs VL. Ubah lewat <code>OCR_FAST_LANG</code> (coba <code>latin</code> untuk KTP), <code>OCR_FAST_DET_MODEL</code>, <code>OCR_FAST_REC_MODEL</code>. VL: set <code>OCR_VL_MAX_LONG_SIDE</code>. GET /systems/ocr/health → <code>ocr_fast</code>.</span>
+        <span class="hint">Mistral = cloud + annotation. PP-OCRv6: pilih tier. VL: set <code>OCR_VL_MAX_LONG_SIDE</code>. GET /systems/ocr/health.</span>
       </div>
       <div class="status" id="status" role="status"></div>
     </section>
@@ -210,15 +233,29 @@
     const outTxt = document.getElementById("outTxt");
     const outLines = document.getElementById("outLines");
 
+    const tierRow = document.getElementById("tierRow");
+    const ppOcrTier = document.getElementById("ppOcrTier");
+
     function selectedMode() {
       const r = document.querySelector('input[name="ocrMode"]:checked');
-      return r ? r.value : "fast";
+      return r ? r.value : "mistral";
     }
 
+    function syncTierRow() {
+      tierRow.style.display = selectedMode() === "fast" ? "block" : "none";
+    }
+
+    document.querySelectorAll('input[name="ocrMode"]').forEach((el) => {
+      el.addEventListener("change", syncTierRow);
+    });
+    syncTierRow();
+
     function ocrEndpoint() {
-      return selectedMode() === "vl"
-        ? "/systems/ocr/api/v1/ocr"
-        : "/systems/ocr/api/v1/ocr-fast";
+      const mode = selectedMode();
+      if (mode === "vl") return "/systems/ocr/api/v1/ocr";
+      if (mode === "mistral") return "/systems/ocr/api/v1/ocr-mistral";
+      const tier = ppOcrTier.value || "medium";
+      return "/systems/ocr/api/v1/ocr-fast?pp_ocr_tier=" + encodeURIComponent(tier);
     }
 
     function timingSummary(data) {
@@ -235,6 +272,22 @@
           "s · get_pipeline " +
           (t.get_pipeline_s ?? "?") +
           "s)"
+        );
+      }
+      if (selectedMode() === "mistral") {
+        const usage = data.usage || {};
+        const cost = typeof usage.estimated_cost_usd === "number"
+          ? " · ~$" + usage.estimated_cost_usd
+          : "";
+        return (
+          " total " +
+          t.total_wall_s +
+          "s (api " +
+          (t.api_call_s ?? "?") +
+          "s · halaman " +
+          (usage.pages_processed ?? "?") +
+          cost +
+          ")"
         );
       }
       return (
@@ -300,7 +353,12 @@
       const f = fileInput.files[0];
       if (!f) return;
       runBtn.disabled = true;
-      setStatus("Memproses (model besar, bisa memakan waktu)…");
+      const mode = selectedMode();
+      setStatus(
+        mode === "mistral"
+          ? "Memproses via Mistral API (berbayar)…"
+          : "Memproses (model besar, bisa memakan waktu)…"
+      );
 
       const fd = new FormData();
       fd.append("file", f);

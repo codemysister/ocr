@@ -9,12 +9,32 @@ from typing import Any
 from rapidfuzz import fuzz
 
 from systems.validation.document_profiles import CANONICAL_KEYWORDS, profile_label
-from systems.validation.name_extraction import extract_holder_name_candidate, person_like_segments
+from systems.validation.name_extraction import (
+    extract_holder_name_candidate,
+    extract_kk_member_names,
+    person_like_segments,
+)
+
+try:
+    from systems.ocr.mistral_annotation import (
+        document_type_profile_from_annotation,
+        holder_name_from_annotation,
+    )
+except ImportError:
+    document_type_profile_from_annotation = None  # type: ignore[misc, assignment]
+    holder_name_from_annotation = None  # type: ignore[misc, assignment]
 
 
 def _normalize(s: str) -> str:
     s = (s or "").strip().casefold()
     return re.sub(r"\s+", " ", s)
+
+
+def _normalize_name(s: str) -> str:
+    """Normalisasi untuk perbandingan nama: spasi + tanda hubung diperlakukan sama."""
+    s = _normalize(s)
+    s = re.sub(r"[-_/]+", " ", s)
+    return re.sub(r"\s+", " ", s).strip()
 
 
 def _normalize_keyword(s: str) -> str:
@@ -99,8 +119,8 @@ def compare_extracted_identity_scores(extracted: str, expected_name: str) -> dic
     Skor gabungan = rata-rata token_sort_ratio, WRatio, dan partial_ratio pada **dua string nama**
     (partial di sini tidak memakai teks dokumen penuh, jadi tidak membesar skor palsu).
     """
-    a = _normalize(extracted)
-    b = _normalize(expected_name)
+    a = _normalize_name(extracted)
+    b = _normalize_name(expected_name)
     if not a or not b:
         return {
             "extracted_normalized": a,
@@ -126,9 +146,53 @@ def compare_extracted_identity_scores(extracted: str, expected_name: str) -> dic
     }
 
 
+def _ocr_search_corpora(ocr_normalized: str) -> list[str]:
+    """Korpus untuk fuzzy keyword: teks penuh, segmen baris, jendela 2–3 segmen, tanpa spasi."""
+    text = (ocr_normalized or "").strip()
+    if not text:
+        return []
+
+    segments: list[str] = []
+    for chunk in re.split(r"[\n|•]+", text):
+        part = chunk.strip()
+        if part:
+            segments.append(part)
+    if len(segments) <= 1:
+        segments = [s.strip() for s in re.split(r"\s{2,}", text) if s.strip()] or [text]
+
+    corpora: list[str] = [text]
+    corpora.extend(segments)
+    for i in range(len(segments) - 1):
+        corpora.append(f"{segments[i]} {segments[i + 1]}")
+    for i in range(len(segments) - 2):
+        corpora.append(f"{segments[i]} {segments[i + 1]} {segments[i + 2]}")
+
+    compact = re.sub(r"\s+", "", text)
+    if compact:
+        corpora.append(compact)
+
+    seen: set[str] = set()
+    out: list[str] = []
+    for c in corpora:
+        if c and c not in seen:
+            seen.add(c)
+            out.append(c)
+    return out
+
+
+def _fuzzy_scores_for_pair(a: str, b: str) -> dict[str, float]:
+    return {
+        "partial_ratio": float(fuzz.partial_ratio(a, b)),
+        "token_sort_ratio": float(fuzz.token_sort_ratio(a, b)),
+        "token_set_ratio": float(fuzz.token_set_ratio(a, b)),
+        "wratio": float(fuzz.WRatio(a, b)),
+    }
+
+
 def fuzzy_keyword_against_ocr(keyword: str, ocr_normalized: str) -> dict[str, Any]:
     """
-    Skor fuzzy keyword terhadap teks OCR penuh (partial, token, WRatio); tidak ada ambang per keyword.
+    Skor fuzzy keyword terhadap teks OCR: ambil terbaik dari teks penuh, segmen baris,
+    jendela segmen berdekatan, dan teks tanpa spasi (untuk label menempel seperti provinsijawabarat).
     """
     kw = _normalize_keyword(keyword)
     if not kw:
@@ -155,17 +219,31 @@ def fuzzy_keyword_against_ocr(keyword: str, ocr_normalized: str) -> dict[str, An
             "skipped": False,
         }
 
-    scores = {
-        "partial_ratio": float(fuzz.partial_ratio(kw, ocr_normalized)),
-        "token_sort_ratio": float(fuzz.token_sort_ratio(kw, ocr_normalized)),
-        "token_set_ratio": float(fuzz.token_set_ratio(kw, ocr_normalized)),
-        "wratio": float(fuzz.WRatio(kw, ocr_normalized)),
+    corpora = _ocr_search_corpora(ocr_normalized)
+    merged: dict[str, float] = {
+        "partial_ratio": 0.0,
+        "token_sort_ratio": 0.0,
+        "token_set_ratio": 0.0,
+        "wratio": 0.0,
     }
-    best = max(scores.values())
+    for corpus in corpora:
+        for metric, value in _fuzzy_scores_for_pair(kw, corpus).items():
+            merged[metric] = max(merged[metric], value)
+
+    # Label pendek (nik, npwp): cek juga kecocokan substring pada teks padat.
+    if " " not in kw and len(kw) <= 12:
+        compact_kw = kw.replace(" ", "")
+        for corpus in corpora:
+            compact_corpus = re.sub(r"\s+", "", corpus)
+            if compact_kw and compact_kw in compact_corpus:
+                merged["partial_ratio"] = max(merged["partial_ratio"], 100.0)
+                merged["wratio"] = max(merged["wratio"], 100.0)
+
+    best = max(merged.values())
     return {
         "keyword_raw": keyword,
         "keyword_normalized": kw,
-        "scores": scores,
+        "scores": merged,
         "best_score": best,
         "score_ratio": round(best / 100.0, 6),
         "skipped": False,
@@ -178,6 +256,8 @@ _EXTRACTION_METHOD_ID: dict[str, str] = {
     "regex_nama": "pola teks di sekitar kata 'nama' dalam OCR",
     "best_person_like_vs_expected": "segmen yang paling mirip nama (heuristik, karena penanda 'Nama' tidak jelas)",
     "person_like_segment": "segmen mirip nama dengan skor identitas tertinggi vs referensi",
+    "kk_table_row": "baris tabel anggota Kartu Keluarga (nama lengkap + NIK)",
+    "kk_table_first_member": "anggota pertama pada tabel Kartu Keluarga",
     "failed": "tidak berhasil menarik nama dari OCR",
     "skipped_no_expected_name": "nama referensi kosong — identitas tidak diuji",
 }
@@ -353,13 +433,71 @@ def _profile_aggregate_score(ocr_normalized: str, keywords: list[str]) -> tuple[
     return aggregate, keyword_results
 
 
+def _profile_structural_boost(profile_id: str, ocr_n: str) -> float:
+    """Bonus kecil bila ada penanda struktural kuat di OCR (NIK 16 digit, dll.)."""
+    pid = (profile_id or "").strip().casefold()
+    compact = re.sub(r"\s+", "", ocr_n)
+    if pid == "ktp":
+        bonus = 0.0
+        if re.search(r"\b\d{16}\b", ocr_n):
+            bonus += 0.06
+        if re.search(r"\bnik\b", ocr_n) or "nik" in compact:
+            bonus += 0.04
+        return min(0.10, bonus)
+    if pid == "npwp":
+        if re.search(r"\bnpwp\b", ocr_n) or "npwp" in compact:
+            return 0.06
+    if pid == "kk" and "kartukeluarga" in compact:
+        return 0.08
+    return 0.0
+
+
+def _document_type_score_boosts(
+    profile_id: str,
+    ocr_n: str,
+    mistral_annotation: dict[str, Any] | None,
+) -> dict[str, float]:
+    boosts: dict[str, float] = {}
+    structural = _profile_structural_boost(profile_id, ocr_n)
+    if structural > 0:
+        boosts["structural"] = round(structural, 4)
+
+    if mistral_annotation and document_type_profile_from_annotation is not None:
+        ann_profile = document_type_profile_from_annotation(mistral_annotation)
+        if ann_profile and ann_profile == (profile_id or "").strip().casefold():
+            boosts["mistral_document_type"] = 0.10
+
+    return boosts
+
+
+def _detection_tiebreak_bonus(profile_id: str, ocr_n: str, hint_profile_id: str) -> float:
+    """Pecah seri skor: anchor eksklusif profil + preferensi profil yang diminta user."""
+    bonus = 0.0
+    pid = (profile_id or "").strip().casefold()
+    hint = (hint_profile_id or "").strip().casefold()
+    compact = re.sub(r"\s+", "", ocr_n)
+    if pid == "kk" and "kartu keluarga" in ocr_n:
+        bonus += 1.0
+    if pid == "npwp" and re.search(r"\bnpwp\b", ocr_n):
+        bonus += 1.0
+    if pid == "ktp" and (re.search(r"\bnik\b", ocr_n) or "nik" in compact):
+        bonus += 0.75
+    if pid == "ktp" and re.search(r"\b\d{16}\b", ocr_n):
+        bonus += 0.5
+    if pid == hint and hint:
+        bonus += 0.5
+    return bonus
+
+
 def detect_document_type_from_ocr(
     ocr_text: str,
     *,
     min_aggregate_ratio: float = 0.5,
+    hint_profile_id: str = "",
 ) -> dict[str, Any]:
     """
     Tebak jenis dokumen dari teks OCR dengan membandingkan skor keyword tiap profil.
+    `hint_profile_id`: profil yang diminta user — dipakai memecah seri skor (mis. KK vs KTP).
     """
     ocr_n = _normalize(ocr_text)
     min_ratio = max(0.0, min(1.0, float(min_aggregate_ratio)))
@@ -374,10 +512,16 @@ def detect_document_type_from_ocr(
                 "aggregate_score": round(aggregate, 6),
                 "aggregate_percent": round(aggregate * 100.0, 4),
                 "keywords": keyword_results,
+                "tiebreak_bonus": round(
+                    _detection_tiebreak_bonus(profile_id, ocr_n, hint_profile_id), 4
+                ),
             }
         )
 
-    ranked.sort(key=lambda x: float(x["aggregate_score"]), reverse=True)
+    ranked.sort(
+        key=lambda x: (float(x["aggregate_score"]), float(x.get("tiebreak_bonus") or 0.0)),
+        reverse=True,
+    )
     best = ranked[0] if ranked else None
     second_score = float(ranked[1]["aggregate_score"]) if len(ranked) > 1 else 0.0
     detected_profile_id: str | None = None
@@ -496,6 +640,7 @@ def validate_document_ocr(
     expected_name: str = "",
     aggregate_min_pass_ratio: float = 0.7,
     identity_min_score: float = 65.0,
+    mistral_annotation: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """
     - Tipe dokumen: rata-rata skor keyword vs OCR penuh >= aggregate_min_pass_ratio.
@@ -518,11 +663,16 @@ def validate_document_ocr(
             continue
         kw_ratios.append(float(item["best_score"]) / 100.0)
 
+    document_type_boosts = _document_type_score_boosts(profile, ocr_n, mistral_annotation)
+    boost_total = min(0.15, sum(document_type_boosts.values()))
+
     if not kw_ratios:
+        keyword_aggregate_raw = 0.0
         document_type_aggregate_pass_ratio = 0.0
         document_type_pass = False
     else:
-        document_type_aggregate_pass_ratio = sum(kw_ratios) / len(kw_ratios)
+        keyword_aggregate_raw = sum(kw_ratios) / len(kw_ratios)
+        document_type_aggregate_pass_ratio = min(1.0, keyword_aggregate_raw + boost_total)
         document_type_pass = document_type_aggregate_pass_ratio >= ratio_req
 
     document_type_components_count = len(kw_ratios)
@@ -537,7 +687,15 @@ def validate_document_ocr(
     identity_pass: bool | None = None
 
     if want_identity:
-        struct_cand, struct_method = extract_holder_name_candidate(ocr_text, profile)
+        ann_name: str | None = None
+        if mistral_annotation and holder_name_from_annotation is not None:
+            ann_name = holder_name_from_annotation(mistral_annotation)
+
+        if ann_name:
+            struct_cand, struct_method = ann_name, "mistral_document_annotation"
+        else:
+            struct_cand, struct_method = extract_holder_name_candidate(ocr_text, profile)
+
         scored: list[tuple[float, str, str]] = []
         if struct_cand:
             scv = float(
@@ -546,15 +704,27 @@ def validate_document_ocr(
                 ]
             )
             scored.append((scv, struct_cand, struct_method))
-        for seg in person_like_segments(ocr_text):
-            scv = float(
-                compare_extracted_identity_scores(seg, expected_name)["identity_combined_score"]
-            )
-            scored.append((scv, seg, "person_like_segment"))
+        if profile == "kk" and not ann_name:
+            for name in extract_kk_member_names(ocr_text):
+                scv = float(
+                    compare_extracted_identity_scores(name, expected_name)[
+                        "identity_combined_score"
+                    ]
+                )
+                scored.append((scv, name, "kk_table_row"))
+
+        if not ann_name:
+            for seg in person_like_segments(ocr_text):
+                scv = float(
+                    compare_extracted_identity_scores(seg, expected_name)[
+                        "identity_combined_score"
+                    ]
+                )
+                scored.append((scv, seg, "person_like_segment"))
 
         by_norm: dict[str, tuple[float, str, str]] = {}
         for scv, text, meth in scored:
-            nk = _normalize(text)
+            nk = _normalize_name(text)
             if nk not in by_norm or scv > by_norm[nk][0]:
                 by_norm[nk] = (scv, text, meth)
 
@@ -566,7 +736,7 @@ def validate_document_ocr(
 
         name_extraction = {
             "candidate_raw": raw_cand,
-            "candidate_normalized": _normalize(raw_cand) if raw_cand else "",
+            "candidate_normalized": _normalize_name(raw_cand) if raw_cand else "",
             "method": method,
         }
         if raw_cand:
@@ -602,7 +772,11 @@ def validate_document_ocr(
         expected_name_display=expected_name.strip(),
     )
 
-    detection = detect_document_type_from_ocr(ocr_text, min_aggregate_ratio=ratio_req)
+    detection = detect_document_type_from_ocr(
+        ocr_text,
+        min_aggregate_ratio=ratio_req,
+        hint_profile_id=profile,
+    )
     verdict = build_document_verdict(
         requested_document_type=document_type,
         requested_profile_id=profile,
@@ -619,10 +793,13 @@ def validate_document_ocr(
     return {
         "document_type": (document_type or "").strip(),
         "document_profile_id": profile,
+        "mistral_annotation": mistral_annotation,
         "ocr_normalized": ocr_n,
         "aggregate_min_pass_ratio": ratio_req,
         "identity_min_score": id_min,
         "document_type_pass": document_type_pass,
+        "document_type_keyword_aggregate_raw": round(keyword_aggregate_raw, 6),
+        "document_type_boosts": document_type_boosts,
         "document_type_aggregate_pass_ratio": round(document_type_aggregate_pass_ratio, 6),
         "document_type_components_count": document_type_components_count,
         "aggregate_pass_ratio": round(document_type_aggregate_pass_ratio, 6),

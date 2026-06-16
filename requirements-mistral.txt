@@ -1,0 +1,6 @@
+# Mistral OCR (cloud API, berbayar ~$2 / 1000 halaman).
+# Pasang: .venv/bin/pip install -r requirements-mistral.txt
+# Set API key: export MISTRAL_API_KEY="..."  (atau isi .env — lihat .env.example)
+
+mistralai>=1.5.0
+python-dotenv>=1.0.0

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from fastapi import APIRouter, HTTPException
 from fastapi.encoders import jsonable_encoder
@@ -61,6 +62,13 @@ class ValidateDocumentBody(BaseModel):
             "Minimal skor identitas 0–100: nama diekstrak dari OCR vs nama referensi, "
             "rata-rata(token_sort_ratio, WRatio, partial_ratio) pada dua string pendek. "
             "Hanya dipakai jika expected_name tidak kosong. Default 65."
+        ),
+    )
+    mistral_annotation: dict[str, Any] | None = Field(
+        None,
+        description=(
+            "Structured extraction dari Mistral document_annotation (opsional). "
+            "Jika ada holder_name valid, diprioritaskan untuk cek identitas."
         ),
     )
 
@@ -189,6 +197,7 @@ def api_validate_document(body: ValidateDocumentBody) -> JSONResponse:
         expected_name=body.expected_name,
         aggregate_min_pass_ratio=body.aggregate_min_pass_ratio,
         identity_min_score=body.identity_min_score,
+        mistral_annotation=body.mistral_annotation,
     )
     payload = {
         "success": True,

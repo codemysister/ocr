@@ -1,8 +1,8 @@
-"""OCR ringan: PaddleOCR det + rec (PP-OCRv5), tanpa PaddleOCR-VL / layout dokumen.
+"""OCR ringan: PaddleOCR det + rec (PP-OCRv6), tanpa PaddleOCR-VL / layout dokumen.
 
-Default untuk lang ``en`` dan ``latin``: deteksi mobile + pengenalan server (lebih akurat dari full
-mobile, lebih ringan dari full server atau VL). Ganti pasangan lewat OCR_FAST_DET_MODEL /
-OCR_FAST_REC_MODEL.
+Default tier ``medium`` (PP-OCRv6_medium det+rec, akurasi maksimal). Semua modul pipeline Paddle
+(orientasi halaman, unwarp dokumen, orientasi baris teks) aktif default. Matikan lewat
+OCR_FAST_DOC_ORIENTATION=0, OCR_FAST_DOC_UNWARPING=0, OCR_FAST_TEXTLINE_ORIENTATION=0.
 """
 
 from __future__ import annotations
@@ -18,9 +18,43 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-_ocr: Any = None
+PP_OCR_V6_SMALL_DET = "PP-OCRv6_small_det"
+PP_OCR_V6_MEDIUM_DET = "PP-OCRv6_medium_det"
+PP_OCR_V6_MEDIUM_REC = "PP-OCRv6_medium_rec"
+PP_OCR_V6_SMALL_REC = "PP-OCRv6_small_rec"
+PP_OCR_V6_TINY_DET = "PP-OCRv6_tiny_det"
+PP_OCR_V6_TINY_REC = "PP-OCRv6_tiny_rec"
+
+PP_OCR_V6_TIERS: dict[str, tuple[str, str, str]] = {
+    "balanced": (PP_OCR_V6_SMALL_DET, PP_OCR_V6_MEDIUM_REC, "small_det+medium_rec"),
+    "medium": (PP_OCR_V6_MEDIUM_DET, PP_OCR_V6_MEDIUM_REC, "medium_det+medium_rec"),
+    "small": (PP_OCR_V6_SMALL_DET, PP_OCR_V6_SMALL_REC, "small_det+small_rec"),
+    "tiny": (PP_OCR_V6_TINY_DET, PP_OCR_V6_TINY_REC, "tiny_det+tiny_rec"),
+}
+
+_ocr_cache: dict[str, Any] = {}
 _init_lock = threading.Lock()
 _infer_lock = threading.Lock()
+
+
+def _env_bool(name: str, *, default: bool) -> bool:
+    raw = (os.environ.get(name) or "").strip().lower()
+    if not raw:
+        return default
+    return raw in ("1", "true", "yes", "on")
+
+
+def paddle_fast_module_flags() -> dict[str, bool]:
+    """Flag modul Paddle (orientation / unwarp / textline) untuk PP-OCRv6 fast."""
+    return {
+        "use_doc_orientation_classify": _env_bool(
+            "OCR_FAST_DOC_ORIENTATION", default=True
+        ),
+        "use_doc_unwarping": _env_bool("OCR_FAST_DOC_UNWARPING", default=True),
+        "use_textline_orientation": _env_bool(
+            "OCR_FAST_TEXTLINE_ORIENTATION", default=True
+        ),
+    }
 
 
 def _decode_bgr(data: bytes) -> np.ndarray:
@@ -31,50 +65,68 @@ def _decode_bgr(data: bytes) -> np.ndarray:
     return img
 
 
-def _get_paddle_ocr() -> Any:
-    global _ocr
-    if _ocr is not None:
-        return _ocr
+def list_pp_ocr_tiers() -> list[str]:
+    return list(PP_OCR_V6_TIERS.keys())
+
+
+def _resolve_fast_models(pp_ocr_tier: str | None) -> tuple[str, str, str]:
+    """
+    Kembalikan (det_model, rec_model, tier_id).
+    Env OCR_FAST_DET_MODEL / OCR_FAST_REC_MODEL menang atas tier.
+    """
+    det_env = os.environ.get("OCR_FAST_DET_MODEL", "").strip()
+    rec_env = os.environ.get("OCR_FAST_REC_MODEL", "").strip()
+    if det_env or rec_env:
+        return (
+            det_env or PP_OCR_V6_MEDIUM_DET,
+            rec_env or PP_OCR_V6_MEDIUM_REC,
+            "custom",
+        )
+    tier = (pp_ocr_tier or os.environ.get("OCR_FAST_TIER") or "medium").strip().lower()
+    if tier not in PP_OCR_V6_TIERS:
+        tier = "medium"
+    det, rec, _ = PP_OCR_V6_TIERS[tier]
+    return det, rec, tier
+
+
+def _get_paddle_ocr(*, pp_ocr_tier: str | None = None) -> Any:
+    lang = os.environ.get("OCR_FAST_LANG", "en").strip() or "en"
+    det, rec, tier_id = _resolve_fast_models(pp_ocr_tier)
+    mod_flags = paddle_fast_module_flags()
+    lim = (os.environ.get("OCR_FAST_DET_LIMIT_SIDE_LEN") or "").strip()
+    cache_key = (
+        f"{lang}|{det}|{rec}|ori={int(mod_flags['use_doc_orientation_classify'])}"
+        f"|unwarp={int(mod_flags['use_doc_unwarping'])}"
+        f"|tline={int(mod_flags['use_textline_orientation'])}|lim={lim or '-'}"
+    )
+    cached = _ocr_cache.get(cache_key)
+    if cached is not None:
+        return cached
     with _init_lock:
-        if _ocr is not None:
-            return _ocr
+        cached = _ocr_cache.get(cache_key)
+        if cached is not None:
+            return cached
         os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
         try:
             from paddleocr import PaddleOCR
         except ImportError as e:
             raise RuntimeError(
-                'Pasang dependensi OCR: pip install "paddleocr[doc-parser]>=3.5.0"'
+                'Pasang dependensi OCR: pip install "paddleocr[doc-parser]>=3.6.0"'
             ) from e
-
-        lang = os.environ.get("OCR_FAST_LANG", "en").strip() or "en"
-        det_env = os.environ.get("OCR_FAST_DET_MODEL", "").strip()
-        rec_env = os.environ.get("OCR_FAST_REC_MODEL", "").strip()
 
         kw: dict[str, Any] = {
             "lang": lang,
-            "use_doc_orientation_classify": False,
-            "use_doc_unwarping": False,
-            "use_textline_orientation": False,
+            **mod_flags,
+            "text_detection_model_name": det,
+            "text_recognition_model_name": rec,
         }
 
-        # Jika hanya set det tanpa rec, Paddle mengabaikan `lang` untuk rec — set pasangan agar konsisten.
-        if det_env or rec_env:
-            if det_env:
-                kw["text_detection_model_name"] = det_env
-            if rec_env:
-                kw["text_recognition_model_name"] = rec_env
-        elif lang in ("en", "latin"):
-            # Seimbang: deteksi mobile (ringan), pengenalan server (lebih akurat). Full server: set env di bawah.
-            kw["text_detection_model_name"] = "PP-OCRv5_mobile_det"
-            kw["text_recognition_model_name"] = "PP-OCRv5_server_rec"
-        # else: biarkan Paddle memilih model default untuk `lang`
-
-        lim = os.environ.get("OCR_FAST_DET_LIMIT_SIDE_LEN", "").strip()
         if lim.isdigit():
             kw["text_det_limit_side_len"] = int(lim)
 
-        _ocr = PaddleOCR(**kw)
-        return _ocr
+        ocr = PaddleOCR(**kw)
+        _ocr_cache[cache_key] = ocr
+        return ocr
 
 
 def _result_to_lines(ocr_result: Any) -> tuple[list[dict[str, Any]], str]:
@@ -115,9 +167,14 @@ def _result_to_lines(ocr_result: Any) -> tuple[list[dict[str, Any]], str]:
     return lines, full
 
 
-def run_paddleocr_fast(image_bytes: bytes) -> dict[str, Any]:
+def run_paddleocr_fast(
+    image_bytes: bytes,
+    *,
+    pp_ocr_tier: str | None = None,
+) -> dict[str, Any]:
     """
     Deteksi + recognition klasik (bukan VL). Lebih ringan dari PaddleOCR-VL untuk banyak kasus.
+    pp_ocr_tier: balanced | medium | small | tiny (lihat PP_OCR_V6_TIERS).
     """
     t0 = time.perf_counter()
     timing: dict[str, Any] = {}
@@ -129,8 +186,11 @@ def run_paddleocr_fast(image_bytes: bytes) -> dict[str, Any]:
     timing["input_hw"] = {"height": ih, "width": iw}
 
     t_get = time.perf_counter()
-    ocr = _get_paddle_ocr()
+    det, rec, tier_id = _resolve_fast_models(pp_ocr_tier)
+    ocr = _get_paddle_ocr(pp_ocr_tier=pp_ocr_tier)
     timing["get_engine_s"] = round(time.perf_counter() - t_get, 3)
+    timing["pp_ocr_tier"] = tier_id
+    timing["paddle_modules"] = paddle_fast_module_flags()
 
     with _infer_lock:
         t_pred = time.perf_counter()
@@ -160,20 +220,16 @@ def run_paddleocr_fast(image_bytes: bytes) -> dict[str, Any]:
     )
 
     lang = os.environ.get("OCR_FAST_LANG", "en").strip() or "en"
-    custom = bool(
-        (os.environ.get("OCR_FAST_DET_MODEL") or "").strip()
-        or (os.environ.get("OCR_FAST_REC_MODEL") or "").strip()
-    )
-    if custom:
-        model_str = f"PP-OCRv5 det+rec (lang={lang}, OCR_FAST_* custom)"
-    elif lang in ("en", "latin"):
-        model_str = f"PP-OCRv5 mobile_det+server_rec (lang={lang})"
+    if tier_id == "custom":
+        model_str = f"PP-OCRv6 custom ({det}+{rec}, lang={lang})"
     else:
-        model_str = f"PP-OCRv5 det+rec (lang={lang}, Paddle default)"
+        model_str = f"PP-OCRv6 tier={tier_id} ({det}+{rec}, lang={lang})"
     return {
         "success": True,
         "mode": "paddleocr_fast",
         "model": model_str,
+        "pp_ocr_tier": tier_id,
+        "paddle_modules": paddle_fast_module_flags(),
         "markdown": markdown,
         "text": plain,
         "lines": line_items,

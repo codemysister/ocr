@@ -30,8 +30,14 @@ def preprocessing_health() -> dict:
                 "Jika kontur terluar menutupi ≥ PREPROCESS_SKIP_WARP_WHEN_COVER_RATIO (default 0.88), "
                 "perspective warp dilewati agar scan yang sudah lurus tidak distorsi."
             ),
+            "resize": (
+                "Default: tanpa upscale (PREPROCESS_MIN_SIDE_TARGET=0). "
+                "Downscale hanya jika sisi terpanjang > PREPROCESS_MAX_SIDE (default 2400). "
+                "Upscale lama: set PREPROCESS_MIN_SIDE_TARGET=900."
+            ),
             "card_warp": (
-                "PREPROCESS_CARD_WARP=0 mematikan warp kartu. "
+                "Default: mati (PREPROCESS_CARD_WARP=0) — screenshot/email tidak di-crop. "
+                "Aktifkan PREPROCESS_CARD_WARP=1 untuk foto kartu fisik. "
                 "PREPROCESS_CARD_WARP_STYLE=auto|axis_box|perspective (default auto): "
                 "auto memakai crop poros bila kotak sudah hampir sejajar sumbu, supaya dokumen lurus "
                 "tidak distorsi perspective; perspective = selalu seperti sebelumnya."

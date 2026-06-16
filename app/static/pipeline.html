@@ -123,6 +123,15 @@
     }
     .mode-row label { cursor: pointer; color: var(--text); }
     .mode-row input { margin-right: 0.35rem; }
+    select {
+      width: 100%;
+      padding: 0.5rem 0.65rem;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--panel);
+      color: var(--text);
+      font: inherit;
+    }
     .steps {
       display: flex;
       flex-wrap: wrap;
@@ -201,11 +210,10 @@
     <p>
       Satu unggahan menjalankan:
       <code class="endpoint">POST /api/v1/preprocess?format=json</code>
-      → gambar hasil preprocess ke OCR
-      (<code class="endpoint">/systems/ocr/api/v1/ocr(-fast)</code>)
+      → OCR (pilihan model di bawah)
       → validasi jenis dokumen &amp; nama
       (<code class="endpoint">POST /systems/validation/api/v1/validate-document</code>).
-      Mode VL memakan banyak RAM; untuk laptop 16GB pertimbangkan <code>OCR_VL_MAX_LONG_SIDE=2048</code> atau server vLLM — lihat <code>GET /systems/ocr/health</code> → <code>vl_memory_tuning</code>.
+      Default: <strong>Mistral</strong> + <code>document_annotation</code>. Alternatif: PP-OCRv6 lokal atau PaddleOCR-VL.
     </p>
     <p class="nav-top"><a href="/">← Beranda platform</a> · <a href="/systems/preprocessing/">Preprocessing saja</a> · <a href="/systems/ocr/">OCR saja</a> · <a href="/systems/validation/">Validasi saja</a></p>
   </header>
@@ -226,9 +234,22 @@
       <label class="block" for="expected">Nama referensi (opsional)</label>
       <textarea id="expected" placeholder="Kosongkan bila hanya mengecek keyword profil dokumen."></textarea>
 
-      <div class="mode-row" role="radiogroup" aria-label="Mode OCR">
-        <label><input type="radio" name="ocrMode" value="fast" checked /> Cepat (PP-OCRv5 mobile det + server rec)</label>
-        <label><input type="radio" name="ocrMode" value="vl" /> VL-1.5</label>
+      <label class="block">Engine OCR</label>
+      <div class="mode-row" role="radiogroup" aria-label="Engine OCR">
+        <label><input type="radio" name="ocrMode" value="mistral" checked /> Mistral (cloud, default)</label>
+        <label><input type="radio" name="ocrMode" value="fast" /> PP-OCRv6 (lokal)</label>
+        <label><input type="radio" name="ocrMode" value="vl" /> PaddleOCR-VL-1.6</label>
+      </div>
+      <div id="tierRow" class="row two" style="display: none; margin-top: 0.75rem;">
+        <div>
+          <label class="block" for="ppOcrTier">Tier PP-OCRv6</label>
+          <select id="ppOcrTier">
+            <option value="balanced">balanced — small det + medium rec</option>
+            <option value="medium" selected>medium — akurasi maksimal (default)</option>
+            <option value="small">small — ringan</option>
+            <option value="tiny">tiny — paling cepat</option>
+          </select>
+        </div>
       </div>
 
       <div class="controls">
@@ -280,16 +301,29 @@
     const stPrep = document.getElementById("st-prep");
     const stOcr = document.getElementById("st-ocr");
     const stVal = document.getElementById("st-val");
+    const tierRow = document.getElementById("tierRow");
+    const ppOcrTier = document.getElementById("ppOcrTier");
 
     function selectedMode() {
       const r = document.querySelector('input[name="ocrMode"]:checked');
-      return r ? r.value : "fast";
+      return r ? r.value : "mistral";
     }
 
+    function syncTierRow() {
+      tierRow.style.display = selectedMode() === "fast" ? "" : "none";
+    }
+
+    document.querySelectorAll('input[name="ocrMode"]').forEach((el) => {
+      el.addEventListener("change", syncTierRow);
+    });
+    syncTierRow();
+
     function ocrEndpoint() {
-      return selectedMode() === "vl"
-        ? "/systems/ocr/api/v1/ocr"
-        : "/systems/ocr/api/v1/ocr-fast";
+      const mode = selectedMode();
+      if (mode === "vl") return "/systems/ocr/api/v1/ocr";
+      if (mode === "mistral") return "/systems/ocr/api/v1/ocr-mistral";
+      const tier = ppOcrTier.value || "medium";
+      return "/systems/ocr/api/v1/ocr-fast?pp_ocr_tier=" + encodeURIComponent(tier);
     }
 
     function setStatus(msg, type) {
@@ -478,14 +512,26 @@
         outOcr.value = ocr_text;
 
         stVal.classList.add("run");
+        let mistral_annotation = null;
+        if (selectedMode() === "mistral") {
+          mistral_annotation =
+            ocrData.document_annotation_parsed ?? ocrData.document_annotation ?? null;
+          if (typeof mistral_annotation === "string") {
+            try {
+              mistral_annotation = JSON.parse(mistral_annotation);
+            } catch {
+              mistral_annotation = null;
+            }
+          }
+        }
+        const valBody = { ocr_text, document_type, expected_name };
+        if (mistral_annotation && typeof mistral_annotation === "object") {
+          valBody.mistral_annotation = mistral_annotation;
+        }
         const rVal = await fetch("/systems/validation/api/v1/validate-document", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            ocr_text,
-            document_type,
-            expected_name,
-          }),
+          body: JSON.stringify(valBody),
         });
         const valData = await rVal.json().catch(() => ({}));
         stVal.classList.remove("run");
@@ -507,6 +553,11 @@
         valSummary.className = "val-summary " + (ok ? "ok" : "no");
         renderValidationSummary(valData, ok);
 
+        const usage = ocrData.usage || {};
+        const cost =
+          typeof usage.estimated_cost_usd === "number"
+            ? " · ~$" + usage.estimated_cost_usd
+            : "";
         setStatus(
           "Selesai — preprocess " +
             (preJson.width || "?") +
@@ -514,6 +565,7 @@
             (preJson.height || "?") +
             " → OCR (" +
             (ocrData.model || ocrData.mode || selectedMode()) +
+            cost +
             ") → validasi.",
           "ok",
         );

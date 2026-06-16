@@ -6,12 +6,12 @@ from typing import Any
 
 PADDLE_INSTALL_URL = "https://www.paddlepaddle.org.cn/install/quick"
 PADDLEOCR_VL_DOC_URL = (
-    "https://www.paddleocr.ai/latest/en/version3.x/algorithm/PaddleOCR-VL/PaddleOCR-VL-1.5.html"
+    "https://www.paddleocr.ai/latest/en/version3.x/algorithm/PaddleOCR-VL/PaddleOCR-VL-1.6.html"
 )
 
 # Respons HTTP 503 saat PaddlePaddle / engine tidak tersedia.
 OCR_INFERENCE_UNAVAILABLE = (
-    "PaddleOCR-VL-1.5 tidak bisa dijalankan di server ini: pipeline membutuhkan PaddlePaddle untuk "
+    "PaddleOCR-VL-1.6 tidak bisa dijalankan di server ini: pipeline membutuhkan PaddlePaddle untuk "
     "deteksi layout (mis. PP-DocLayoutV3) dan, bila backend VL disetel ke native, juga untuk inferensi VL. "
     "Pasang wheel untuk OS dan Python Anda (biasanya 3.10–3.12; "
     + PADDLE_INSTALL_URL

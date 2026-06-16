@@ -13,7 +13,9 @@ from systems.preprocessing.auto_image_rotator import maybe_auto_image_rotator_bg
 from systems.preprocessing.realesrgan_infer import maybe_apply_realesrgan_bgr
 
 MAX_SIDE: Final[int] = 2400
-MIN_SIDE_TARGET: Final[int] = 900
+# Upscale sisi pendek dinonaktifkan secara default (0) — hindari frame membesar & crop kartu salah
+# pada screenshot / dokumen digital penuh. Aktifkan: PREPROCESS_MIN_SIDE_TARGET=900
+MIN_SIDE_TARGET_DEFAULT: Final[int] = 0
 
 # Varians Laplacian: di bawah ambang = tambah sedikit kontras (tetap pelan untuk VL).
 # Penguatan berlebihan membuat watermark KTP + noise jadi "tekstur rumus" → halusinasi markdown.
@@ -83,8 +85,25 @@ def _empty_auto_rotate_meta(*, reason: str) -> dict[str, object]:
 
 
 def _card_warp_enabled() -> bool:
-    v = (os.environ.get("PREPROCESS_CARD_WARP") or "1").strip().lower()
+    # Default mati: warp/crop kartu sering memotong screenshot email/app (NPWP digital, dll.).
+    v = (os.environ.get("PREPROCESS_CARD_WARP") or "0").strip().lower()
     return v not in ("0", "false", "no", "off")
+
+
+def _min_side_target() -> int:
+    raw = (os.environ.get("PREPROCESS_MIN_SIDE_TARGET") or str(MIN_SIDE_TARGET_DEFAULT)).strip()
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return MIN_SIDE_TARGET_DEFAULT
+
+
+def _max_side_limit() -> int:
+    raw = (os.environ.get("PREPROCESS_MAX_SIDE") or str(MAX_SIDE)).strip()
+    try:
+        return max(256, int(raw))
+    except ValueError:
+        return MAX_SIDE
 
 
 def _skip_warp_cover_ratio() -> float:
@@ -290,6 +309,19 @@ def _auto_rotate_min_delta_no_warp() -> float:
         return 0.08
 
 
+def _downscale_gray_for_heuristic(gray: np.ndarray, *, target: int = 420) -> np.ndarray:
+    if gray.size == 0:
+        return gray
+    h, w = gray.shape[:2]
+    m = max(h, w)
+    if m <= target:
+        return gray
+    s = target / float(m)
+    return cv2.resize(
+        gray, (max(1, int(w * s)), max(1, int(h * s))), interpolation=cv2.INTER_AREA
+    )
+
+
 def _document_horizontal_text_score(gray: np.ndarray) -> float:
     """
     Skor heuristik: teks baris mendatar menghasilkan pola proyeksi baris yang lebih kuat.
@@ -297,12 +329,7 @@ def _document_horizontal_text_score(gray: np.ndarray) -> float:
     """
     if gray.size == 0:
         return 0.0
-    h, w = gray.shape[:2]
-    m = max(h, w)
-    target = 420
-    if m > target:
-        s = target / float(m)
-        gray = cv2.resize(gray, (max(1, int(w * s)), max(1, int(h * s))), interpolation=cv2.INTER_AREA)
+    gray = _downscale_gray_for_heuristic(gray)
     blur = cv2.GaussianBlur(gray, (3, 3), 0)
     _, th = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     inv = 255 - th
@@ -318,6 +345,179 @@ def _document_horizontal_text_score(gray: np.ndarray) -> float:
         return pv + 0.008 * edge
 
     return max(_score_one(th), _score_one(inv))
+
+
+def _edge_horizontal_text_score(gray: np.ndarray) -> float:
+    """
+    Skor proyeksi baris pada tepi horizontal — lebih tahan pola diagonal watermark KTP
+    yang sering menipu skor Otsu pada projection deskew.
+    """
+    if gray.size == 0:
+        return 0.0
+    gray = _downscale_gray_for_heuristic(gray, target=520)
+    h, w = gray.shape[:2]
+    blur = cv2.GaussianBlur(gray, (3, 3), 0)
+    edges = cv2.Canny(blur, 42, 118)
+    kw = max(9, min(41, w // 28))
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (kw, 1))
+    horiz = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel, iterations=1)
+    proj = np.sum(horiz > 0, axis=1).astype(np.float64)
+    if proj.size < 4:
+        return 0.0
+    return float(np.var(proj) / (np.mean(proj) + 3.0))
+
+
+def _blended_horizontal_text_score(gray: np.ndarray) -> float:
+    otsu = float(_document_horizontal_text_score(gray))
+    edge = float(_edge_horizontal_text_score(gray))
+    return 0.32 * otsu + 0.68 * edge
+
+
+def _estimate_text_line_skew_deg(gray: np.ndarray) -> float | None:
+    """
+    Estimasi kemiringan teks terhadap horizontal (derajat, positif = miring searah jarum jam).
+    """
+    if gray.size == 0:
+        return None
+    gray = _downscale_gray_for_heuristic(gray, target=640)
+    h, w = gray.shape[:2]
+    if h < 24 or w < 24:
+        return None
+
+    estimates: list[float] = []
+
+    blur = cv2.GaussianBlur(gray, (3, 3), 0)
+    bw = cv2.adaptiveThreshold(
+        blur, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 31, 10
+    )
+    ink = 255 - bw
+    kw = max(15, min(48, w // 18))
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (kw, 1))
+    lines_mask = cv2.morphologyEx(ink, cv2.MORPH_CLOSE, kernel, iterations=1)
+    edges = cv2.Canny(lines_mask, 40, 120)
+    min_len = max(24, w // 9)
+    hough = cv2.HoughLinesP(
+        edges,
+        1,
+        np.pi / 180.0,
+        threshold=max(28, min_len // 2),
+        minLineLength=min_len,
+        maxLineGap=max(8, w // 40),
+    )
+    if hough is not None:
+        angs: list[float] = []
+        for seg in hough[:120]:
+            x1, y1, x2, y2 = (int(v) for v in seg[0])
+            dx = float(x2 - x1)
+            dy = float(y2 - y1)
+            if abs(dx) < 6.0:
+                continue
+            ang = float(np.degrees(np.arctan2(dy, dx)))
+            if abs(ang) <= 32.0:
+                angs.append(ang)
+        if len(angs) >= 3:
+            estimates.append(float(np.median(np.asarray(angs, dtype=np.float64))))
+
+    blur2 = cv2.GaussianBlur(gray, (5, 5), 0)
+    kw2 = max(21, min(55, w // 12))
+    bh_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (kw2, 1))
+    blackhat = cv2.morphologyEx(blur2, cv2.MORPH_BLACKHAT, bh_kernel)
+    _, bh_bw = cv2.threshold(blackhat, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    bh_edges = cv2.Canny(bh_bw, 35, 110)
+    hough2 = cv2.HoughLinesP(
+        bh_edges,
+        1,
+        np.pi / 180.0,
+        threshold=40,
+        minLineLength=max(30, w // 8),
+        maxLineGap=18,
+    )
+    if hough2 is not None:
+        angs2: list[float] = []
+        for seg in hough2[:120]:
+            x1, y1, x2, y2 = (int(v) for v in seg[0])
+            dx = float(x2 - x1)
+            dy = float(y2 - y1)
+            if abs(dx) < 8.0:
+                continue
+            ang = float(np.degrees(np.arctan2(dy, dx)))
+            if abs(ang) <= 28.0:
+                angs2.append(ang)
+        if len(angs2) >= 4:
+            estimates.append(float(np.median(np.asarray(angs2, dtype=np.float64))))
+
+    edges3 = cv2.Canny(cv2.GaussianBlur(gray, (5, 5), 0), 50, 140)
+    hough3 = cv2.HoughLinesP(
+        edges3,
+        1,
+        np.pi / 180.0,
+        threshold=50,
+        minLineLength=max(40, w // 7),
+        maxLineGap=20,
+    )
+    if hough3 is not None:
+        angs3: list[float] = []
+        for seg in hough3[:100]:
+            x1, y1, x2, y2 = (int(v) for v in seg[0])
+            dx = float(x2 - x1)
+            dy = float(y2 - y1)
+            if abs(dx) < 8.0:
+                continue
+            ang = float(np.degrees(np.arctan2(dy, dx)))
+            if abs(ang) <= 25.0:
+                angs3.append(ang)
+        if len(angs3) >= 5:
+            estimates.append(float(np.median(np.asarray(angs3, dtype=np.float64))))
+
+    if not estimates:
+        return None
+    if len(estimates) == 1:
+        return estimates[0]
+    med = float(np.median(np.asarray(estimates, dtype=np.float64)))
+    cluster = [e for e in estimates if abs(e - med) <= 4.0]
+    return float(np.median(np.asarray(cluster, dtype=np.float64)))
+
+
+def _residual_text_skew_deg(gray: np.ndarray, rotate_deg: float) -> float | None:
+    if abs(rotate_deg) > 1e-6:
+        gray = _rotate_gray_expand(gray, rotate_deg)
+    est = _estimate_text_line_skew_deg(gray)
+    if est is None:
+        return None
+    return abs(est)
+
+
+def _pick_deskew_angle_deg(gray: np.ndarray, peak_deg: float) -> tuple[float, dict[str, object]]:
+    """
+    Pilih sudut koreksi: gabungkan puncak proyeksi + estimasi garis teks agar tidak salah arah.
+    """
+    meta: dict[str, object] = {"projection_deskew_peak_deg": round(float(peak_deg), 3)}
+    skew0 = _estimate_text_line_skew_deg(gray)
+    if skew0 is not None:
+        meta["projection_deskew_detected_skew"] = round(skew0, 3)
+
+    candidates: list[float] = [0.0]
+    if abs(peak_deg) >= 0.35:
+        candidates.extend([float(peak_deg), -float(peak_deg)])
+    if skew0 is not None and abs(skew0) >= 1.0:
+        candidates.append(float(-skew0))
+
+    uniq: list[float] = []
+    for a in candidates:
+        if not any(abs(a - u) < 0.25 for u in uniq):
+            uniq.append(a)
+
+    def rank(a: float) -> tuple[float, float, float]:
+        res = _residual_text_skew_deg(gray, a)
+        res_v = res if res is not None else 999.0
+        g2 = _rotate_gray_expand(gray, a) if abs(a) > 1e-6 else gray
+        blend = float(_blended_horizontal_text_score(g2))
+        return (res_v, -blend, abs(a))
+
+    best = min(uniq, key=rank)
+    meta["projection_deskew_candidates"] = [round(a, 3) for a in uniq]
+    meta["projection_deskew_chosen_deg"] = round(best, 3)
+    return best, meta
 
 
 def _disambiguate_180_after_warp_enabled() -> bool:
@@ -363,7 +563,7 @@ def _maybe_disambiguate_upside_down_bgr(bgr: np.ndarray) -> tuple[np.ndarray, di
 
 
 def _projection_deskew_enabled() -> bool:
-    v = (os.environ.get("PREPROCESS_PROJECTION_DESKEW") or "0").strip().lower()
+    v = (os.environ.get("PREPROCESS_PROJECTION_DESKEW") or "1").strip().lower()
     return v not in ("0", "false", "no", "off")
 
 
@@ -441,7 +641,7 @@ def _projection_peak_skew_deg(
     h0, w0 = gray.shape[:2]
     if h0 < 8 or w0 < 8:
         return 0.0, 0.0, 0.0
-    base_sc = float(_document_horizontal_text_score(gray))
+    base_sc = float(_blended_horizontal_text_score(gray))
     best_a = 0.0
     best_sc = base_sc
     tie_eps = 1e-4
@@ -458,7 +658,7 @@ def _projection_peak_skew_deg(
     while a <= float(max_deg) + 1e-6:
         aa = float(a)
         g2 = _rotate_gray_expand(gray, aa) if abs(aa) > 1e-9 else gray
-        consider(aa, float(_document_horizontal_text_score(g2)))
+        consider(aa, float(_blended_horizontal_text_score(g2)))
         a += coarse_step
 
     lo = max(-float(max_deg), best_a - coarse_step)
@@ -468,7 +668,7 @@ def _projection_peak_skew_deg(
     while x <= hi + 1e-6:
         aa = float(round(x, 4))
         g2 = _rotate_gray_expand(gray, aa)
-        consider(aa, float(_document_horizontal_text_score(g2)))
+        consider(aa, float(_blended_horizontal_text_score(g2)))
         x += rr
 
     return best_a, base_sc, best_sc
@@ -505,22 +705,47 @@ def _maybe_projection_deskew_bgr(bgr: np.ndarray) -> tuple[np.ndarray, dict[str,
         small_bgr = bgr
     gray = cv2.cvtColor(small_bgr, cv2.COLOR_BGR2GRAY)
     max_deg = _projection_deskew_max_deg()
-    best_a, base_sc, best_sc = _projection_peak_skew_deg(gray, max_deg=max_deg)
+    peak_a, base_sc, peak_sc = _projection_peak_skew_deg(gray, max_deg=max_deg)
     meta["projection_deskew_base_score"] = round(base_sc, 4)
-    meta["projection_deskew_best_score"] = round(best_sc, 4)
+    meta["projection_deskew_best_score"] = round(peak_sc, 4)
 
-    rel_imp = (best_sc - base_sc) / max(base_sc, 1e-6)
-    abs_imp = best_sc - base_sc
-    if abs(best_a) < 0.35:
+    chosen_a, pick_meta = _pick_deskew_angle_deg(gray, peak_a)
+    meta.update(pick_meta)
+
+    skew0 = meta.get("projection_deskew_detected_skew")
+    if isinstance(skew0, (int, float)) and abs(float(skew0)) < 2.0 and abs(chosen_a) < 0.35:
+        meta["projection_deskew_skipped_reason"] = "already_straight"
+        return bgr, meta
+
+    res0 = _residual_text_skew_deg(gray, 0.0)
+    res1 = _residual_text_skew_deg(gray, chosen_a)
+    if res0 is not None:
+        meta["projection_deskew_residual_skew_before"] = round(res0, 3)
+    if res1 is not None:
+        meta["projection_deskew_residual_skew_after"] = round(res1, 3)
+
+    if abs(chosen_a) < 0.35:
         meta["projection_deskew_skipped_reason"] = "angle_too_small"
         return bgr, meta
-    if abs_imp < 0.012 and rel_imp < 0.018:
+
+    rel_imp = (peak_sc - base_sc) / max(base_sc, 1e-6)
+    abs_imp = peak_sc - base_sc
+    improves_residual = (
+        res0 is not None and res1 is not None and res1 + 0.4 < res0
+    )
+    if not improves_residual and abs_imp < 0.012 and rel_imp < 0.018:
         meta["projection_deskew_skipped_reason"] = "low_gain"
         return bgr, meta
+    if res0 is not None and res1 is not None and res1 > res0 + 0.8:
+        meta["projection_deskew_skipped_reason"] = "worsens_residual_skew"
+        return bgr, meta
 
-    out = _rotate_bgr_expand(bgr, best_a)
+    if scale < 1.0:
+        chosen_a = float(chosen_a)
+
+    out = _rotate_bgr_expand(bgr, chosen_a)
     meta["projection_deskew_applied"] = True
-    meta["projection_deskew_deg"] = round(best_a, 3)
+    meta["projection_deskew_deg"] = round(chosen_a, 3)
     return out, meta
 
 
@@ -774,18 +999,35 @@ def _maybe_right_tilt_90_ccw_bgr(bgr: np.ndarray) -> tuple[np.ndarray, dict[str,
     return out, meta
 
 
-def _maybe_resize(bgr: np.ndarray) -> np.ndarray:
+def _maybe_resize(bgr: np.ndarray) -> tuple[np.ndarray, dict[str, object]]:
+    """Hanya downscale jika terlalu besar; upscale hanya bila PREPROCESS_MIN_SIDE_TARGET > 0."""
     h, w = bgr.shape[:2]
     max_side = max(h, w)
     min_side = min(h, w)
-    if max_side > MAX_SIDE:
-        scale = MAX_SIDE / max_side
-        return cv2.resize(bgr, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
-    if min_side < MIN_SIDE_TARGET:
-        scale = MIN_SIDE_TARGET / min_side
+    max_lim = _max_side_limit()
+    min_tgt = _min_side_target()
+    meta: dict[str, object] = {
+        "resize_applied": False,
+        "resize_scale": 1.0,
+        "resize_reason": None,
+        "resize_input_hw": {"width": w, "height": h},
+    }
+
+    if max_side > max_lim:
+        scale = max_lim / max_side
+        out = cv2.resize(bgr, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+        meta.update(resize_applied=True, resize_scale=round(scale, 4), resize_reason="downscale_max_side")
+        return out, meta
+
+    if min_tgt > 0 and min_side < min_tgt:
+        scale = min_tgt / min_side
         scale = min(scale, 3.0)
-        return cv2.resize(bgr, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
-    return bgr
+        if scale > 1.001:
+            out = cv2.resize(bgr, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+            meta.update(resize_applied=True, resize_scale=round(scale, 4), resize_reason="upscale_min_side")
+            return out, meta
+
+    return bgr, meta
 
 
 def _odd_kernel_from_fraction(min_side: int, frac: float, cap: int) -> int:
@@ -839,6 +1081,195 @@ def _aspect_ok(w: int, h: int) -> bool:
     return 1.15 <= r <= 2.35
 
 
+def _full_bleed_straighten_enabled() -> bool:
+    v = (os.environ.get("PREPROCESS_FULL_BLEED_STRAIGHTEN") or "1").strip().lower()
+    return v not in ("0", "false", "no", "off")
+
+
+def _accept_axis_crop_candidate(
+    bgr: np.ndarray,
+    axis_img: np.ndarray,
+    *,
+    skew_deg: float,
+    area_frac: float,
+) -> bool:
+    """Terima crop hanya bila tidak membalik orientasi dan benar-benar meluruskan dokumen."""
+    h0, w0 = bgr.shape[:2]
+    hh, ww = axis_img.shape[1], axis_img.shape[0]
+    in_land = w0 >= h0
+    out_land = ww >= hh
+    if in_land != out_land:
+        return False
+
+    g0 = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+    g1 = cv2.cvtColor(axis_img, cv2.COLOR_BGR2GRAY)
+    r0 = _residual_text_skew_deg(g0, 0.0)
+    r1 = _residual_text_skew_deg(g1, 0.0)
+    if r0 is not None and r1 is not None and r1 + 1.0 < r0:
+        return True
+
+    if abs(skew_deg) >= 1.4:
+        return True
+    if area_frac < 0.88 and abs(skew_deg) >= 0.8:
+        return True
+    if area_frac > 0.92 and abs(skew_deg) < 1.4:
+        return False
+    return abs(skew_deg) >= 1.0
+
+
+def _find_best_axis_crop_from_lab_morphology(
+    bgr: np.ndarray,
+    *,
+    min_area_frac: float = 0.10,
+) -> tuple[np.ndarray | None, dict[str, object]]:
+    """Cari kontur dokumen (LAB+morfologi) lalu axis-crop terbaik."""
+    meta: dict[str, object] = {}
+    h0, w0 = bgr.shape[:2]
+    max_det = 900
+    sc = min(1.0, max_det / max(h0, w0))
+    sw, sh = int(w0 * sc), int(h0 * sc)
+    if sw < 40 or sh < 40:
+        return None, meta
+
+    small = cv2.resize(bgr, (sw, sh), interpolation=cv2.INTER_AREA)
+    warp_style = _card_warp_style()
+    skew_soft = _axis_only_max_skew_deg()
+    lab = cv2.cvtColor(small, cv2.COLOR_BGR2LAB)
+    l_ch = cv2.GaussianBlur(lab[:, :, 0], (13, 13), 0)
+
+    best_img: np.ndarray | None = None
+    best_meta: dict[str, object] = {}
+    best_key = (-1.0, -1.0)
+
+    for invert in (False, True):
+        _, th = cv2.threshold(l_ch, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        if invert:
+            th = cv2.bitwise_not(th)
+        k_close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (25, 25))
+        th2 = cv2.morphologyEx(th, cv2.MORPH_CLOSE, k_close, iterations=2)
+        k_d = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+        th2 = cv2.dilate(th2, k_d, iterations=1)
+        cnts, _ = cv2.findContours(th2, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not cnts:
+            continue
+        for c in sorted(cnts, key=cv2.contourArea, reverse=True)[:8]:
+            area = cv2.contourArea(c)
+            area_frac = area / float(sh * sw)
+            if area_frac < min_area_frac:
+                break
+            rect = cv2.minAreaRect(c)
+            box_full = cv2.boxPoints(rect).astype(np.float32)
+            box_full[:, 0] /= sc
+            box_full[:, 1] /= sc
+            skew_deg = _quad_skew_deg_from_box_points(box_full)
+            if warp_style == "perspective":
+                continue
+            if warp_style == "auto" and skew_deg > skew_soft:
+                continue
+            axis_img = _axis_crop_from_box(bgr, box_full)
+            if axis_img is None or axis_img.size == 0:
+                continue
+            ww, hh = axis_img.shape[1], axis_img.shape[0]
+            if not _aspect_ok(ww, hh) or ww * hh < w0 * h0 * 0.04:
+                continue
+            if not _accept_axis_crop_candidate(
+                bgr, axis_img, skew_deg=skew_deg, area_frac=area_frac
+            ):
+                continue
+            key = (area_frac, skew_deg)
+            if key > best_key:
+                best_key = key
+                best_img = axis_img
+                best_meta = {
+                    "axis_crop_source": "lab_morphology",
+                    "axis_crop_area_frac": round(area_frac, 4),
+                    "axis_crop_skew_deg": round(skew_deg, 3),
+                    "axis_crop_invert": invert,
+                }
+        if best_img is not None:
+            break
+    return best_img, best_meta
+
+
+def _maybe_full_bleed_axis_straighten(bgr: np.ndarray) -> tuple[np.ndarray, dict[str, object]]:
+    """
+    Luruskan dokumen ID dari foto: kontur LAB (KTP di atas kain/latar) atau kontur
+    full-bleed bila bidang kartu memenuhi frame.
+    """
+    meta: dict[str, object] = {
+        "full_bleed_straighten_applied": False,
+        "full_bleed_straighten_skew_deg": 0.0,
+        "full_bleed_straighten_skipped_reason": "",
+    }
+    if not _full_bleed_straighten_enabled():
+        meta["full_bleed_straighten_skipped_reason"] = "disabled"
+        return bgr, meta
+
+    h0, w0 = bgr.shape[:2]
+    if h0 < 48 or w0 < 48:
+        meta["full_bleed_straighten_skipped_reason"] = "too_small"
+        return bgr, meta
+
+    axis_img, morph_meta = _find_best_axis_crop_from_lab_morphology(bgr, min_area_frac=0.08)
+    if axis_img is not None:
+        meta.update(morph_meta)
+        meta["full_bleed_straighten_applied"] = True
+        meta["full_bleed_straighten_mode"] = "lab_morphology"
+        meta["full_bleed_straighten_skew_deg"] = morph_meta.get("axis_crop_skew_deg", 0.0)
+        return axis_img, meta
+
+    max_det = 900
+    sc = min(1.0, max_det / max(h0, w0))
+    sw, sh = int(w0 * sc), int(h0 * sc)
+    if sw < 40 or sh < 40:
+        meta["full_bleed_straighten_skipped_reason"] = "too_small"
+        return bgr, meta
+
+    small = cv2.resize(bgr, (sw, sh), interpolation=cv2.INTER_AREA)
+    gray_quick = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+    _, th_cover = cv2.threshold(gray_quick, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    cnts_cover, _ = cv2.findContours(th_cover, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    cover_thr = _skip_warp_cover_ratio()
+    if not cnts_cover:
+        meta["full_bleed_straighten_skipped_reason"] = "no_contour"
+        return bgr, meta
+
+    c_cover = max(cnts_cover, key=cv2.contourArea)
+    if cv2.contourArea(c_cover) < cover_thr * sh * sw:
+        meta["full_bleed_straighten_skipped_reason"] = "no_document_contour"
+        return bgr, meta
+
+    rect = cv2.minAreaRect(c_cover)
+    box_full = cv2.boxPoints(rect).astype(np.float32)
+    box_full[:, 0] /= sc
+    box_full[:, 1] /= sc
+    skew_deg = _quad_skew_deg_from_box_points(box_full)
+    meta["full_bleed_straighten_detected_skew"] = round(skew_deg, 3)
+    if skew_deg < 1.4:
+        meta["full_bleed_straighten_skipped_reason"] = "already_axis_aligned"
+        return bgr, meta
+
+    axis_img = _axis_crop_from_box(bgr, box_full)
+    if axis_img is None or axis_img.size == 0:
+        meta["full_bleed_straighten_skipped_reason"] = "axis_crop_failed"
+        return bgr, meta
+    ww, hh = axis_img.shape[1], axis_img.shape[0]
+    if not _aspect_ok(ww, hh) or ww * hh < w0 * h0 * 0.04:
+        meta["full_bleed_straighten_skipped_reason"] = "axis_crop_rejected"
+        return bgr, meta
+    area_frac = float(cv2.contourArea(c_cover)) / float(sh * sw)
+    if not _accept_axis_crop_candidate(
+        bgr, axis_img, skew_deg=skew_deg, area_frac=area_frac
+    ):
+        meta["full_bleed_straighten_skipped_reason"] = "axis_crop_low_benefit"
+        return bgr, meta
+
+    meta["full_bleed_straighten_applied"] = True
+    meta["full_bleed_straighten_mode"] = "full_bleed_outer"
+    meta["full_bleed_straighten_skew_deg"] = round(skew_deg, 3)
+    return axis_img, meta
+
+
 def _try_extract_card_warp(bgr: np.ndarray) -> tuple[np.ndarray, bool, dict]:
     """
     Coba isolasi bidang kartu (KTP/dokumen persegi panjang) dari latar foto.
@@ -868,6 +1299,19 @@ def _try_extract_card_warp(bgr: np.ndarray) -> tuple[np.ndarray, bool, dict]:
     if cnts_cover:
         c_cover = max(cnts_cover, key=cv2.contourArea)
         if cv2.contourArea(c_cover) >= cover_thr * sh * sw:
+            rect = cv2.minAreaRect(c_cover)
+            box_full = cv2.boxPoints(rect).astype(np.float32)
+            box_full[:, 0] /= sc
+            box_full[:, 1] /= sc
+            skew_deg = _quad_skew_deg_from_box_points(box_full)
+            if skew_deg >= 1.4:
+                axis_img = _axis_crop_from_box(bgr, box_full)
+                if axis_img is not None and axis_img.size > 0:
+                    ww, hh = axis_img.shape[1], axis_img.shape[0]
+                    if _aspect_ok(ww, hh) and ww * hh >= w0 * h0 * 0.04:
+                        info["card_warp_mode"] = "full_bleed_axis"
+                        info["card_warp_detected_skew_deg"] = round(skew_deg, 3)
+                        return axis_img, True, info
             info["card_warp_mode"] = "skipped_full_bleed"
             return bgr, False, info
 
@@ -996,12 +1440,12 @@ def _enhance_grayscale_for_ocr(
         smooth = cv2.bilateralFilter(flat, d=5, sigmaColor=32, sigmaSpace=32)
 
     if heavy:
-        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        clahe = cv2.createCLAHE(clipLimit=1.75, tileGridSize=(8, 8))
     else:
-        clahe = cv2.createCLAHE(clipLimit=1.45, tileGridSize=(8, 8))
+        clahe = cv2.createCLAHE(clipLimit=1.25, tileGridSize=(8, 8))
     eq = clahe.apply(smooth)
-    # Campur kembali dengan smooth: kurangi artefak halftone / rumus palsu pada VL.
-    eq = cv2.addWeighted(smooth, 0.32, eq, 0.68, 0)
+    # Campur kembali dengan smooth: kurangi artefak halftone / diagonal watermark KTP.
+    eq = cv2.addWeighted(smooth, 0.42, eq, 0.58, 0)
 
     if heavy:
         sharp = _unsharp(eq, sigma=1.15, amount=0.22)
@@ -1009,6 +1453,93 @@ def _enhance_grayscale_for_ocr(
         sharp = _unsharp(eq, sigma=0.85, amount=0.16)
 
     return np.clip(sharp, 0, 255).astype(np.uint8)
+
+
+def _hough_median_skew_deg(gray: np.ndarray) -> float | None:
+    """Estimasi kemiringan dominan dari garis hampir-horizontal (post-enhance)."""
+    if gray.size == 0:
+        return None
+    gray = _downscale_gray_for_heuristic(gray, target=720)
+    h, w = gray.shape[:2]
+    if h < 24 or w < 24:
+        return None
+    edges = cv2.Canny(cv2.GaussianBlur(gray, (5, 5), 0), 50, 140)
+    min_len = max(36, w // 8)
+    lines = cv2.HoughLinesP(
+        edges,
+        1,
+        np.pi / 180.0,
+        threshold=55,
+        minLineLength=min_len,
+        maxLineGap=max(12, w // 35),
+    )
+    if lines is None:
+        return None
+    angs: list[float] = []
+    for seg in lines[:100]:
+        x1, y1, x2, y2 = (int(v) for v in seg[0])
+        dx = float(x2 - x1)
+        dy = float(y2 - y1)
+        if abs(dx) < 8.0:
+            continue
+        ang = float(np.degrees(np.arctan2(dy, dx)))
+        if abs(ang) <= 22.0:
+            angs.append(ang)
+    if len(angs) < 5:
+        return None
+    return float(np.median(np.asarray(angs, dtype=np.float64)))
+
+
+def _maybe_post_enhance_micro_deskew_gray(gray: np.ndarray) -> tuple[np.ndarray, dict[str, object]]:
+    """Rapikan kemiringan artefak setelah enhance (garis diagonal watermark KTP)."""
+    meta: dict[str, object] = {
+        "post_enhance_micro_deskew_applied": False,
+        "post_enhance_micro_deskew_deg": 0.0,
+    }
+    skew = _hough_median_skew_deg(gray)
+    if skew is None or abs(skew) < 2.2:
+        meta["post_enhance_micro_deskew_skipped_reason"] = "angle_too_small"
+        return gray, meta
+    corr = float(-skew)
+    if abs(corr) > 8.0:
+        meta["post_enhance_micro_deskew_skipped_reason"] = "angle_too_large"
+        return gray, meta
+    corrected = _rotate_gray_expand(gray, corr)
+    skew1 = _hough_median_skew_deg(corrected)
+    if skew1 is not None and abs(skew1) + 0.8 >= abs(skew):
+        meta["post_enhance_micro_deskew_skipped_reason"] = "low_improvement"
+        return gray, meta
+    meta["post_enhance_micro_deskew_applied"] = True
+    meta["post_enhance_micro_deskew_deg"] = round(corr, 3)
+    meta["post_enhance_micro_deskew_detected_skew"] = round(skew, 3)
+    return corrected, meta
+
+
+def _maybe_pre_enhance_micro_deskew_bgr(bgr: np.ndarray) -> tuple[np.ndarray, dict[str, object]]:
+    """Koreksi kemiringan kecil terakhir sebelum enhance grayscale (hindari artefak diagonal)."""
+    meta: dict[str, object] = {
+        "pre_enhance_micro_deskew_applied": False,
+        "pre_enhance_micro_deskew_deg": 0.0,
+    }
+    gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+    skew = _estimate_text_line_skew_deg(gray)
+    if skew is None or abs(skew) < 1.8:
+        meta["pre_enhance_micro_deskew_skipped_reason"] = "angle_too_small"
+        return bgr, meta
+    corr = float(-skew)
+    if abs(corr) > 20.0:
+        meta["pre_enhance_micro_deskew_skipped_reason"] = "angle_too_large"
+        return bgr, meta
+    res0 = _residual_text_skew_deg(gray, 0.0)
+    res1 = _residual_text_skew_deg(gray, corr)
+    if res0 is not None and res1 is not None and res1 > res0 + 0.6:
+        meta["pre_enhance_micro_deskew_skipped_reason"] = "worsens_residual_skew"
+        return bgr, meta
+    out = _rotate_bgr_expand(bgr, corr)
+    meta["pre_enhance_micro_deskew_applied"] = True
+    meta["pre_enhance_micro_deskew_deg"] = round(corr, 3)
+    meta["pre_enhance_micro_deskew_detected_skew"] = round(float(skew), 3)
+    return out, meta
 
 
 def _maybe_detail_enhance_bgr(bgr: np.ndarray, *, blur_score: float) -> np.ndarray:
@@ -1026,7 +1557,7 @@ def _maybe_detail_enhance_bgr(bgr: np.ndarray, *, blur_score: float) -> np.ndarr
 
 
 def _preprocess_work_bgr(bgr: np.ndarray) -> tuple[np.ndarray, bool, dict]:
-    work = _maybe_resize(bgr)
+    work, resize_meta = _maybe_resize(bgr)
     work, air_meta = maybe_auto_image_rotator_bgr(work)
     work, supplement_meta = _maybe_supplement_quarter_pre_warp_if_off(work)
     mode = _auto_rotate_quarters_mode()
@@ -1046,14 +1577,19 @@ def _preprocess_work_bgr(bgr: np.ndarray) -> tuple[np.ndarray, bool, dict]:
         work, rtl_meta = _maybe_right_tilt_90_ccw_bgr(work)
 
     if mode == "off":
+        work, fb_meta = _maybe_full_bleed_axis_straighten(work)
         cropped, card_warped, warp_info = _try_extract_card_warp(work)
+        if bool(fb_meta.get("full_bleed_straighten_applied")):
+            card_warped = True
         doc_q_meta: dict[str, object] = {}
         wm = str(warp_info.get("card_warp_mode") or "")
         # Hanya bila tidak ada crop perspektif: scan penuh / gagal / warp mati — putar 4-arah.
         # Jangan putar lagi setelah axis_box/perspective (risiko putar ganda / rusak yang sudah tegak).
         # Hanya bila tidak ada crop perspektif — pakai ambang sama seperti putar kuartal utama
         # (margin/delta ketat, bukan 1.05/0.01 yang mudah memutar dokumen yang sudah normal).
-        if wm in ("skipped_full_bleed", "failed", "disabled"):
+        if wm in ("skipped_full_bleed", "failed", "disabled") and not bool(
+            fb_meta.get("full_bleed_straighten_applied")
+        ):
             cropped, doc_q_meta = _maybe_auto_rotate_quarters(
                 cropped,
                 card_warped=False,
@@ -1065,11 +1601,13 @@ def _preprocess_work_bgr(bgr: np.ndarray) -> tuple[np.ndarray, bool, dict]:
             **air_meta,
             **supplement_meta,
             **rtl_meta,
+            **fb_meta,
             **warp_info,
             **doc_q_meta,
             **_empty_auto_rotate_meta(reason="PREPROCESS_AUTO_ROTATE_QUARTERS=off"),
         }
     else:
+        work, fb_meta = _maybe_full_bleed_axis_straighten(work)
         pre_margin, pre_delta = _pre_rotate_margin_delta(mode)
         work, pre_meta = _maybe_auto_rotate_quarters(
             work,
@@ -1079,6 +1617,8 @@ def _preprocess_work_bgr(bgr: np.ndarray) -> tuple[np.ndarray, bool, dict]:
             meta_prefix="auto_rotate_pre",
         )
         cropped, card_warped, warp_info = _try_extract_card_warp(work)
+        if bool(fb_meta.get("full_bleed_straighten_applied")):
+            card_warped = True
         cropped, post_meta = _maybe_auto_rotate_quarters(
             cropped,
             card_warped=card_warped,
@@ -1092,6 +1632,7 @@ def _preprocess_work_bgr(bgr: np.ndarray) -> tuple[np.ndarray, bool, dict]:
             **air_meta,
             **supplement_meta,
             **rtl_meta,
+            **fb_meta,
             **warp_info,
             **pre_meta,
             **post_meta,
@@ -1110,18 +1651,24 @@ def _preprocess_work_bgr(bgr: np.ndarray) -> tuple[np.ndarray, bool, dict]:
     cropped, proj_meta = _maybe_projection_deskew_bgr(cropped)
     merged = {**merged, **proj_meta}
 
+    cropped, micro_meta = _maybe_pre_enhance_micro_deskew_bgr(cropped)
+    merged = {**merged, **micro_meta}
+
     gray_probe = cv2.cvtColor(cropped, cv2.COLOR_BGR2GRAY)
     blur_score = _laplacian_blur_score(gray_probe)
     cropped_sr, sr_meta = maybe_apply_realesrgan_bgr(cropped)
     cropped_enh = _maybe_detail_enhance_bgr(cropped_sr, blur_score=blur_score)
     gray = cv2.cvtColor(cropped_enh, cv2.COLOR_BGR2GRAY)
     out = _enhance_grayscale_for_ocr(gray, blur_score_hint=blur_score)
+    out, post_meta = _maybe_post_enhance_micro_deskew_gray(out)
     meta = {
+        **resize_meta,
         "blur_score_laplacian": round(blur_score, 2),
         "heavy_blur_enhance": blur_score < _BLUR_SCORE_HEAVY,
         "detail_enhance_bgr": blur_score < _DETAIL_ENHANCE_MAX_BLUR_SCORE,
         **merged,
         **sr_meta,
+        **post_meta,
     }
     return out, card_warped, meta
 

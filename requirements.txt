@@ -17,8 +17,8 @@ python-multipart>=0.0.9
 opencv-python-headless>=4.10.0
 numpy>=2.0.0,<2.4
 Pillow>=10.0.0
-paddleocr[doc-parser]>=3.5.0
-# PaddlePaddle: wajib untuk PaddleOCR-VL-1.5 (layout + VL native). Baris di bawah
+paddleocr[doc-parser]>=3.6.0
+# PaddlePaddle: wajib untuk PaddleOCR-VL-1.6 (layout + VL native). Baris di bawah
 # diabaikan pip pada Python >=3.14 (belum ada wheel). Untuk OCR jalan, pakai Python 3.11–3.12 lalu pip install -r requirements.txt
 paddlepaddle>=3.0.0; python_version < "3.14"
 #
@@ -35,7 +35,13 @@ paddlepaddle>=3.0.0; python_version < "3.14"
 #   PREPROCESS_SUPPLEMENT_TIE_MIN_LEAD=78  (opsional) Seri s1≈s3 pada suplemen: putar hanya jika lead atas s0 cukup besar.
 #   PREPROCESS_RIGHT_TILT_90_CCW=1  (opsional) Putar 90° CCW hanya jika skor k=1 jelas mengalahkan tegak (default: mati).
 #   PREPROCESS_RIGHT_TILT_90_CCW_MIN_RATIO=1.18  (opsional) s1 harus ≥ s0 × ini.
-#   PREPROCESS_RIGHT_TILT_90_CCW_MIN_LEAD=0.10   (opsional) s1 − s0 minimal.
+#   PREPROCESS_PROJECTION_DESKEW=1       Luruskan kemiringan kecil (default aktif).
+#   PREPROCESS_FULL_BLEED_STRAIGHTEN=1   Axis-crop dokumen dari kontur LAB / full-bleed.
+#   PREPROCESS_CARD_WARP=1             Isolasi kartu dari latar foto (KTP di kain/meja).
 #
-# OCR cepat (PP-OCRv5 det+rec): POST /systems/ocr/api/v1/ocr-fast — env: OCR_FAST_LANG,
-# OCR_FAST_DET_MODEL, OCR_FAST_REC_MODEL, OCR_FAST_DET_LIMIT_SIDE_LEN (lihat systems/ocr/fast_runner.py).
+# OCR cepat (PP-OCRv6): POST /systems/ocr/api/v1/ocr-fast — env: OCR_FAST_LANG, OCR_FAST_TIER,
+# OCR_FAST_DOC_ORIENTATION, OCR_FAST_TEXTLINE_ORIENTATION, OCR_FAST_DOC_UNWARPING,
+# OCR_FAST_DET_MODEL, OCR_FAST_REC_MODEL, OCR_FAST_DET_LIMIT_SIDE_LEN.
+#
+# Mistral OCR (cloud, berbayar): pip install -r requirements-mistral.txt
+# POST /systems/ocr/api/v1/ocr-mistral — env: MISTRAL_API_KEY (lihat systems/ocr/mistral_runner.py).

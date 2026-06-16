@@ -4,11 +4,20 @@ from __future__ import annotations
 
 from typing import Final
 
-# id kanonik → label yang diharapkan muncul di OCR (dicek fuzzy satu per satu)
+# id kanonik → label yang diharapkan muncul di OCR (dicek fuzzy satu per satu).
+# KTP: campur label pendek (nik, nama, agama) yang sering kebaca meski field panjang rusak.
 CANONICAL_KEYWORDS: Final[dict[str, list[str]]] = {
-    "ktp": ["nik", "kewarganegaraan", "agama"],
-    "npwp": ["npwp", "pajak"],
-    'kk': ['kartu keluarga', 'dinas kependudukan'],
+    "ktp": [
+        "nik",
+        "nama",
+        "provinsi",
+        "kabupaten",
+        "agama",
+        "kewarganegaraan",
+        "status perkawinan",
+    ],
+    "npwp": ["npwp", "pajak", "wajib pajak"],
+    "kk": ["kartu keluarga", "kepala keluarga", "nik"],
 }
 
 PROFILE_LABELS: Final[dict[str, str]] = {

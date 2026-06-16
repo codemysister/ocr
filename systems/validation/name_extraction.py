@@ -11,8 +11,17 @@ def _normalize(s: str) -> str:
 
 
 def _split_segments(ocr_text: str) -> list[str]:
-    parts = re.split(r"\s*[-|•]+\s*|\n+", ocr_text)
+    """Pisah sel tabel / baris; jangan pecah tanda hubung di nama (mis. el-sharawy)."""
+    text = re.sub(r"\|?\s*---+(\s*\|?\s*---+)*\s*\|?", " | ", ocr_text or "")
+    parts = re.split(r"\s*\|\s*|\n+|•+", text)
     return [p.strip() for p in parts if p.strip()]
+
+
+# Baris anggota KK (markdown Mistral): | no | nama | nik 16 digit | ...
+_KK_MEMBER_ROW_RE = re.compile(
+    r"\|\s*\d+\s*\|\s*([^|]+?)\s*\|\s*(\d{16})\s*\|",
+    re.IGNORECASE,
+)
 
 
 _LABEL_ONE_WORD = frozenset(
@@ -81,6 +90,24 @@ def _looks_like_person_name(seg: str) -> bool:
     return len(s) >= 8
 
 
+def extract_kk_member_names(ocr_text: str) -> list[str]:
+    """Nama dari tabel anggota Kartu Keluarga (kolom nama lengkap + NIK 16 digit)."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for m in _KK_MEMBER_ROW_RE.finditer(ocr_text or ""):
+        raw = m.group(1).strip()
+        if not raw or raw in {"-", "—"}:
+            continue
+        if not _looks_like_person_name(raw):
+            continue
+        key = _normalize(raw)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(raw)
+    return out
+
+
 def person_like_segments(ocr_text: str) -> list[str]:
     """Segmen OCR yang lolos heuristik nama orang; urutan asli, tanpa duplikat (normalisasi)."""
     seen: set[str] = set()
@@ -103,7 +130,12 @@ def extract_holder_name_candidate(ocr_text: str, document_profile_id: str) -> tu
     Mengembalikan (teks nama perkiraan atau None, metode / alasan).
     `document_profile_id` kanonik: ktp, npwp, dll.
     """
-    _ = document_profile_id
+    profile = (document_profile_id or "").strip().casefold()
+    if profile == "kk":
+        kk_names = extract_kk_member_names(ocr_text)
+        if kk_names:
+            return kk_names[0], "kk_table_first_member"
+
     segments = _split_segments(ocr_text)
 
     for i, seg in enumerate(segments):

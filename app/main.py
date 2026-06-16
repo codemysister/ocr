@@ -63,6 +63,7 @@ def health() -> dict:
         "api": "/api/v1",
         "docs": "/docs",
         "cors_origins": _cors_origins_list,
+        "pipeline_ocr": "default mistral; query ocr_mode=mistral|fast|vl, pp_ocr_tier untuk fast",
         "systems": {
             "preprocessing": "/systems/preprocessing/health",
             "ocr": "/systems/ocr/health",

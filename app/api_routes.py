@@ -10,7 +10,9 @@ from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 
-from systems.ocr.fast_runner import run_paddleocr_fast
+from systems.ocr.fast_runner import list_pp_ocr_tiers, run_paddleocr_fast
+from systems.ocr.mistral_annotation import parse_document_annotation
+from systems.ocr.mistral_runner import run_mistral_ocr
 from systems.ocr.runtime_hint import ocr_inference_unavailable_detail
 from systems.ocr.vl_runner import run_paddleocr_vl
 from systems.observability.last_tuning_log import (
@@ -24,6 +26,9 @@ from systems.validation.document_profiles import list_supported_document_types, 
 from systems.validation.fuzzy_compare import validate_document_ocr
 
 router = APIRouter(prefix="/api/v1", tags=["api"])
+
+OcrMode = Literal["mistral", "fast", "vl"]
+PpOcrTier = Literal["balanced", "medium", "small", "tiny"]
 
 
 def _cors_note() -> str:
@@ -58,28 +63,38 @@ def api_info() -> dict:
                     "expected_name": "string (optional)",
                 },
                 "query": {
-                    "ocr_mode": "fast | vl (default fast)",
+                    "ocr_mode": "mistral (default) | fast | vl",
+                    "pp_ocr_tier": "balanced | medium | small | tiny — hanya ocr_mode=fast",
                     "include_preprocessed_image": "true | false (default false)",
-                    "full_json": "true | false — hanya untuk ocr_mode=vl",
+                    "full_json": "true | false — hanya ocr_mode=vl",
                 },
-                "description": "Preprocess → OCR → validasi dokumen dalam satu request.",
+                "description": "Preprocess → OCR (pilihan engine) → validasi dokumen dalam satu request.",
+                "ocr_modes": {
+                    "mistral": "Cloud Mistral OCR + document_annotation (disarankan)",
+                    "fast": "Lokal PP-OCRv6 (pp_ocr_tier)",
+                    "vl": "Lokal PaddleOCR-VL-1.6 (layout + markdown)",
+                },
+                "pp_ocr_tiers": list_pp_ocr_tiers(),
                 "response_fields": {
                     "verdict.is_own_document": "true | false | null — milik user saat ini?",
                     "verdict.document_type_current_label": "jenis dokumen terdeteksi dari OCR",
                     "verdict.summary": "ringkasan bahasa Indonesia",
                 },
             },
-            "ocr_vl": {
+            "ocr_mistral": {
                 "method": "POST",
-                "path": "/systems/ocr/api/v1/ocr",
+                "path": "/systems/ocr/api/v1/ocr-mistral",
                 "content_type": "multipart/form-data",
                 "fields": {"file": "binary (required)"},
             },
             "ocr_fast": {
                 "method": "POST",
                 "path": "/systems/ocr/api/v1/ocr-fast",
-                "content_type": "multipart/form-data",
-                "fields": {"file": "binary (required)"},
+                "query": {"pp_ocr_tier": "balanced | medium | small | tiny"},
+            },
+            "ocr_vl": {
+                "method": "POST",
+                "path": "/systems/ocr/api/v1/ocr",
             },
             "validate_document": {
                 "method": "POST",
@@ -89,6 +104,7 @@ def api_info() -> dict:
                     "ocr_text": "string (required)",
                     "document_type": "string (required)",
                     "expected_name": "string (optional)",
+                    "mistral_annotation": "object (opsional, dari Mistral OCR)",
                 },
             },
             "compare_names": {
@@ -102,15 +118,33 @@ def api_info() -> dict:
     }
 
 
-def _run_ocr(png_bytes: bytes, ocr_mode: Literal["fast", "vl"], full_json: bool) -> dict:
+def _run_ocr(
+    png_bytes: bytes,
+    ocr_mode: OcrMode,
+    *,
+    full_json: bool = False,
+    pp_ocr_tier: str | None = None,
+) -> dict:
     try:
+        if ocr_mode == "mistral":
+            return run_mistral_ocr(png_bytes)
         if ocr_mode == "vl":
             return run_paddleocr_vl(png_bytes, include_full_json=full_json)
-        return run_paddleocr_fast(png_bytes)
+        return run_paddleocr_fast(png_bytes, pp_ocr_tier=pp_ocr_tier)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except RuntimeError as e:
         msg = str(e).lower()
+        if "mistral_api_key" in msg or "pasang sdk mistral" in msg:
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "code": "MISTRAL_OCR_UNAVAILABLE",
+                    "message": str(e),
+                    "install": "pip install -r requirements-mistral.txt",
+                    "env": ["MISTRAL_API_KEY", "MISTRAL_OCR_MODEL"],
+                },
+            ) from e
         if any(x in msg for x in ("paddlepaddle", "dependency", "engine", "unavailable")):
             det = ocr_inference_unavailable_detail()
             raise HTTPException(status_code=503, detail=det) from e
@@ -134,7 +168,14 @@ async def api_pipeline(
     file: UploadFile = File(..., description="Gambar dokumen"),
     document_type: str = Form(..., description="Jenis dokumen, mis. KTP / NPWP"),
     expected_name: str = Form("", description="Nama referensi (opsional)"),
-    ocr_mode: Literal["fast", "vl"] = Query("fast", description="Mode OCR: fast (ringan) atau vl"),
+    ocr_mode: OcrMode = Query(
+        "mistral",
+        description="Engine OCR: mistral (default, cloud + annotation), fast (PP-OCRv6 lokal), vl",
+    ),
+    pp_ocr_tier: PpOcrTier = Query(
+        "medium",
+        description="Tier PP-OCRv6 jika ocr_mode=fast (default medium = akurasi maksimal)",
+    ),
     include_preprocessed_image: bool = Query(
         False,
         description="Sertakan image_base64 hasil preprocess di respons",
@@ -142,7 +183,7 @@ async def api_pipeline(
     full_json: bool = Query(False, description="Untuk ocr_mode=vl: lampirkan result_json lengkap"),
 ) -> JSONResponse:
     """
-    Pipeline lengkap: preprocess gambar → OCR → validasi dokumen.
+    Pipeline lengkap: preprocess gambar → OCR (pilihan model) → validasi dokumen.
 
     Cocok dipanggil dari React (Firebase Hosting) dengan satu fetch multipart.
     """
@@ -186,7 +227,8 @@ async def api_pipeline(
         log_safe_failure(subsystem="pipeline", method="POST", path=path, http_status=400, detail=str(e))
         raise HTTPException(status_code=400, detail=str(e)) from e
 
-    ocr_payload = _run_ocr(png_bytes, ocr_mode, full_json)
+    tier_arg = pp_ocr_tier if ocr_mode == "fast" else None
+    ocr_payload = _run_ocr(png_bytes, ocr_mode, full_json=full_json, pp_ocr_tier=tier_arg)
     ocr_text = _ocr_text_from_payload(ocr_payload)
     if not ocr_text:
         log_safe_failure(
@@ -199,16 +241,25 @@ async def api_pipeline(
         raise HTTPException(status_code=400, detail="OCR tidak menghasilkan teks.")
 
     canonical_id, keywords = resolved
+    mistral_ann: dict | None = None
+    if ocr_mode == "mistral":
+        mistral_ann = ocr_payload.get("document_annotation_parsed")
+        if mistral_ann is None:
+            mistral_ann = parse_document_annotation(ocr_payload.get("document_annotation"))
+
     validation_detail = validate_document_ocr(
         ocr_text,
         document_type=doc_type,
         document_profile_id=canonical_id,
         keywords=keywords,
         expected_name=name_ref,
+        mistral_annotation=mistral_ann,
     )
 
     payload: dict = {
         "success": True,
+        "ocr_mode": ocr_mode,
+        "pp_ocr_tier": tier_arg if ocr_mode == "fast" else None,
         "preprocess": pre_meta,
         "ocr": ocr_payload,
         "validation": {
@@ -236,6 +287,7 @@ async def api_pipeline(
             "input_bytes": len(raw),
             "query": {
                 "ocr_mode": ocr_mode,
+                "pp_ocr_tier": tier_arg,
                 "include_preprocessed_image": include_preprocessed_image,
                 "full_json": full_json,
             },

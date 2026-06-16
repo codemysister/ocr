@@ -16,8 +16,9 @@
 #   CORS_ORIGINS=*         Origin CORS (dev). Production: https://app.web.app,https://app.firebaseapp.com
 #   PYTHON=python3.12      Untuk membuat .venv jika belum ada.
 #   INSTALL_REALESRGAN=1  Juga: pip install -r requirements-realesrgan.txt
+#   INSTALL_MISTRAL=1     Juga: pip install -r requirements-mistral.txt (butuh MISTRAL_API_KEY)
 #   OCR_VL_MAX_LONG_SIDE=2048  (opsional) Perkecil gambar sebelum inferensi VL — kurangi RAM/swap.
-#   OCR_FAST_LANG=latin         (opsional) Mode cepat: latin/en; default model = mobile_det + server_rec.
+#   OCR_FAST_LANG=latin         (opsional) Mode cepat: latin/en; default tier = medium (akurasi maks).
 #   PREPROCESS_AUTO_IMAGE_ROTATOR=1         Aktifkan putar 90° dari deteksi wajah (default: mati)
 #   PREPROCESS_AUTO_IMAGE_ROTATOR_BACKEND=dlib  Perlu requirements-auto-image-rotator.txt
 #   PREPROCESS_AUTO_ROTATE_ALLOW_180=1     Izinkan auto-rotate pilih orientasi terbalik 180° (default: mati)
@@ -30,7 +31,9 @@
 #   PREPROCESS_RIGHT_TILT_90_CCW_MIN_RATIO=1.18
 #   PREPROCESS_RIGHT_TILT_90_CCW_MIN_LEAD=0.10
 #   PREPROCESS_AUTO_AXIS_ONLY_MAX_SKEW_DEG=24  (opsional) Di mode auto: skew ≤ ini → rotasi+poros, tanpa perspective.
-#   PREPROCESS_CARD_WARP=0              (opsional) Matikan perspective warp kartu.
+#   PREPROCESS_CARD_WARP=1              (opsional) Aktifkan crop/warp kartu fisik (default: mati).
+#   PREPROCESS_MIN_SIDE_TARGET=900      (opsional) Upscale sisi pendek < 900px (default: 0 = tanpa upscale).
+#   PREPROCESS_MAX_SIDE=2400            (opsional) Downscale jika sisi terpanjang melebihi ini.
 #   PREPROCESS_SKIP_WARP_WHEN_COVER_RATIO=0.88  (opsional) Skip warp jika kontur ≥ rasio frame (scan penuh).
 #   PREPROCESS_CARD_WARP_STYLE=auto     auto | axis_box | perspective — default auto (crop lurus bila tegak).
 
@@ -120,6 +123,10 @@ if [[ "$NO_INSTALL" -eq 0 ]]; then
     echo "      pip install -r requirements-realesrgan.txt …"
     .venv/bin/pip install -r requirements-realesrgan.txt
   fi
+  if [[ "${INSTALL_MISTRAL:-0}" == "1" ]]; then
+    echo "      pip install -r requirements-mistral.txt …"
+    .venv/bin/pip install -r requirements-mistral.txt
+  fi
 else
   echo "[2/4] Melewati pip (--no-install)."
 fi
@@ -130,6 +137,15 @@ if [[ "$INSTALL_ONLY" -eq 1 ]]; then
 fi
 
 kill_port
+
+# Default ramah KTP/dokumen ID (bisa di-override lewat env sebelum ./run.sh)
+export OCR_FAST_LANG="${OCR_FAST_LANG:-latin}"
+export OCR_FAST_DOC_UNWARPING="${OCR_FAST_DOC_UNWARPING:-1}"
+export PREPROCESS_AUTO_ROTATE_QUARTERS="${PREPROCESS_AUTO_ROTATE_QUARTERS:-auto}"
+export PREPROCESS_PROJECTION_DESKEW="${PREPROCESS_PROJECTION_DESKEW:-1}"
+export PREPROCESS_FULL_BLEED_STRAIGHTEN="${PREPROCESS_FULL_BLEED_STRAIGHTEN:-1}"
+export PREPROCESS_CARD_WARP="${PREPROCESS_CARD_WARP:-1}"
+export PREPROCESS_MIN_SIDE_TARGET="${PREPROCESS_MIN_SIDE_TARGET:-900}"
 
 echo "[4/4] uvicorn app.main:app --reload --host ${HOST} --port ${PORT}"
 echo "      Buka: http://127.0.0.1:${PORT}/"
