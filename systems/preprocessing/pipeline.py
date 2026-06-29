@@ -11,6 +11,7 @@ import numpy as np
 
 from systems.preprocessing.auto_image_rotator import maybe_auto_image_rotator_bgr
 from systems.preprocessing.realesrgan_infer import maybe_apply_realesrgan_bgr
+from systems.validation.document_profiles import skip_physical_preprocess_isolation
 
 MAX_SIDE: Final[int] = 2400
 # Upscale sisi pendek dinonaktifkan secara default (0) — hindari frame membesar & crop kartu salah
@@ -1556,11 +1557,29 @@ def _maybe_detail_enhance_bgr(bgr: np.ndarray, *, blur_score: float) -> np.ndarr
         return bgr
 
 
-def _preprocess_work_bgr(bgr: np.ndarray) -> tuple[np.ndarray, bool, dict]:
+def _skip_physical_isolation_meta(profile: str) -> tuple[dict[str, object], dict[str, object]]:
+    """Metadata bila crop kartu / full-bleed dilewati untuk profil tertentu."""
+    reason = f"profile_{profile or 'unknown'}"
+    return (
+        {
+            "full_bleed_straighten_applied": False,
+            "full_bleed_straighten_skipped_reason": reason,
+        },
+        {"card_warp_mode": "skipped_profile", "card_warp_profile": profile or None},
+    )
+
+
+def _preprocess_work_bgr(
+    bgr: np.ndarray,
+    *,
+    document_profile_id: str = "",
+) -> tuple[np.ndarray, bool, dict]:
     work, resize_meta = _maybe_resize(bgr)
     work, air_meta = maybe_auto_image_rotator_bgr(work)
     work, supplement_meta = _maybe_supplement_quarter_pre_warp_if_off(work)
     mode = _auto_rotate_quarters_mode()
+    profile = (document_profile_id or "").strip().casefold()
+    skip_isolation = bool(profile) and skip_physical_preprocess_isolation(profile)
     if bool(supplement_meta.get("auto_rotate_supplement_pre_applied")):
         rtl_meta = {
             "right_tilt_90_ccw_applied": False,
@@ -1577,10 +1596,15 @@ def _preprocess_work_bgr(bgr: np.ndarray) -> tuple[np.ndarray, bool, dict]:
         work, rtl_meta = _maybe_right_tilt_90_ccw_bgr(work)
 
     if mode == "off":
-        work, fb_meta = _maybe_full_bleed_axis_straighten(work)
-        cropped, card_warped, warp_info = _try_extract_card_warp(work)
-        if bool(fb_meta.get("full_bleed_straighten_applied")):
-            card_warped = True
+        if skip_isolation:
+            fb_meta, warp_info = _skip_physical_isolation_meta(profile)
+            cropped = work
+            card_warped = False
+        else:
+            work, fb_meta = _maybe_full_bleed_axis_straighten(work)
+            cropped, card_warped, warp_info = _try_extract_card_warp(work)
+            if bool(fb_meta.get("full_bleed_straighten_applied")):
+                card_warped = True
         doc_q_meta: dict[str, object] = {}
         wm = str(warp_info.get("card_warp_mode") or "")
         # Hanya bila tidak ada crop perspektif: scan penuh / gagal / warp mati — putar 4-arah.
@@ -1607,25 +1631,32 @@ def _preprocess_work_bgr(bgr: np.ndarray) -> tuple[np.ndarray, bool, dict]:
             **_empty_auto_rotate_meta(reason="PREPROCESS_AUTO_ROTATE_QUARTERS=off"),
         }
     else:
-        work, fb_meta = _maybe_full_bleed_axis_straighten(work)
-        pre_margin, pre_delta = _pre_rotate_margin_delta(mode)
-        work, pre_meta = _maybe_auto_rotate_quarters(
-            work,
-            card_warped=False,
-            margin=pre_margin,
-            min_delta=pre_delta,
-            meta_prefix="auto_rotate_pre",
-        )
-        cropped, card_warped, warp_info = _try_extract_card_warp(work)
-        if bool(fb_meta.get("full_bleed_straighten_applied")):
-            card_warped = True
-        cropped, post_meta = _maybe_auto_rotate_quarters(
-            cropped,
-            card_warped=card_warped,
-            margin=None,
-            min_delta=None,
-            meta_prefix="auto_rotate_post",
-        )
+        if skip_isolation:
+            fb_meta, warp_info = _skip_physical_isolation_meta(profile)
+            cropped = work
+            card_warped = False
+            pre_meta = _empty_auto_rotate_meta(reason=f"profile_{profile}")
+            post_meta = _empty_auto_rotate_meta(reason=f"profile_{profile}")
+        else:
+            work, fb_meta = _maybe_full_bleed_axis_straighten(work)
+            pre_margin, pre_delta = _pre_rotate_margin_delta(mode)
+            work, pre_meta = _maybe_auto_rotate_quarters(
+                work,
+                card_warped=False,
+                margin=pre_margin,
+                min_delta=pre_delta,
+                meta_prefix="auto_rotate_pre",
+            )
+            cropped, card_warped, warp_info = _try_extract_card_warp(work)
+            if bool(fb_meta.get("full_bleed_straighten_applied")):
+                card_warped = True
+            cropped, post_meta = _maybe_auto_rotate_quarters(
+                cropped,
+                card_warped=card_warped,
+                margin=None,
+                min_delta=None,
+                meta_prefix="auto_rotate_post",
+            )
         pre_applied = bool(pre_meta.get("auto_rotate_pre_applied"))
         post_applied = bool(post_meta.get("auto_rotate_post_applied"))
         merged = {
@@ -1663,6 +1694,8 @@ def _preprocess_work_bgr(bgr: np.ndarray) -> tuple[np.ndarray, bool, dict]:
     out, post_meta = _maybe_post_enhance_micro_deskew_gray(out)
     meta = {
         **resize_meta,
+        "document_profile_id": profile or None,
+        "physical_isolation_skipped": skip_isolation,
         "blur_score_laplacian": round(blur_score, 2),
         "heavy_blur_enhance": blur_score < _BLUR_SCORE_HEAVY,
         "detail_enhance_bgr": blur_score < _DETAIL_ENHANCE_MAX_BLUR_SCORE,
@@ -1673,17 +1706,26 @@ def _preprocess_work_bgr(bgr: np.ndarray) -> tuple[np.ndarray, bool, dict]:
     return out, card_warped, meta
 
 
-def preprocess_for_ocr(bgr: np.ndarray) -> np.ndarray:
+def preprocess_for_ocr(bgr: np.ndarray, *, document_profile_id: str = "") -> np.ndarray:
     """
     1) Resize batas.
     2) Deteksi bidang kartu + warp (menghindari tekstur kain/latar foto).
     3) Perkuat grayscale 8-bit untuk OCR (tanpa binarisasi keras).
     """
-    out, _, _ = _preprocess_work_bgr(bgr)
+    out, _, _ = _preprocess_work_bgr(bgr, document_profile_id=document_profile_id)
     return out
 
 
-def preprocess_image_bytes(data: bytes) -> tuple[bytes, dict]:
+def decode_image_bytes_bgr(data: bytes) -> tuple[np.ndarray, dict]:
+    """Decode upload bytes ke BGR + metadata EXIF (tanpa preprocess OCR)."""
+    return _decode_image_with_exif(data)
+
+
+def preprocess_image_bytes(
+    data: bytes,
+    *,
+    document_profile_id: str = "",
+) -> tuple[bytes, dict]:
     """
     Decode bytes gambar → pipeline OCR → PNG bytes (grayscale 8-bit).
 
@@ -1694,7 +1736,10 @@ def preprocess_image_bytes(data: bytes) -> tuple[bytes, dict]:
         (png_bytes, metadata) metadata berisi dimensi output + info blur / realesrgan.
     """
     bgr, decode_meta = _decode_image_with_exif(data)
-    out, card_warped, enhance_meta = _preprocess_work_bgr(bgr)
+    out, card_warped, enhance_meta = _preprocess_work_bgr(
+        bgr,
+        document_profile_id=document_profile_id,
+    )
     ok, encoded = cv2.imencode(".png", out)
     if not ok:
         raise ValueError("Gagal mengenkode hasil ke PNG.")

@@ -95,6 +95,15 @@ _DOCUMENT_TYPE_TO_PROFILE: dict[str, str] = {
     "nomor pokok wajib pajak": "npwp",
     "kartu keluarga": "kk",
     "kk": "kk",
+    "rekening": "rekening",
+    "rekening koran": "rekening",
+    "rekening tabungan": "rekening",
+    "mutasi": "mutasi",
+    "mutasi rekening": "mutasi",
+    "e-statement": "mutasi",
+    "e statement": "mutasi",
+    "skck": "skck",
+    "surat keterangan catatan kepolisian": "skck",
 }
 
 
@@ -118,4 +127,10 @@ def document_type_profile_from_annotation(ann: dict[str, Any] | None) -> str | N
         return "npwp"
     if "kartu keluarga" in spaced or spaced == "kk":
         return "kk"
+    if "mutasi" in spaced or "e-statement" in spaced or "e statement" in spaced:
+        return "mutasi"
+    if "rekening" in spaced or "tabungan" in spaced:
+        return "rekening"
+    if "skck" in spaced or "kepolisian" in spaced or "catatan kepolisian" in spaced:
+        return "skck"
     return None

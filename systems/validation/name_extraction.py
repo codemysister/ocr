@@ -108,20 +108,108 @@ def extract_kk_member_names(ocr_text: str) -> list[str]:
     return out
 
 
+_GREETING_PREFIX_RE = re.compile(
+    r"^(?:selamat\s+(?:pagi|siang|sore|malam|datang)|halo|hai|hi|hello)\s*[,!]?\s*",
+    re.I,
+)
+
+# Nama setelah sapaan aplikasi/perbankan di tengah teks OCR (mis. «selamat siang, usep maulidin!»).
+_GREETING_NAME_INLINE_RE = re.compile(
+    r"(?:^|[\s,.])(?:selamat\s+(?:pagi|siang|sore|malam)|halo|hai|hi|hello)\s*[,!]?\s*"
+    r"([a-zA-Z][a-zA-Z\s'.-]{2,50}?)"
+    r"(?=\s*[!?.]|\s+(?:mau|ingin|dan|yang|untuk|silakan|welcome|good|terima)\b|$)",
+    re.I,
+)
+
+_AFTER_COMMA_NAME_RE = re.compile(
+    r",\s*([A-Za-z][A-Za-z\s'.-]{2,50}?)(?=\s*[!?.]|\s{2,}|\s+[a-z]{3,}\b|$)",
+)
+
+_CAPS_NAME_RUN_RE = re.compile(r"\b([A-Z]{2,}(?:\s+[A-Z]{2,})+)\b")
+
+
+def _trim_name_punctuation(cand: str) -> str:
+    return re.sub(r"[!?.;]+$", "", (cand or "").strip()).strip()
+
+
+def _refined_name_candidates(seg: str) -> list[str]:
+    """Kandidat nama lebih rapat dari segmen kasar (sapaan UI, koma, huruf kapital)."""
+    s = (seg or "").strip()
+    if not s:
+        return []
+
+    out: list[str] = []
+
+    def _add(cand: str) -> None:
+        c = _trim_name_punctuation(cand)
+        if c and _looks_like_person_name(c):
+            out.append(c)
+
+    stripped = _GREETING_PREFIX_RE.sub("", s).strip()
+    if stripped and stripped != s:
+        first_clause = re.split(r"[!?]", stripped, maxsplit=1)[0].strip()
+        _add(first_clause)
+
+    for m in _GREETING_NAME_INLINE_RE.finditer(s):
+        _add(m.group(1))
+
+    for m in _AFTER_COMMA_NAME_RE.finditer(s):
+        _add(m.group(1))
+
+    for m in _CAPS_NAME_RUN_RE.finditer(s):
+        _add(m.group(1))
+
+    return out
+
+
+def sliding_name_windows(text: str, expected_name: str, *, max_extra_words: int = 1) -> list[str]:
+    """Jendela kata berurutan dengan panjang mendekati nama referensi (untuk OCR blob panjang)."""
+    exp_words = _normalize(expected_name).split()
+    if len(exp_words) < 2:
+        return []
+    words = re.findall(r"[a-zA-Z][a-zA-Z'.-]*", text or "", re.I)
+    if len(words) < len(exp_words):
+        return []
+
+    n = len(exp_words)
+    seen: set[str] = set()
+    out: list[str] = []
+    for width in range(n, min(n + max_extra_words + 1, len(words) + 1)):
+        for i in range(len(words) - width + 1):
+            window = " ".join(words[i : i + width])
+            key = _normalize(window)
+            if key in seen:
+                continue
+            if not _looks_like_person_name(window):
+                continue
+            seen.add(key)
+            out.append(window)
+    return out
+
+
 def person_like_segments(ocr_text: str) -> list[str]:
     """Segmen OCR yang lolos heuristik nama orang; urutan asli, tanpa duplikat (normalisasi)."""
     seen: set[str] = set()
     out: list[str] = []
+
+    def _append(cand: str) -> None:
+        key = _normalize(cand)
+        if key in seen:
+            return
+        seen.add(key)
+        out.append(cand.strip())
+
     for seg in _split_segments(ocr_text):
         if _is_probably_field_label(seg):
             continue
-        if not _looks_like_person_name(seg):
-            continue
-        key = _normalize(seg)
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append(seg.strip())
+        if _looks_like_person_name(seg):
+            _append(seg.strip())
+        for refined in _refined_name_candidates(seg):
+            _append(refined)
+
+    for refined in _refined_name_candidates(ocr_text or ""):
+        _append(refined)
+
     return out
 
 

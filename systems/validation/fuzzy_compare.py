@@ -8,11 +8,17 @@ from typing import Any
 
 from rapidfuzz import fuzz
 
-from systems.validation.document_profiles import CANONICAL_KEYWORDS, profile_label
+from systems.validation.document_profiles import (
+    CANONICAL_KEYWORDS,
+    excluded_keywords_for_profile,
+    profile_label,
+    skip_identity_validation,
+)
 from systems.validation.name_extraction import (
     extract_holder_name_candidate,
     extract_kk_member_names,
     person_like_segments,
+    sliding_name_windows,
 )
 
 try:
@@ -260,6 +266,7 @@ _EXTRACTION_METHOD_ID: dict[str, str] = {
     "kk_table_first_member": "anggota pertama pada tabel Kartu Keluarga",
     "failed": "tidak berhasil menarik nama dari OCR",
     "skipped_no_expected_name": "nama referensi kosong — identitas tidak diuji",
+    "skipped_profile_no_identity": "profil dokumen tidak memeriksa nama (mis. mutasi)",
 }
 
 
@@ -276,6 +283,7 @@ def _validation_explanation(
     identity: dict[str, Any] | None,
     name_extraction: dict[str, Any],
     expected_name_display: str,
+    identity_skip_reason: str | None = None,
 ) -> dict[str, Any]:
     """Ringkasan manusiawi + kode untuk klien API."""
     req_pct = aggregate_min_pass_ratio * 100.0
@@ -315,7 +323,9 @@ def _validation_explanation(
     detail_lines.append(dt_reason)
 
     id_reason = ""
-    if not want_identity:
+    if identity_skip_reason:
+        id_reason = identity_skip_reason
+    elif not want_identity:
         id_reason = (
             "Identitas tidak diuji karena nama referensi kosong — "
             "`document_matched` hanya mengandalkan profil keyword."
@@ -433,6 +443,45 @@ def _profile_aggregate_score(ocr_normalized: str, keywords: list[str]) -> tuple[
     return aggregate, keyword_results
 
 
+def _ocr_has_keyword_signal(ocr_normalized: str, keyword: str, *, min_ratio: float = 0.7) -> bool:
+    item = fuzzy_keyword_against_ocr(keyword, ocr_normalized)
+    if item.get("skipped"):
+        return False
+    return float(item["best_score"]) / 100.0 >= min_ratio
+
+
+def _evaluate_profile_keyword_match(
+    profile_id: str,
+    ocr_normalized: str,
+    keywords: list[str],
+    *,
+    exclusion_min_ratio: float = 0.7,
+) -> dict[str, Any]:
+    aggregate, keyword_results = _profile_aggregate_score(ocr_normalized, keywords)
+    excluded_results: list[dict[str, Any]] = []
+    exclusion_violated = False
+    for raw_ex in excluded_keywords_for_profile(profile_id):
+        item = fuzzy_keyword_against_ocr(raw_ex, ocr_normalized)
+        hit_ratio = 0.0 if item.get("skipped") else float(item["best_score"]) / 100.0
+        hit = hit_ratio >= exclusion_min_ratio
+        excluded_results.append(
+            {
+                **item,
+                "exclusion_hit": hit,
+                "exclusion_min_ratio": exclusion_min_ratio,
+            }
+        )
+        if hit:
+            exclusion_violated = True
+            aggregate = 0.0
+    return {
+        "aggregate": aggregate,
+        "keyword_results": keyword_results,
+        "excluded_keyword_results": excluded_results,
+        "exclusion_violated": exclusion_violated,
+    }
+
+
 def _profile_structural_boost(profile_id: str, ocr_n: str) -> float:
     """Bonus kecil bila ada penanda struktural kuat di OCR (NIK 16 digit, dll.)."""
     pid = (profile_id or "").strip().casefold()
@@ -448,6 +497,13 @@ def _profile_structural_boost(profile_id: str, ocr_n: str) -> float:
         if re.search(r"\bnpwp\b", ocr_n) or "npwp" in compact:
             return 0.06
     if pid == "kk" and "kartukeluarga" in compact:
+        return 0.08
+    if pid == "mutasi" and _ocr_has_keyword_signal(ocr_n, "e-statement"):
+        return 0.08
+    if pid == "rekening" and _ocr_has_keyword_signal(ocr_n, "tabungan"):
+        if not _ocr_has_keyword_signal(ocr_n, "e-statement"):
+            return 0.08
+    if pid == "skck" and _ocr_has_keyword_signal(ocr_n, "skck"):
         return 0.08
     return 0.0
 
@@ -484,6 +540,14 @@ def _detection_tiebreak_bonus(profile_id: str, ocr_n: str, hint_profile_id: str)
         bonus += 0.75
     if pid == "ktp" and re.search(r"\b\d{16}\b", ocr_n):
         bonus += 0.5
+    if pid == "mutasi" and _ocr_has_keyword_signal(ocr_n, "e-statement"):
+        bonus += 1.25
+    if pid == "rekening" and _ocr_has_keyword_signal(ocr_n, "tabungan"):
+        bonus += 0.75
+        if not _ocr_has_keyword_signal(ocr_n, "e-statement"):
+            bonus += 1.0
+    if pid == "skck" and _ocr_has_keyword_signal(ocr_n, "skck"):
+        bonus += 1.0
     if pid == hint and hint:
         bonus += 0.5
     return bonus
@@ -504,7 +568,14 @@ def detect_document_type_from_ocr(
     ranked: list[dict[str, Any]] = []
 
     for profile_id, keywords in CANONICAL_KEYWORDS.items():
-        aggregate, keyword_results = _profile_aggregate_score(ocr_n, keywords)
+        eval_result = _evaluate_profile_keyword_match(
+            profile_id,
+            ocr_n,
+            keywords,
+            exclusion_min_ratio=min_ratio,
+        )
+        aggregate = float(eval_result["aggregate"])
+        keyword_results = eval_result["keyword_results"]
         ranked.append(
             {
                 "document_profile_id": profile_id,
@@ -512,6 +583,8 @@ def detect_document_type_from_ocr(
                 "aggregate_score": round(aggregate, 6),
                 "aggregate_percent": round(aggregate * 100.0, 4),
                 "keywords": keyword_results,
+                "excluded_keywords": eval_result["excluded_keyword_results"],
+                "exclusion_violated": eval_result["exclusion_violated"],
                 "tiebreak_bonus": round(
                     _detection_tiebreak_bonus(profile_id, ocr_n, hint_profile_id), 4
                 ),
@@ -556,9 +629,11 @@ def build_document_verdict(
     document_type_pass: bool,
     document_matched: bool,
     name_extraction: dict[str, Any],
+    ownership_checked: bool | None = None,
 ) -> dict[str, Any]:
     """Ringkasan singkat untuk klien: jenis dokumen saat ini + milik user atau tidak."""
-    ownership_checked = bool(expected_name.strip())
+    if ownership_checked is None:
+        ownership_checked = bool(expected_name.strip())
     detected_profile_id = detection.get("detected_profile_id")
     detected_label = detection.get("detected_document_type")
     requested_label = profile_label(requested_profile_id) or requested_document_type.strip()
@@ -654,20 +729,26 @@ def validate_document_ocr(
     id_min = max(0.0, min(100.0, float(identity_min_score)))
     profile = (document_profile_id or "").strip().casefold()
 
-    keyword_results: list[dict[str, Any]] = []
-    kw_ratios: list[float] = []
-    for raw_kw in keywords:
-        item = fuzzy_keyword_against_ocr(raw_kw, ocr_n)
-        keyword_results.append(item)
-        if item.get("skipped"):
-            continue
-        kw_ratios.append(float(item["best_score"]) / 100.0)
+    profile_eval = _evaluate_profile_keyword_match(
+        profile,
+        ocr_n,
+        keywords,
+        exclusion_min_ratio=ratio_req,
+    )
+    keyword_results = profile_eval["keyword_results"]
+    excluded_keyword_results = profile_eval["excluded_keyword_results"]
+    exclusion_violated = bool(profile_eval["exclusion_violated"])
+    kw_ratios = [
+        float(item["best_score"]) / 100.0
+        for item in keyword_results
+        if not item.get("skipped")
+    ]
 
     document_type_boosts = _document_type_score_boosts(profile, ocr_n, mistral_annotation)
     boost_total = min(0.15, sum(document_type_boosts.values()))
 
-    if not kw_ratios:
-        keyword_aggregate_raw = 0.0
+    if not kw_ratios or exclusion_violated:
+        keyword_aggregate_raw = 0.0 if exclusion_violated else (sum(kw_ratios) / len(kw_ratios))
         document_type_aggregate_pass_ratio = 0.0
         document_type_pass = False
     else:
@@ -677,7 +758,8 @@ def validate_document_ocr(
 
     document_type_components_count = len(kw_ratios)
 
-    want_identity = bool(expected_name.strip())
+    skip_identity = skip_identity_validation(profile)
+    want_identity = bool(expected_name.strip()) and not skip_identity
     name_extraction: dict[str, Any] = {
         "candidate_raw": None,
         "candidate_normalized": "",
@@ -685,6 +767,13 @@ def validate_document_ocr(
     }
     identity: dict[str, Any] | None = None
     identity_pass: bool | None = None
+    identity_skip_reason: str | None = None
+    if skip_identity and expected_name.strip():
+        identity_skip_reason = (
+            f"Identitas tidak diuji untuk profil {profile_label(profile)} — "
+            "validasi hanya memeriksa keyword dokumen."
+        )
+        name_extraction["method"] = "skipped_profile_no_identity"
 
     if want_identity:
         ann_name: str | None = None
@@ -714,7 +803,26 @@ def validate_document_ocr(
                 scored.append((scv, name, "kk_table_row"))
 
         if not ann_name:
+            window_sources: list[tuple[str, str]] = [(ocr_text, "person_like_segment")]
             for seg in person_like_segments(ocr_text):
+                window_sources.append((seg, "person_like_segment"))
+            seen_window: set[str] = set()
+            for source_text, method in window_sources:
+                for window in sliding_name_windows(source_text, expected_name):
+                    nk = _normalize_name(window)
+                    if nk in seen_window:
+                        continue
+                    seen_window.add(nk)
+                    scv = float(
+                        compare_extracted_identity_scores(window, expected_name)[
+                            "identity_combined_score"
+                        ]
+                    )
+                    scored.append((scv, window, method))
+            for seg in person_like_segments(ocr_text):
+                nk = _normalize_name(seg)
+                if nk in seen_window:
+                    continue
                 scv = float(
                     compare_extracted_identity_scores(seg, expected_name)[
                         "identity_combined_score"
@@ -754,6 +862,8 @@ def validate_document_ocr(
             identity_pass = False
 
         document_matched = bool(document_type_pass and identity_pass)
+    elif skip_identity:
+        document_matched = bool(document_type_pass)
     else:
         name_extraction["method"] = "skipped_no_expected_name"
         document_matched = bool(document_type_pass)
@@ -770,7 +880,28 @@ def validate_document_ocr(
         identity=identity,
         name_extraction=name_extraction,
         expected_name_display=expected_name.strip(),
+        identity_skip_reason=identity_skip_reason,
     )
+    if exclusion_violated:
+        hits = [
+            str(item.get("keyword_raw") or "")
+            for item in excluded_keyword_results
+            if item.get("exclusion_hit")
+        ]
+        blocked_by = ", ".join(f"«{h}»" for h in hits if h) or "keyword terlarang"
+        exclusion_line = (
+            f"Profil ditolak karena teks mengandung keyword yang dilarang: {blocked_by}."
+        )
+        explanation["detail_lines"] = [exclusion_line, *list(explanation.get("detail_lines") or [])]
+        explanation["summary"] = (
+            "Dokumen tidak cocok karena profil jenis dokumen: keyword terlarang terdeteksi di OCR."
+        )
+        blockers = list(explanation.get("primary_blockers") or [])
+        if "DOCUMENT_TYPE" not in blockers:
+            blockers.insert(0, "DOCUMENT_TYPE")
+        explanation["primary_blockers"] = blockers
+        if explanation.get("gates", {}).get("document_type"):
+            explanation["gates"]["document_type"]["pass"] = False
 
     detection = detect_document_type_from_ocr(
         ocr_text,
@@ -788,6 +919,7 @@ def validate_document_ocr(
         document_type_pass=document_type_pass,
         document_matched=document_matched,
         name_extraction=name_extraction,
+        ownership_checked=bool(expected_name.strip()) and not skip_identity,
     )
 
     return {
@@ -808,6 +940,8 @@ def validate_document_ocr(
         "identity": identity,
         "identity_pass": identity_pass,
         "keywords": keyword_results,
+        "excluded_keywords": excluded_keyword_results,
+        "exclusion_violated": exclusion_violated,
         "document_matched": document_matched,
         "explanation": explanation,
         "document_type_detection": detection,

@@ -104,6 +104,9 @@ def summarize_validation_result(payload: dict[str, Any], *, max_keywords: int = 
         "is_own_document",
         "document_type_current",
         "document_type_current_label",
+        "valid",
+        "image_validation",
+        "validation_mode",
     )
     out: dict[str, Any] = {k: payload[k] for k in keys if k in payload}
     if "keywords" in payload and isinstance(payload["keywords"], list):

@@ -6,6 +6,7 @@ import base64
 import os
 from typing import Literal
 
+import cv2
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
@@ -21,9 +22,14 @@ from systems.observability.last_tuning_log import (
     summarize_validation_result,
     write_last_tuning_log,
 )
-from systems.preprocessing.pipeline import preprocess_image_bytes
-from systems.validation.document_profiles import list_supported_document_types, resolve_keywords
+from systems.preprocessing.pipeline import decode_image_bytes_bgr, preprocess_image_bytes
+from systems.validation.document_profiles import (
+    is_image_only_profile,
+    list_supported_document_types,
+    resolve_keywords,
+)
 from systems.validation.fuzzy_compare import validate_document_ocr
+from systems.validation.portrait_photo_validate import validate_foto_profile
 
 router = APIRouter(prefix="/api/v1", tags=["api"])
 
@@ -106,6 +112,17 @@ def api_info() -> dict:
                     "expected_name": "string (optional)",
                     "mistral_annotation": "object (opsional, dari Mistral OCR)",
                 },
+            },
+            "validate_foto_profile": {
+                "method": "POST",
+                "path": "/systems/validation/api/v1/validate-foto-profile",
+                "content_type": "multipart/form-data",
+                "fields": {
+                    "file": "binary (required)",
+                    "document_type": "string (default foto_profile)",
+                    "expected_name": "string (optional)",
+                },
+                "description": "Validasi foto profil berlatar biru (tanpa OCR).",
             },
             "compare_names": {
                 "method": "POST",
@@ -221,8 +238,80 @@ async def api_pipeline(
         log_safe_failure(subsystem="pipeline", method="POST", path=path, http_status=400, detail=detail)
         raise HTTPException(status_code=400, detail=detail)
 
+    canonical_id, keywords = resolved
+
+    if is_image_only_profile(canonical_id):
+        try:
+            bgr, decode_meta = decode_image_bytes_bgr(raw)
+        except Exception as e:
+            log_safe_failure(
+                subsystem="pipeline",
+                method="POST",
+                path=path,
+                http_status=400,
+                detail=str(e),
+            )
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
+        validation_detail = validate_foto_profile(
+            bgr,
+            document_type=doc_type,
+            expected_name=name_ref,
+        )
+        analysis_bgr = validation_detail.pop("_analysis_bgr", None)
+        payload: dict = {
+            "success": True,
+            "valid": validation_detail.get("document_matched"),
+            "ocr_mode": None,
+            "pp_ocr_tier": None,
+            "validation_mode": "image",
+            "preprocess": {"skipped": True, "reason": "image_only_profile", **decode_meta},
+            "ocr": None,
+            "validation": {
+                "document_profile_id": canonical_id,
+                "keywords_from_profile": keywords,
+                **validation_detail,
+            },
+            "verdict": validation_detail.get("verdict"),
+            "is_own_document": validation_detail.get("is_own_document"),
+            "document_type_current": validation_detail.get("document_type_current"),
+            "document_type_current_label": validation_detail.get("document_type_current_label"),
+        }
+        if include_preprocessed_image:
+            preview_bgr = analysis_bgr if analysis_bgr is not None else bgr
+            ok, encoded = cv2.imencode(".png", preview_bgr)
+            if ok:
+                payload["preprocessed_image"] = {
+                    "mime": "image/png",
+                    "image_base64": base64.b64encode(encoded.tobytes()).decode("ascii"),
+                }
+
+        write_last_tuning_log(
+            {
+                "success": True,
+                "subsystem": "pipeline",
+                "method": "POST",
+                "path": path,
+                "input_bytes": len(raw),
+                "query": {
+                    "ocr_mode": ocr_mode,
+                    "pp_ocr_tier": pp_ocr_tier if ocr_mode == "fast" else None,
+                    "include_preprocessed_image": include_preprocessed_image,
+                    "full_json": full_json,
+                },
+                "request": {
+                    "document_type": doc_type,
+                    "expected_name_chars": len(name_ref),
+                },
+                "preprocess": payload["preprocess"],
+                "ocr": {"skipped": True, "reason": "foto_profile"},
+                "validation": summarize_validation_result(payload["validation"]),
+            }
+        )
+        return JSONResponse(content=jsonable_encoder(payload))
+
     try:
-        png_bytes, pre_meta = preprocess_image_bytes(raw)
+        png_bytes, pre_meta = preprocess_image_bytes(raw, document_profile_id=canonical_id)
     except ValueError as e:
         log_safe_failure(subsystem="pipeline", method="POST", path=path, http_status=400, detail=str(e))
         raise HTTPException(status_code=400, detail=str(e)) from e
@@ -240,7 +329,6 @@ async def api_pipeline(
         )
         raise HTTPException(status_code=400, detail="OCR tidak menghasilkan teks.")
 
-    canonical_id, keywords = resolved
     mistral_ann: dict | None = None
     if ocr_mode == "mistral":
         mistral_ann = ocr_payload.get("document_annotation_parsed")

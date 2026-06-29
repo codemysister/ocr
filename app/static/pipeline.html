@@ -79,7 +79,8 @@
       margin-bottom: 0.35rem;
     }
     input[type="text"],
-    textarea {
+    textarea,
+    select#doc {
       width: 100%;
       font-family: inherit;
       font-size: 0.9rem;
@@ -200,6 +201,16 @@
     .val-summary.no { border-color: rgba(248, 113, 113, 0.35); }
     .val-summary.ok .ex-sum { color: var(--ok); }
     .val-summary.no .ex-sum { color: var(--err); }
+    .val-badge {
+      font-size: 1.35rem;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      margin: 0 0 0.5rem;
+    }
+    .val-badge.ok { color: var(--ok); }
+    .val-badge.no { color: var(--err); }
+    .hidden-for-foto { display: none !important; }
   </style>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;600&display=swap" rel="stylesheet" />
@@ -214,6 +225,7 @@
       → validasi jenis dokumen &amp; nama
       (<code class="endpoint">POST /systems/validation/api/v1/validate-document</code>).
       Default: <strong>Mistral</strong> + <code>document_annotation</code>. Alternatif: PP-OCRv6 lokal atau PaddleOCR-VL.
+      Untuk <strong>foto_profile</strong>: validasi gambar saja (wajah + latar biru) — tanpa OCR.
     </p>
     <p class="nav-top"><a href="/">← Beranda platform</a> · <a href="/systems/preprocessing/">Preprocessing saja</a> · <a href="/systems/ocr/">OCR saja</a> · <a href="/systems/validation/">Validasi saja</a></p>
   </header>
@@ -227,13 +239,22 @@
         </div>
         <div>
           <label class="block" for="doc">Jenis dokumen</label>
-          <input id="doc" type="text" placeholder="KTP, NPWP, …" autocomplete="off" />
-          <p class="hint">Lihat daftar di <code>/systems/validation/health</code> (<code>document_profiles</code>).</p>
+          <select id="doc" required>
+            <option value="" disabled selected>Pilih jenis dokumen…</option>
+            <option value="ktp">KTP</option>
+            <option value="npwp">NPWP</option>
+            <option value="kk">Kartu Keluarga (KK)</option>
+            <option value="rekening">Rekening tabungan</option>
+            <option value="mutasi">Mutasi / e-statement</option>
+            <option value="skck">SKCK</option>
+            <option value="foto_profile">Foto profil (latar biru)</option>
+          </select>
         </div>
       </div>
-      <label class="block" for="expected">Nama referensi (opsional)</label>
+      <label class="block" for="expected" id="expectedLabel">Nama referensi (opsional)</label>
       <textarea id="expected" placeholder="Kosongkan bila hanya mengecek keyword profil dokumen."></textarea>
 
+      <div id="ocrSection">
       <label class="block">Engine OCR</label>
       <div class="mode-row" role="radiogroup" aria-label="Engine OCR">
         <label><input type="radio" name="ocrMode" value="mistral" checked /> Mistral (cloud, default)</label>
@@ -251,22 +272,24 @@
           </select>
         </div>
       </div>
+      </div>
 
       <div class="controls">
         <button type="button" class="primary" id="run" disabled>Jalankan pipeline</button>
-        <span class="hint">Urutan: preprocess → OCR pada PNG keluaran → validasi dengan teks OCR.</span>
+        <span class="hint" id="pipelineHint">Urutan: preprocess → OCR pada PNG keluaran → validasi dengan teks OCR.</span>
       </div>
       <div class="steps" id="steps" aria-live="polite">
         <span id="st-prep">1 Preprocess</span>
         <span id="st-ocr">2 OCR</span>
         <span id="st-val">3 Validasi</span>
+        <span id="st-img" style="display: none;">Validasi gambar</span>
       </div>
       <div class="status" id="status" role="status"></div>
     </section>
 
     <div class="row two">
-      <section class="panel">
-        <h2>Gambar setelah preprocess</h2>
+      <section class="panel" id="panelPreview">
+        <h2 id="previewTitle">Gambar setelah preprocess</h2>
         <div class="preview-box" id="previewPreprocessed">
           <span class="placeholder">Belum ada hasil.</span>
         </div>
@@ -277,13 +300,13 @@
       </section>
     </div>
 
-    <section class="panel">
+    <section class="panel hidden-for-foto" id="panelOcr">
       <h2>Teks OCR</h2>
       <textarea class="out" id="outOcr" readonly placeholder="Teks hasil OCR…"></textarea>
     </section>
 
     <section class="panel">
-      <h2>JSON validasi (mentah)</h2>
+      <h2 id="jsonTitle">JSON validasi (mentah)</h2>
       <textarea class="out" id="outVal" readonly placeholder="Respons /systems/validation/api/v1/validate-document…"></textarea>
     </section>
   </main>
@@ -291,7 +314,7 @@
   <script>
     const fileInput = document.getElementById("file");
     const docInput = document.getElementById("doc");
-    const expectedInput = document.getElementById("expected");
+    const expectedInputEl = document.getElementById("expected");
     const runBtn = document.getElementById("run");
     const statusEl = document.getElementById("status");
     const previewPre = document.getElementById("previewPreprocessed");
@@ -301,8 +324,36 @@
     const stPrep = document.getElementById("st-prep");
     const stOcr = document.getElementById("st-ocr");
     const stVal = document.getElementById("st-val");
+    const stImg = document.getElementById("st-img");
     const tierRow = document.getElementById("tierRow");
     const ppOcrTier = document.getElementById("ppOcrTier");
+    const ocrSection = document.getElementById("ocrSection");
+    const expectedLabel = document.getElementById("expectedLabel");
+    const pipelineHint = document.getElementById("pipelineHint");
+    const panelOcr = document.getElementById("panelOcr");
+    const previewTitle = document.getElementById("previewTitle");
+    const jsonTitle = document.getElementById("jsonTitle");
+
+    function isFotoProfile(docType) {
+      return (docType || "").trim() === "foto_profile";
+    }
+
+    function syncUiForDocType() {
+      const foto = isFotoProfile(docInput.value);
+      ocrSection.classList.toggle("hidden-for-foto", foto);
+      panelOcr.classList.toggle("hidden-for-foto", foto);
+      expectedLabel.classList.toggle("hidden-for-foto", foto);
+      expectedInputEl.classList.toggle("hidden-for-foto", foto);
+      stPrep.style.display = foto ? "none" : "";
+      stOcr.style.display = foto ? "none" : "";
+      stVal.style.display = foto ? "none" : "";
+      stImg.style.display = foto ? "" : "none";
+      pipelineHint.textContent = foto
+        ? "foto_profile: validasi gambar (wajah + latar biru) via POST /api/v1/pipeline — tanpa OCR."
+        : "Urutan: preprocess → OCR pada PNG keluaran → validasi dengan teks OCR.";
+      previewTitle.textContent = foto ? "Kotak foto profil" : "Gambar setelah preprocess";
+      jsonTitle.textContent = foto ? "Hasil validasi" : "JSON validasi (mentah)";
+    }
 
     function selectedMode() {
       const r = document.querySelector('input[name="ocrMode"]:checked');
@@ -332,9 +383,19 @@
     }
 
     function resetStepClasses() {
-      [stPrep, stOcr, stVal].forEach((el) => {
+      [stPrep, stOcr, stVal, stImg].forEach((el) => {
         el.classList.remove("done", "run", "fail");
       });
+    }
+
+    function showPreviewFromBlob(blob, alt) {
+      if (preObjectUrl) URL.revokeObjectURL(preObjectUrl);
+      preObjectUrl = URL.createObjectURL(blob);
+      previewPre.innerHTML = "";
+      const img = document.createElement("img");
+      img.src = preObjectUrl;
+      img.alt = alt || "Preview";
+      previewPre.appendChild(img);
     }
 
     function base64ToBlob(b64, mime) {
@@ -380,6 +441,41 @@
         .replace(/</g, "&lt;")
         .replace(/>/g, "&gt;")
         .replace(/"/g, "&quot;");
+    }
+
+    function renderFotoProfileSummary(valid, valData) {
+      const iv = (valData && valData.image_validation) || {};
+      let html =
+        '<p class="val-badge ' +
+        (valid ? "ok" : "no") +
+        '">' +
+        esc(valid ? "VALID" : "TIDAK VALID") +
+        "</p>";
+      html += "<p>" + esc((valData.explanation && valData.explanation.summary) || "") + "</p>";
+      html += "<ul>";
+      html +=
+        "<li>Wajah: " +
+        esc(iv.face_count === 1 ? "1 terdeteksi ✓" : String(iv.face_count || 0) + " terdeteksi ✗") +
+        "</li>";
+      html +=
+        "<li>Latar biru (kartu): " +
+        esc(
+          typeof iv.blue_background_ratio === "number"
+            ? (iv.blue_background_ratio * 100).toFixed(1) + "%"
+            : "?",
+        ) +
+        (iv.blue_background_pass ? " ✓" : " ✗") +
+        "</li>";
+      html += "</ul>";
+      const hints = valData.explanation && valData.explanation.hints;
+      if (Array.isArray(hints) && hints.length && !valid) {
+        html += '<p class="ex-hint"><strong>Saran</strong></p><ul class="ex-hint">';
+        hints.forEach(function (h) {
+          html += "<li>" + esc(h) + "</li>";
+        });
+        html += "</ul>";
+      }
+      valSummary.innerHTML = html;
     }
 
     function renderValidationSummary(valData, ok) {
@@ -443,12 +539,16 @@
       valSummary.innerHTML = html;
     }
 
-    docInput.addEventListener("input", updateRunEnabled);
+    docInput.addEventListener("change", () => {
+      syncUiForDocType();
+      updateRunEnabled();
+    });
+    syncUiForDocType();
 
     runBtn.addEventListener("click", async () => {
       const f = fileInput.files[0];
       const document_type = (docInput.value || "").trim();
-      const expected_name = (expectedInput.value || "").trim();
+      const expected_name = (expectedInputEl.value || "").trim();
       if (!f || !document_type) return;
 
       resetStepClasses();
@@ -459,9 +559,63 @@
       runBtn.disabled = true;
       setStatus("Memproses…");
 
+      if (isFotoProfile(document_type)) {
+        stImg.classList.add("run");
+        const fd = new FormData();
+        fd.append("file", f);
+        fd.append("document_type", document_type);
+        try {
+          const r = await fetch("/api/v1/pipeline?include_preprocessed_image=true", {
+            method: "POST",
+            body: fd,
+          });
+          const data = await r.json().catch(() => ({}));
+          stImg.classList.remove("run");
+          if (!r.ok) {
+            stImg.classList.add("fail");
+            const d = data.detail;
+            const msg = typeof d === "string" ? d : JSON.stringify(d || data);
+            outVal.value = JSON.stringify(data, null, 2);
+            valSummary.className = "val-summary no";
+            valSummary.textContent = msg;
+            setStatus("Validasi gagal.", "error");
+            return;
+          }
+          stImg.classList.add("done");
+          const valData = data.validation || {};
+          const valid = data.valid === true || valData.document_matched === true;
+          valSummary.className = "val-summary " + (valid ? "ok" : "no");
+          renderFotoProfileSummary(valid, valData);
+          const compact = {
+            valid: valid,
+            document_profile_id: valData.document_profile_id || "foto_profile",
+            image_validation: valData.image_validation || {},
+          };
+          outVal.value = JSON.stringify(compact, null, 2);
+          if (data.preprocessed_image && data.preprocessed_image.image_base64) {
+            const blob = base64ToBlob(
+              data.preprocessed_image.image_base64,
+              data.preprocessed_image.mime || "image/png",
+            );
+            showPreviewFromBlob(blob, "Foto profil");
+          } else {
+            showPreviewFromBlob(f, "Foto profil");
+          }
+          setStatus(valid ? "Selesai — VALID" : "Selesai — TIDAK VALID", valid ? "ok" : "error");
+        } catch (e) {
+          stImg.classList.remove("run");
+          stImg.classList.add("fail");
+          setStatus(e.message || String(e), "error");
+        } finally {
+          updateRunEnabled();
+        }
+        return;
+      }
+
       stPrep.classList.add("run");
       const fdPre = new FormData();
       fdPre.append("file", f);
+      fdPre.append("document_type", document_type);
 
       try {
         const rPre = await fetch("/api/v1/preprocess?format=json", {

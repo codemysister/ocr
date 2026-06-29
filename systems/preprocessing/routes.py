@@ -5,12 +5,13 @@ from __future__ import annotations
 import base64
 from pathlib import Path
 
-from fastapi import APIRouter, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response
 
 from systems.preprocessing.pipeline import preprocess_image_bytes
 from systems.preprocessing.realesrgan_infer import realesrgan_status_for_health
 from systems.observability.last_tuning_log import log_safe_failure, write_last_tuning_log
+from systems.validation.document_profiles import resolve_keywords
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -79,6 +80,10 @@ def preprocess_page() -> FileResponse:
 async def api_preprocess(
     file: UploadFile = File(..., description="File gambar"),
     fmt: str = Query("image", alias="format", description="'image' (PNG grayscale) atau 'json'"),
+    document_type: str = Form(
+        "",
+        description="Opsional: jenis dokumen (mis. mutasi, KTP) agar crop kartu tidak dipakai pada screenshot",
+    ),
 ) -> Response | JSONResponse:
     raw = await file.read()
     path = "/api/v1/preprocess"
@@ -93,8 +98,15 @@ async def api_preprocess(
         )
         raise HTTPException(status_code=400, detail="File kosong.")
 
+    profile_id = ""
+    doc_type = document_type.strip()
+    if doc_type:
+        resolved = resolve_keywords(doc_type)
+        if resolved:
+            profile_id = resolved[0]
+
     try:
-        png_bytes, meta = preprocess_image_bytes(raw)
+        png_bytes, meta = preprocess_image_bytes(raw, document_profile_id=profile_id)
     except ValueError as e:
         log_safe_failure(
             subsystem=subsystem,

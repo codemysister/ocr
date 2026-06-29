@@ -5,13 +5,19 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field, field_validator
 
-from systems.validation.document_profiles import list_supported_document_types, resolve_keywords
+from systems.validation.document_profiles import (
+    is_image_only_profile,
+    list_supported_document_types,
+    resolve_keywords,
+)
 from systems.validation.fuzzy_compare import compare_ocr_name_to_expected, validate_document_ocr
+from systems.validation.portrait_photo_validate import validate_foto_profile
+from systems.preprocessing.pipeline import decode_image_bytes_bgr
 from systems.observability.last_tuning_log import (
     log_safe_failure,
     summarize_validation_result,
@@ -91,6 +97,7 @@ def validation_health() -> dict:
         "apis": [
             "/systems/validation/api/v1/compare-names",
             "/systems/validation/api/v1/validate-document",
+            "/systems/validation/api/v1/validate-foto-profile",
         ],
         "validate_document_response": (
             "Respons validate-document menyertakan `verdict` (is_own_document, document_type_current, "
@@ -218,6 +225,82 @@ def api_validate_document(body: ValidateDocumentBody) -> JSONResponse:
                 "aggregate_min_pass_ratio": body.aggregate_min_pass_ratio,
                 "identity_min_score": body.identity_min_score,
             },
+            "result": summarize_validation_result(payload),
+        }
+    )
+    return JSONResponse(content=jsonable_encoder(payload))
+
+
+@router.post("/api/v1/validate-foto-profile")
+async def api_validate_foto_profile(
+    file: UploadFile = File(..., description="Gambar foto profil"),
+    document_type: str = Form(
+        "foto_profile",
+        description="Jenis dokumen; default foto_profile (alias: pas foto, foto profil)",
+    ),
+    expected_name: str = Form("", description="Nama referensi (opsional, tidak dicek untuk foto)"),
+) -> JSONResponse:
+    path = "/systems/validation/api/v1/validate-foto-profile"
+    sub = "validation_foto_profile"
+    raw = await file.read()
+    doc_type = document_type.strip() or "foto_profile"
+
+    if not raw:
+        log_safe_failure(subsystem=sub, method="POST", path=path, http_status=400, detail="File kosong.")
+        raise HTTPException(status_code=400, detail="File kosong.")
+
+    resolved = resolve_keywords(doc_type)
+    if not resolved:
+        detail = {
+            "message": "Jenis dokumen tidak dikenal.",
+            "document_type": doc_type,
+            "supported": list_supported_document_types(),
+        }
+        log_safe_failure(subsystem=sub, method="POST", path=path, http_status=400, detail=detail)
+        raise HTTPException(status_code=400, detail=detail)
+
+    canonical_id, keywords = resolved
+    if not is_image_only_profile(canonical_id):
+        detail = {
+            "message": "Endpoint ini hanya untuk profil gambar (foto_profile).",
+            "document_type": doc_type,
+            "document_profile_id": canonical_id,
+        }
+        log_safe_failure(subsystem=sub, method="POST", path=path, http_status=400, detail=detail)
+        raise HTTPException(status_code=400, detail=detail)
+
+    try:
+        bgr, decode_meta = decode_image_bytes_bgr(raw)
+    except Exception as e:
+        log_safe_failure(subsystem=sub, method="POST", path=path, http_status=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    detail = validate_foto_profile(
+        bgr,
+        document_type=doc_type,
+        expected_name=expected_name.strip(),
+    )
+    analysis_bgr = detail.pop("_analysis_bgr", None)
+    payload = {
+        "success": True,
+        "valid": detail.get("document_matched"),
+        "document_profile_id": canonical_id,
+        "keywords_from_profile": keywords,
+        "decode": decode_meta,
+        **detail,
+    }
+    write_last_tuning_log(
+        {
+            "success": True,
+            "subsystem": sub,
+            "method": "POST",
+            "path": path,
+            "input_bytes": len(raw),
+            "request": {
+                "document_type": doc_type,
+                "expected_name_chars": len(expected_name.strip()),
+            },
+            "decode": decode_meta,
             "result": summarize_validation_result(payload),
         }
     )

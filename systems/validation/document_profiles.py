@@ -18,12 +18,37 @@ CANONICAL_KEYWORDS: Final[dict[str, list[str]]] = {
     ],
     "npwp": ["npwp", "pajak", "wajib pajak"],
     "kk": ["kartu keluarga", "kepala keluarga", "nik"],
+    # Rekening: hanya tabungan; e-statement dilarang (lihat PROFILE_EXCLUDED_KEYWORDS).
+    "rekening": ["tabungan"],
+    # Mutasi: tabungan + e-statement wajib keduanya.
+    "mutasi": ["tabungan", "e-statement"],
+    "skck": ["skck", "kepolisian"],
+    # Validasi berbasis gambar (wajah + latar biru), bukan OCR keyword.
+    "foto_profile": [],
+}
+
+# Profil yang divalidasi dari pixel gambar, bukan teks OCR.
+IMAGE_ONLY_PROFILES: Final[frozenset[str]] = frozenset({"foto_profile"})
+
+# Screenshot aplikasi / e-statement — jangan crop kartu atau full-bleed di preprocessing.
+SCREEN_CAPTURE_PROFILES: Final[frozenset[str]] = frozenset({"mutasi", "rekening"})
+
+# Profil yang tidak memvalidasi nama vs expected_name (hanya keyword dokumen).
+PROFILES_WITHOUT_IDENTITY: Final[frozenset[str]] = frozenset({"mutasi"})
+
+# Keyword yang membuat profil gagal bila terdeteksi di OCR (fuzzy).
+PROFILE_EXCLUDED_KEYWORDS: Final[dict[str, list[str]]] = {
+    "rekening": ["e-statement"],
 }
 
 PROFILE_LABELS: Final[dict[str, str]] = {
     "ktp": "KTP",
     "npwp": "NPWP",
     "kk": "Kartu Keluarga",
+    "rekening": "Rekening",
+    "mutasi": "Mutasi",
+    "skck": "SKCK",
+    "foto_profile": "Foto Profil",
 }
 
 # Sinonim input pengguna (setelah strip + casefold, spasi tunggal antar kata)
@@ -34,6 +59,16 @@ ALIASES: Final[dict[str, str]] = {
     "identitas": "ktp",
     "nomor pokok wajib pajak": "npwp",
     "npwp 16 digit": "npwp",
+    "rekening koran": "rekening",
+    "rekening tabungan": "rekening",
+    "mutasi rekening": "mutasi",
+    "e-statement": "mutasi",
+    "surat keterangan catatan kepolisian": "skck",
+    "foto profil": "foto_profile",
+    "foto profile": "foto_profile",
+    "pas foto": "foto_profile",
+    "pass foto": "foto_profile",
+    "passport photo": "foto_profile",
 }
 
 
@@ -44,6 +79,37 @@ def list_supported_document_types() -> list[str]:
 def profile_label(profile_id: str) -> str:
     pid = (profile_id or "").strip().casefold()
     return PROFILE_LABELS.get(pid, profile_id.upper() if profile_id else "")
+
+
+def is_image_only_profile(profile_id: str) -> bool:
+    pid = (profile_id or "").strip().casefold()
+    return pid in IMAGE_ONLY_PROFILES
+
+
+def is_screen_capture_profile(profile_id: str) -> bool:
+    pid = (profile_id or "").strip().casefold()
+    return pid in SCREEN_CAPTURE_PROFILES
+
+
+def skip_physical_preprocess_isolation(profile_id: str) -> bool:
+    """
+    Lewati deteksi bidang kartu / full-bleed di preprocessing.
+
+    Screenshot mutasi/rekening dan foto profil (crop biru hanya di validasi foto_profile).
+    """
+    pid = (profile_id or "").strip().casefold()
+    return pid in IMAGE_ONLY_PROFILES or pid in SCREEN_CAPTURE_PROFILES
+
+
+def skip_identity_validation(profile_id: str) -> bool:
+    """Profil yang tidak membandingkan nama diekstrak vs expected_name."""
+    pid = (profile_id or "").strip().casefold()
+    return pid in PROFILES_WITHOUT_IDENTITY
+
+
+def excluded_keywords_for_profile(profile_id: str) -> list[str]:
+    pid = (profile_id or "").strip().casefold()
+    return list(PROFILE_EXCLUDED_KEYWORDS.get(pid, []))
 
 
 def resolve_keywords(document_type: str) -> tuple[str, list[str]] | None:

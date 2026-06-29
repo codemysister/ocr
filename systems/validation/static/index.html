@@ -8,7 +8,9 @@
     body { font-family: system-ui, sans-serif; max-width: 42rem; margin: 2rem auto; padding: 0 1rem; color: #1a1a1a; }
     h1 { font-size: 1.25rem; }
     label { display: block; font-weight: 600; margin-top: 1rem; }
-    textarea, input[type="number"], input[type="text"] { width: 100%; box-sizing: border-box; margin-top: 0.35rem; padding: 0.5rem; font: inherit; }
+    textarea, input[type="number"], select {
+      width: 100%; box-sizing: border-box; margin-top: 0.35rem; padding: 0.5rem; font: inherit;
+    }
     textarea { min-height: 4rem; resize: vertical; }
     button { margin-top: 1.25rem; padding: 0.6rem 1rem; font-weight: 600; cursor: pointer; }
     pre { background: #f4f4f5; padding: 1rem; overflow: auto; border-radius: 8px; font-size: 0.85rem; }
@@ -39,8 +41,16 @@
     <strong>Dokumen cocok</strong> = tipe lolos dan (tanpa nama referensi atau identitas lolos).
   </p>
   <form id="f">
-    <label for="doc">Jenis dokumen <span class="hint">(mis. KTP, NPWP — lihat <code>/systems/validation/health</code>)</span></label>
-    <input id="doc" type="text" name="doc" placeholder="KTP" required />
+    <label for="doc">Jenis dokumen</label>
+    <select id="doc" name="doc" required>
+      <option value="" disabled selected>Pilih jenis dokumen…</option>
+      <option value="ktp">KTP</option>
+      <option value="npwp">NPWP</option>
+      <option value="kk">Kartu Keluarga (KK)</option>
+      <option value="rekening">Rekening tabungan</option>
+      <option value="mutasi">Mutasi / e-statement</option>
+      <option value="skck">SKCK</option>
+    </select>
     <label for="ocr">Hasil OCR</label>
     <textarea id="ocr" name="ocr" placeholder="Teks lengkap hasil OCR…" required></textarea>
     <label for="expected">Nama referensi <span class="hint">(opsional — kosongkan hanya cek keyword)</span></label>
