@@ -17,10 +17,15 @@ from systems.validation.document_profiles import (
 )
 from systems.validation.name_extraction import (
     extract_holder_name_candidate,
+    extract_iuran_participant_names,
     extract_jkn_participant_names,
     extract_kk_member_names,
+    extract_vaksinasi_1_names,
+    iuran_modal_only_state,
     person_like_segments,
     sliding_name_windows,
+    vaksinasi_1_first_dose_signal,
+    vaksinasi_1_wrong_dose_primary,
 )
 
 try:
@@ -268,6 +273,15 @@ _EXTRACTION_METHOD_ID: dict[str, str] = {
     "kk_table_first_member": "anggota pertama pada tabel Kartu Keluarga",
     "jkn_caps_name": "nama peserta JKN (huruf kapital di kartu Info Peserta)",
     "jkn_participant_name": "nama peserta JKN pada kartu Mobile JKN",
+    "bpjs_after_nama": "nama pada kartu KIS setelah label Nama",
+    "bpjs_caps_name": "nama peserta pada kartu KIS (huruf kapital)",
+    "bpjs_tk_caps_name": "nama peserta pada kartu BPJS Ketenagakerjaan",
+    "bpjs_kesanggupan_name": "nama pada surat pernyataan kesanggupan BPJS",
+    "iuran_participant_name": "nama peserta pada kartu Info Iuran",
+    "iuran_modal_no_name_displayed": (
+        "layar modal Info Iuran tanpa tagihan pribadi — nama tidak ditampilkan di layar"
+    ),
+    "vaksinasi_1_recipient_name": "nama penerima pada sertifikat/kartu vaksin dosis 1",
     "failed": "tidak berhasil menarik nama dari OCR",
     "skipped_no_expected_name": "nama referensi kosong — identitas tidak diuji",
     "skipped_profile_no_identity": "profil dokumen tidak memeriksa nama (mis. mutasi)",
@@ -591,11 +605,49 @@ def _profile_structural_boost(profile_id: str, ocr_n: str) -> float:
             return 0.08
     if pid == "skck" and _ocr_has_keyword_signal(ocr_n, "skck"):
         return 0.08
+    if pid == "bpjs":
+        bonus = 0.0
+        if _ocr_has_keyword_signal(ocr_n, "kartu indonesia sehat"):
+            bonus += 0.06
+        if re.search(r"\b0\d{12}\b", ocr_n.replace(" ", "")):
+            bonus += 0.04
+        if re.search(r"\b\d{16}\b", ocr_n):
+            bonus += 0.04
+        return min(0.10, bonus)
+    if pid == "bpjs_tk":
+        bonus = 0.0
+        if _ocr_has_keyword_signal(ocr_n, "kartu peserta"):
+            bonus += 0.05
+        if _ocr_has_keyword_signal(ocr_n, "ketenagakerjaan"):
+            bonus += 0.05
+        compact = re.sub(r"\s+", "", ocr_n)
+        if re.search(r"\d{11}", compact):
+            bonus += 0.04
+        return min(0.10, bonus)
+    if pid == "bpjs_kesanggupan":
+        bonus = 0.0
+        if _ocr_has_keyword_signal(ocr_n, "surat pernyataan kesanggupan"):
+            bonus += 0.06
+        if _ocr_has_keyword_signal(ocr_n, "tidak aktif"):
+            bonus += 0.04
+        return min(0.10, bonus)
     if pid == "jkn":
         if _ocr_has_keyword_signal(ocr_n, "info peserta"):
             return 0.08
         if _ocr_has_keyword_signal(ocr_n, "faskes"):
             return 0.06
+    if pid == "iuran":
+        if _ocr_has_keyword_signal(ocr_n, "info iuran"):
+            return 0.08
+        if _ocr_has_keyword_signal(ocr_n, "total tagihan"):
+            return 0.06
+    if pid == "vaksinasi_1":
+        bonus = 0.0
+        if _ocr_has_keyword_signal(ocr_n, "kartu vaksinasi covid"):
+            bonus += 0.05
+        if vaksinasi_1_first_dose_signal(ocr_n):
+            bonus += 0.05
+        return min(0.10, bonus)
     return 0.0
 
 
@@ -639,11 +691,46 @@ def _detection_tiebreak_bonus(profile_id: str, ocr_n: str, hint_profile_id: str)
             bonus += 1.0
     if pid == "skck" and _ocr_has_keyword_signal(ocr_n, "skck"):
         bonus += 1.0
+    if pid == "bpjs":
+        if _ocr_has_keyword_signal(ocr_n, "kartu indonesia sehat"):
+            bonus += 1.25
+        elif _ocr_has_keyword_signal(ocr_n, "bpjs kesehatan"):
+            bonus += 1.0
+        elif _ocr_has_keyword_signal(ocr_n, "nomor kartu"):
+            bonus += 0.75
+    if pid == "bpjs_tk":
+        if _ocr_has_keyword_signal(ocr_n, "bpjs ketenagakerjaan"):
+            bonus += 1.25
+        elif _ocr_has_keyword_signal(ocr_n, "ketenagakerjaan"):
+            bonus += 1.0
+        elif _ocr_has_keyword_signal(ocr_n, "kartu peserta"):
+            bonus += 0.75
+    if pid == "bpjs_kesanggupan":
+        if _ocr_has_keyword_signal(ocr_n, "surat pernyataan kesanggupan"):
+            bonus += 1.25
+        elif _ocr_has_keyword_signal(ocr_n, "menanggung biaya bpjs"):
+            bonus += 1.0
+        elif _ocr_has_keyword_signal(ocr_n, "syarat bekerja"):
+            bonus += 0.75
     if pid == "jkn":
         if _ocr_has_keyword_signal(ocr_n, "info peserta"):
             bonus += 1.25
         elif _ocr_has_keyword_signal(ocr_n, "faskes"):
             bonus += 1.0
+    if pid == "iuran":
+        if _ocr_has_keyword_signal(ocr_n, "info iuran"):
+            bonus += 1.25
+        elif _ocr_has_keyword_signal(ocr_n, "total tagihan"):
+            bonus += 1.0
+        elif _ocr_has_keyword_signal(ocr_n, "tidak memiliki tagihan pribadi"):
+            bonus += 0.75
+    if pid == "vaksinasi_1":
+        if _ocr_has_keyword_signal(ocr_n, "vaksin primer 1"):
+            bonus += 1.25
+        elif vaksinasi_1_first_dose_signal(ocr_n):
+            bonus += 1.0
+        elif _ocr_has_keyword_signal(ocr_n, "kartu vaksinasi covid"):
+            bonus += 0.75
     if pid == hint and hint:
         bonus += 0.5
     return bonus
@@ -841,6 +928,31 @@ def validate_document_ocr(
     ]
     any_groups_pass = bool(profile_eval.get("any_groups_pass", True))
     has_any_groups = bool(profile_eval.get("any_groups"))
+    if profile == "vaksinasi_1" and vaksinasi_1_wrong_dose_primary(ocr_text):
+        exclusion_violated = True
+        profile_eval["exclusion_violated"] = True
+        profile_eval["aggregate"] = 0.0
+    if (
+        profile == "iuran"
+        and has_any_groups
+        and not any_groups_pass
+        and not profile_eval.get("exclusion_violated")
+        and iuran_modal_only_state(ocr_text)
+    ):
+        groups_meta = profile_eval.get("any_groups") or []
+        if len(groups_meta) >= 2 and groups_meta[1].get("pass"):
+            any_groups_pass = True
+    if (
+        profile == "vaksinasi_1"
+        and has_any_groups
+        and not any_groups_pass
+        and not profile_eval.get("exclusion_violated")
+        and vaksinasi_1_first_dose_signal(ocr_text)
+        and not vaksinasi_1_wrong_dose_primary(ocr_text)
+    ):
+        groups_meta = profile_eval.get("any_groups") or []
+        if len(groups_meta) >= 2 and groups_meta[0].get("pass"):
+            any_groups_pass = True
 
     document_type_boosts = _document_type_score_boosts(profile, ocr_n, mistral_annotation)
     boost_total = min(0.15, sum(document_type_boosts.values()))
@@ -926,7 +1038,33 @@ def validate_document_ocr(
                 )
                 scored.append((scv, name, "jkn_participant_name"))
 
-        if not ann_name and not (profile == "jkn" and jkn_names):
+        iuran_names = extract_iuran_participant_names(ocr_text) if profile == "iuran" else []
+        if profile == "iuran" and not ann_name:
+            for name in iuran_names:
+                scv = float(
+                    compare_extracted_identity_scores(name, expected_name)[
+                        "identity_combined_score"
+                    ]
+                )
+                scored.append((scv, name, "iuran_participant_name"))
+
+        vax_names = extract_vaksinasi_1_names(ocr_text) if profile == "vaksinasi_1" else []
+        if profile == "vaksinasi_1" and not ann_name:
+            for name in vax_names:
+                scv = float(
+                    compare_extracted_identity_scores(name, expected_name)[
+                        "identity_combined_score"
+                    ]
+                )
+                scored.append((scv, name, "vaksinasi_1_recipient_name"))
+
+        skip_person_like = (
+            (profile == "jkn" and jkn_names)
+            or (profile == "iuran" and iuran_names)
+            or (profile == "iuran" and iuran_modal_only_state(ocr_text))
+            or (profile == "vaksinasi_1" and vax_names)
+        )
+        if not ann_name and not skip_person_like:
             window_sources: list[tuple[str, str]] = [(ocr_text, "person_like_segment")]
             for seg in person_like_segments(ocr_text):
                 window_sources.append((seg, "person_like_segment"))
@@ -971,7 +1109,23 @@ def validate_document_ocr(
             "candidate_normalized": _normalize_name(raw_cand) if raw_cand else "",
             "method": method,
         }
-        if raw_cand:
+        if profile == "iuran" and iuran_modal_only_state(ocr_text) and document_type_pass:
+            identity_pass = True
+            identity = {
+                "extracted_normalized": "",
+                "expected_normalized": _normalize(expected_name),
+                "scores": {"token_sort_ratio": 0.0, "wratio": 0.0, "partial_ratio": 0.0},
+                "identity_combined_score": 0.0,
+                "identity_combined_ratio": 0.0,
+                "extraction_failed": False,
+                "iuran_modal_skip": True,
+                "note": (
+                    "Layar modal Info Iuran tanpa tagihan pribadi — nama tidak ditampilkan; "
+                    "identitas dianggap lolos bila profil keyword iuran lulus."
+                ),
+            }
+            name_extraction["method"] = "iuran_modal_no_name_displayed"
+        elif raw_cand:
             identity = compare_extracted_identity_scores(raw_cand, expected_name)
             identity_pass = float(identity["identity_combined_score"]) >= id_min
         else:

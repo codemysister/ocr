@@ -36,7 +36,21 @@ String yang dikirim klien untuk menentukan **profil validasi**. Server menormali
 | `rekening` | Rekening | OCR + keyword fuzzy |
 | `mutasi` | Mutasi | OCR + keyword fuzzy |
 | `skck` | SKCK | OCR + keyword fuzzy |
+| `bpjs` | BPJS Kesehatan (KIS) | OCR + keyword fuzzy + identitas |
+| `bpjs_tk` | BPJS Ketenagakerjaan | OCR + keyword AND/OR + identitas |
+| `bpjs_kesanggupan` | Kesanggupan BPJS Kesehatan | OCR + keyword AND/OR + identitas |
 | `jkn` | JKN (Info Peserta) | OCR + keyword OR + identitas |
+| `iuran` | Iuran JKN (Info Iuran) | OCR + keyword AND/OR + identitas |
+| `vaksinasi_1` | Vaksinasi COVID-19 (Dosis 1) | OCR + keyword AND/OR + identitas |
+| `vaksinasi_2` | Vaksinasi COVID-19 (Dosis 2) | OCR + keyword AND/OR + identitas |
+| `vaksinasi_3` | Vaksinasi COVID-19 (Dosis 3 / Booster) | OCR + keyword AND/OR + identitas |
+| `ijasah` | Ijazah | OCR + keyword fuzzy |
+| `transkrip` | Transkrip Nilai | OCR + keyword fuzzy |
+| `formulir_okb` | Formulir OKB | OCR + keyword fuzzy |
+| `formulir_lamaran` | Formulir Lamaran Pekerjaan | OCR + keyword fuzzy |
+| `surat_lamaran` | Surat Lamaran | OCR + keyword fuzzy |
+| `pemadanan_npwp` | Pemadanan NPWP | OCR + keyword fuzzy |
+| `keterangan_kesehatan` | Surat Keterangan Kesehatan | OCR + keyword fuzzy |
 | `foto_profile` | Foto Profil | **Gambar** (wajah + latar biru) |
 | `cv` | CV | **Ingest + search** (tanpa validasi OCR) |
 
@@ -101,6 +115,9 @@ valid = document_matched = face_pass AND blue_background_pass
 | POST | `/systems/validation/api/v1/validate-document` | JSON | Validasi teks OCR vs profil |
 | POST | `/systems/validation/api/v1/validate-foto-profile` | multipart | Validasi foto profil biru |
 | POST | `/systems/validation/api/v1/compare-names` | JSON | Bandingkan dua string nama |
+| GET | `/api/v1/dataset/types` | — | Daftar folder `dataset/` + pemetaan `document_type` |
+| POST | `/api/v1/dataset/benchmark` | JSON | Benchmark pipeline terhadap file dataset (NDJSON stream) |
+| GET | `/dataset-test` | — | UI benchmark dataset (dev) |
 
 ---
 
@@ -228,7 +245,12 @@ flowchart TD
 | Rekening | `rekening`, `rekening tabungan` | Opsional | ✅ | Ada `tabungan`, **tidak** ada `e-statement` |
 | Mutasi | `mutasi`, `e-statement` | Tidak dipakai | ✅ | Ada `tabungan` **dan** `e-statement` (tanpa cek nama) |
 | SKCK | `skck` | Opsional | ✅ | Ada `skck` / `kepolisian` |
-| JKN | `jkn`, `info peserta`, `bpjs kesehatan` | **Disarankan wajib** | ✅ | Ada `info peserta` **atau** `faskes` **dan** identitas ≥65 (jika nama diisi) |
+| BPJS KIS | `bpjs`, `bpjs kesehatan`, `kartu indonesia sehat` | **Disarankan wajib** | ✅ | Keyword KIS ≥70% **dan** identitas (jika nama diisi) |
+| BPJS TK | `bpjs_tk`, `bpjs ketenagakerjaan` | **Disarankan wajib** | ✅ | Keyword kartu TK ≥70% **dan** identitas (jika nama diisi) |
+| Kesanggupan BPJS | `bpjs_kesanggupan`, `kesanggupan bpjs` | **Disarankan wajib** | ✅ | Surat kesanggupan ≥70% **dan** identitas (jika nama diisi) |
+| JKN | `jkn`, `info peserta` | **Disarankan wajib** | ✅ | Ada `info peserta` **atau** `faskes` **dan** identitas ≥65 (jika nama diisi) |
+| Iuran JKN | `iuran`, `info iuran`, `iuran jkn` | **Disarankan wajib** | ✅ | Ada `info iuran` **dan** (salah satu keyword konten) **dan** identitas (modal tanpa nama: skip) |
+| Vaksinasi 1 | `vaksinasi_1`, `vaksinasi 1`, `vaksin dosis pertama` | **Disarankan wajib** | ✅ | Kartu/surat dosis 1 ≥70% **dan** identitas (jika nama diisi) |
 | Foto Profil | `foto_profile`, `pas foto` | Tidak dipakai | ❌ | 1 wajah + latar biru cukup |
 | CV | `cv`, `resume`, `curriculum vitae` | Opsional (jadi query search) | ❌ | Ingest sukses ke index; search opsional |
 
@@ -343,9 +365,86 @@ curl -X POST "http://127.0.0.1:8001/api/v1/pipeline" \
 
 ---
 
+---
+
+### `bpjs`
+
+**Alias:** `bpjs kesehatan`, `kartu indonesia sehat`, `kis`, `kartu kis`
+
+**Dokumen:** Kartu Indonesia Sehat (KIS) — kartu fisik/digital BPJS Kesehatan.
+
+**Keyword (fuzzy, rata-rata ≥70%):**
+
+- `kartu indonesia sehat`, `bpjs kesehatan`, `nomor kartu`, `nik`, `faskes`, `syarat dan ketentuan`
+
+**Identitas:** Ekstraksi nama dari label `Nama` atau baris huruf kapital di kartu; dibandingkan dengan `expected_name` bila diisi.
+
+**Keyword terlarang (exclusion):** `info iuran`, `kepesertaan terdaftar`, `kartu vaksinasi covid`, `vaksin booster`, `bpjs ketenagakerjaan`, `ketenagakerjaan`
+
+**Preprocess:** Foto kartu fisik — gunakan isolasi kartu seperti KTP (`PREPROCESS_CARD_WARP=1`).
+
+```bash
+curl -X POST "http://127.0.0.1:8001/api/v1/pipeline" \
+  -F "file=@bpjs_Bagus.jpg" \
+  -F "document_type=bpjs" \
+  -F "expected_name=Bagus Junda Winata"
+```
+
+---
+
+### `bpjs_tk`
+
+**Alias:** `bpjs ketenagakerjaan`, `bpjs tk`, `jaminan ketenagakerjaan`, `kartu peserta bpjs`
+
+**Dokumen:** Kartu Peserta BPJS Ketenagakerjaan (jaminan sosial tenaga kerja).
+
+**Keyword (fuzzy ≥70%, AND antar grup):**
+
+1. Wajib: `kartu peserta`
+2. Minimal satu dari: `ketenagakerjaan`, `bpjs ketenagakerjaan`
+
+**Identitas:** Nama peserta (huruf kapital di kartu) dibandingkan dengan `expected_name` bila diisi.
+
+**Keyword terlarang (exclusion):** `syarat dan ketentuan`, `faskes tingkat`, `info iuran`, `kepesertaan terdaftar`
+
+**Preprocess:** Foto kartu fisik — isolasi kartu seperti KTP.
+
+```bash
+curl -X POST "http://127.0.0.1:8001/api/v1/pipeline" \
+  -F "file=@bpjs_tk_Jorgi.jpg" \
+  -F "document_type=bpjs_tk" \
+  -F "expected_name=Jorgi Korleone"
+```
+
+---
+
+### `bpjs_kesanggupan`
+
+**Alias:** `kesanggupan bpjs`, `bpjs kesanggupan`, `surat kesanggupan bpjs`, `surat pernyataan kesanggupan`, `kesanggupan menanggung biaya`
+
+**Dokumen:** Surat Pernyataan Kesanggupan Menanggung Biaya BPJS Kesehatan (karyawan).
+
+**Keyword (fuzzy ≥70%, AND antar grup):**
+
+1. Minimal satu: `surat pernyataan kesanggupan`, `menanggung biaya bpjs kesehatan`, `menanggung biaya bpjs`
+2. Minimal satu: `tidak aktif`, `menanggung secara pribadi`, `syarat bekerja`, `peserta mandiri`, `virtual account`
+
+**Identitas:** Nama dari field `Nama Lengkap` / tanda tangan; dibandingkan dengan `expected_name` bila diisi.
+
+**Keyword terlarang (exclusion):** `kartu indonesia sehat`, `ketenagakerjaan`
+
+```bash
+curl -X POST "http://127.0.0.1:8001/api/v1/pipeline" \
+  -F "file=@bpjs_kesanggupan.jpg" \
+  -F "document_type=bpjs_kesanggupan" \
+  -F "expected_name=Egy Subagja"
+```
+
+---
+
 ### `jkn`
 
-**Alias:** `jaminan kesehatan nasional`, `bpjs kesehatan`, `info peserta`, `mobile jkn`
+**Alias:** `jaminan kesehatan nasional`, `info peserta`, `mobile jkn`
 
 **Keyword (minimal satu harus terbaca, fuzzy ≥70%):**
 
@@ -353,12 +452,83 @@ curl -X POST "http://127.0.0.1:8001/api/v1/pipeline" \
 
 **Identitas:** Wajib dicek bila `expected_name` diisi — nama peserta di kartu Mobile JKN (biasanya huruf kapital) dibandingkan dengan referensi.
 
+**Keyword terlarang (exclusion):** `info iuran`, `total tagihan`, `tidak memiliki tagihan pribadi`
+
 **Preprocess:** Screenshot aplikasi — isolasi kartu fisik dilewati (sama seperti mutasi/rekening).
 
 ```bash
 curl -X POST "http://127.0.0.1:8001/api/v1/pipeline" \
   -F "file=@JKN_Info_Peserta.jpg" \
   -F "document_type=jkn" \
+  -F "expected_name=Bagus Junda Winata"
+```
+
+---
+
+### `iuran`
+
+**Alias:** `info iuran`, `iuran jkn`, `tagihan jkn`, `iuran bpjs`
+
+**Layar:** Mobile JKN → **Info Iuran** (bukan Info Peserta).
+
+**Keyword (fuzzy ≥70%, AND antar grup):**
+
+1. Wajib: `info iuran`
+2. Minimal satu dari: `total tagihan`, `sisa saldo`, `tidak memiliki tagihan pribadi`, `jenis peserta tidak terkategori`, `batas waktu pembayaran`
+
+**Case yang didukung:**
+
+| Case | Ciri layar |
+|------|------------|
+| A — ada kartu peserta | Nama + Sisa Saldo / Tagihan / Total Tagihan |
+| B — modal tanpa tagihan | «Jenis Peserta Tidak Terkategori… tidak memiliki tagihan pribadi» |
+
+**Identitas:** Bila `expected_name` diisi — cocokkan nama di kartu (Case A). Case B (modal): identitas **lolos otomatis** karena nama tidak ditampilkan di layar.
+
+**Keyword terlarang (exclusion):** `faskes 1`, `kepesertaan terdaftar`, `jenis tampilan` (layar Info Peserta)
+
+**Preprocess:** Screenshot aplikasi — isolasi kartu fisik dilewati.
+
+```bash
+curl -X POST "http://127.0.0.1:8001/api/v1/pipeline" \
+  -F "file=@iuran_Jorgi.jpg" \
+  -F "document_type=iuran" \
+  -F "expected_name=Jorgi Korleone"
+```
+
+---
+
+### `vaksinasi_1`
+
+**Alias:** `vaksinasi 1`, `vaksinasi covid dosis 1`, `sertifikat vaksin covid`, `kartu vaksinasi covid`, `vaksin dosis pertama`, `covid-19 vaksin dosis pertama`
+
+**Dokumen:** Kartu / surat / screenshot aplikasi yang membuktikan **vaksinasi COVID-19 dosis pertama**.
+
+**Keyword (fuzzy ≥70%, AND antar grup):**
+
+1. Minimal satu: `kartu vaksinasi covid`, `surat keterangan vaksinasi`, `covid-19 vaksin`, `sertifikat vaksinasi covid`, `international covid-19 vaccination`
+2. Minimal satu: `vaksin primer 1`, `dosis pertama`, `1st dose`, `vaksin dosis pertama`, `telah selesai di vaksin 1`, `untuk dosis pertama`
+
+**Case yang didukung:**
+
+| Case | Ciri dokumen |
+|------|----------------|
+| A — Kartu SATUSEHAT | `Kartu Vaksinasi COVID-19` + `VAKSIN PRIMER 1` |
+| B — Screenshot aplikasi | `COVID-19 Vaksin Dosis Pertama` + `Diberikan kepada` |
+| C — Surat keterangan | `Surat Keterangan Vaksinasi COVID-19` + `dosis pertama` / `1st dose` |
+| D — Riwayat vaksin (GERMAS) | `KARTU VAKSINASI COVID-19` + `TELAH SELESAI DI VAKSIN 1` |
+| E — Sertifikat internasional | Sertifikat internasional + baris dosis pertama bernilai `1` |
+
+**Identitas:** Nama penerima vaksin (huruf kapital di kartu, field `Diberikan kepada`, atau `Nama Lengkap`); dibandingkan dengan `expected_name` bila diisi.
+
+**Keyword terlarang (exclusion):** `info peserta`, `info iuran` — kartu primer 2/booster tanpa dosis 1 ditolak via pengecekan struktural (`vaksinasi_1_wrong_dose_primary`)
+
+**Preprocess:** Screenshot aplikasi — isolasi kartu fisik dilewati.
+
+```bash
+curl -X POST "http://127.0.0.1:8001/api/v1/pipeline" \
+  -F "file=@vaksinasi_1_Bagus.jpg" \
+  -F "document_type=vaksinasi_1" \
   -F "expected_name=Bagus Junda Winata"
 ```
 
@@ -422,6 +592,48 @@ curl -X POST "http://127.0.0.1:8001/systems/validation/api/v1/validate-foto-prof
 | `FOTO_PROFILE_FACE_MAX_AREA_RATIO` | `0.75` |
 
 **Catatan:** `expected_name` **tidak** memvalidasi identitas wajah vs nama (belum ada face recognition). Field diabaikan untuk gate.
+
+---
+
+## Dataset benchmark (dev / QA)
+
+Uji otomatis pipeline terhadap file di folder `dataset/` (pola nama: `{folder}_{Nama}_{NIK16}.ext`).
+
+### `GET /api/v1/dataset/types`
+
+Mengembalikan daftar subfolder dataset, jumlah file, ID kanonik, dan label.
+
+### `POST /api/v1/dataset/benchmark`
+
+**Body (JSON):**
+
+```json
+{
+  "selections": [
+    { "folder": "ktp", "enabled": true, "limit": 10 }
+  ],
+  "ocr_mode": "fast",
+  "pp_ocr_tier": "medium",
+  "use_expected_name": true
+}
+```
+
+**Respons:** stream `application/x-ndjson` — event `progress`, `result`, lalu `summary`.
+
+**Keberhasilan benchmark** = `document_matched == true` (sama gate validasi pipeline).
+
+**Statistik ringkasan (`summary.stats`):**
+
+| Field | Arti |
+|-------|------|
+| `validation_pass` | Lolos validasi |
+| `validation_fail` | Pipeline OK tapi validasi gagal |
+| `pipeline_error` | Decode/OCR/exception |
+| `success_ratio` | `validation_pass / total` |
+| `failure_ratio` | `validation_fail / total` |
+| `timing_avg_s` | Rata-rata detik per tahap: `preprocess`, `ocr`, `validation`, `total` |
+
+UI: [`/dataset-test`](http://127.0.0.1:8001/dataset-test)
 
 ---
 
@@ -634,6 +846,12 @@ Untuk `foto_profile`, `is_own_document` selalu `null` (identitas dari gambar bel
 | `FOTO_PROFILE_FACE_MIN_AREA_RATIO` | `0.03` |
 | `FOTO_PROFILE_FACE_MAX_AREA_RATIO` | `0.75` |
 
+### Dataset benchmark
+
+| Env | Default | Fungsi |
+|-----|---------|--------|
+| `DATASET_ROOT` | `{repo}/dataset` | Path folder dataset untuk benchmark |
+
 ### Observability
 
 | Env | Default |
@@ -658,6 +876,7 @@ Log berisi ringkasan request terakhir per subsistem (overwrite tiap panggilan).
 | Upload CV + index | `POST /api/v1/pipeline` | `cv` (+ `cv_search_query` opsional) |
 | Validasi teks OCR manual | `POST /systems/validation/api/v1/validate-document` | sesuai profil |
 | Validasi pas foto saja | `POST /systems/validation/api/v1/validate-foto-profile` | `foto_profile` |
+| QA batch dari dataset lokal | `POST /api/v1/dataset/benchmark` | per folder dataset |
 
 **Decision tree:**
 
@@ -667,4 +886,4 @@ Log berisi ringkasan request terakhir per subsistem (overwrite tiap panggilan).
 
 ---
 
-*Versi spec: 1.1 — OCR default pipeline: PP-OCRv6 (`ocr_mode=fast`, tier `medium`).*
+*Versi spec: 1.2 — Tambah profil dokumen dataset (ijasah, transkrip, dll.) + endpoint benchmark dataset.*

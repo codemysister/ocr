@@ -1,0 +1,512 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Dataset Benchmark — OCR Platform</title>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --surface: #1a222d;
+      --border: #2d3a4d;
+      --text: #e8eef5;
+      --muted: #8b9cb3;
+      --accent: #3d9cf5;
+      --ok: #6ee7b7;
+      --err: #f87171;
+      --warn: #fbbf24;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "DM Sans", system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }
+    header {
+      padding: 1.5rem clamp(1rem, 4vw, 2.5rem);
+      border-bottom: 1px solid var(--border);
+      background: linear-gradient(180deg, #151c26 0%, var(--bg) 100%);
+    }
+    header h1 { margin: 0; font-size: clamp(1.15rem, 2.5vw, 1.5rem); font-weight: 600; }
+    header p { margin: 0.35rem 0 0; color: var(--muted); font-size: 0.9rem; max-width: 52rem; }
+    .nav-top { margin-top: 0.75rem; }
+    .nav-top a { color: var(--accent); font-size: 0.875rem; margin-right: 1rem; }
+    main {
+      padding: clamp(1rem, 3vw, 2rem);
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+    .panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.25rem;
+      margin-bottom: 1.25rem;
+    }
+    .panel h2 {
+      margin: 0 0 1rem;
+      font-size: 0.85rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--muted);
+    }
+    .row { display: grid; gap: 1rem; grid-template-columns: 1fr; }
+    @media (min-width: 720px) {
+      .row.three { grid-template-columns: 1fr 1fr 1fr; }
+      .row.two { grid-template-columns: 1fr 1fr; }
+    }
+    label.block {
+      display: block;
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: var(--muted);
+      margin-bottom: 0.35rem;
+    }
+    input[type="text"],
+    input[type="number"],
+    select {
+      width: 100%;
+      font-family: inherit;
+      font-size: 0.9rem;
+      padding: 0.55rem 0.65rem;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: #0a0e14;
+      color: var(--text);
+    }
+    input[type="checkbox"] { accent-color: var(--accent); }
+    button {
+      font-family: inherit;
+      font-size: 0.9rem;
+      font-weight: 600;
+      padding: 0.6rem 1.2rem;
+      border-radius: 8px;
+      border: none;
+      cursor: pointer;
+      background: var(--accent);
+      color: #061018;
+    }
+    button:hover:not(:disabled) { background: #5aadff; }
+    button.secondary {
+      background: transparent;
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+    button.secondary:hover:not(:disabled) { border-color: var(--accent); }
+    button:disabled { opacity: 0.45; cursor: not-allowed; }
+    .controls { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: center; margin-bottom: 1rem; }
+    .hint { font-size: 0.8rem; color: var(--muted); }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.85rem;
+    }
+    th, td {
+      padding: 0.55rem 0.65rem;
+      text-align: left;
+      border-bottom: 1px solid var(--border);
+    }
+    th { color: var(--muted); font-weight: 600; font-size: 0.75rem; text-transform: uppercase; }
+    tr.unsupported td { opacity: 0.55; }
+    td.limit-cell input { width: 5rem; }
+    .badge {
+      display: inline-block;
+      font-size: 0.7rem;
+      padding: 0.15rem 0.45rem;
+      border-radius: 4px;
+      font-weight: 600;
+    }
+    .badge.ok { background: rgba(110, 231, 183, 0.15); color: var(--ok); }
+    .badge.no { background: rgba(248, 113, 113, 0.15); color: var(--err); }
+    .progress-wrap {
+      background: #0a0e14;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      height: 10px;
+      overflow: hidden;
+      margin: 0.75rem 0;
+    }
+    .progress-bar {
+      height: 100%;
+      background: var(--accent);
+      width: 0%;
+      transition: width 0.2s ease;
+    }
+    .status { font-size: 0.85rem; color: var(--muted); min-height: 1.25rem; }
+    .status.error { color: var(--err); }
+    .stats-grid {
+      display: grid;
+      gap: 0.75rem;
+      grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    }
+    .stat-card {
+      background: #0a0e14;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.75rem;
+    }
+    .stat-card .val { font-size: 1.35rem; font-weight: 700; }
+    .stat-card .lbl { font-size: 0.75rem; color: var(--muted); margin-top: 0.2rem; }
+    .stat-card.ok .val { color: var(--ok); }
+    .stat-card.err .val { color: var(--err); }
+    .stat-card.warn .val { color: var(--warn); }
+    .timing-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 1rem;
+      margin-top: 0.75rem;
+      font-size: 0.85rem;
+    }
+    .timing-row span { color: var(--muted); }
+    .timing-row strong { color: var(--text); }
+    .hidden { display: none !important; }
+    code { font-size: 0.8rem; background: #0a0e14; padding: 0.15rem 0.35rem; border-radius: 4px; }
+  </style>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;600&display=swap" rel="stylesheet" />
+</head>
+<body>
+  <header>
+    <h1>Dataset benchmark</h1>
+    <p>
+      Uji pipeline OCR terhadap file di folder <code>dataset/</code>.
+      Keberhasilan = <code>document_matched</code> (validasi keyword + nama).
+      Respons stream NDJSON dari <code>POST /api/v1/dataset/benchmark</code>.
+    </p>
+    <div class="nav-top">
+      <a href="/">← Beranda</a>
+      <a href="/pipeline">Pipeline manual</a>
+    </div>
+  </header>
+
+  <main>
+    <section class="panel">
+      <h2>Konfigurasi global</h2>
+      <div class="row three">
+        <div>
+          <label class="block" for="ocrMode">Engine OCR</label>
+          <select id="ocrMode">
+            <option value="fast" selected>fast (PP-OCRv6)</option>
+            <option value="mistral">mistral (cloud)</option>
+            <option value="vl">vl (PaddleOCR-VL)</option>
+          </select>
+        </div>
+        <div>
+          <label class="block" for="ppTier">PP-OCR tier</label>
+          <select id="ppTier">
+            <option value="balanced">balanced</option>
+            <option value="medium" selected>medium</option>
+            <option value="small">small</option>
+            <option value="tiny">tiny</option>
+          </select>
+        </div>
+        <div>
+          <label class="block">&nbsp;</label>
+          <label style="display:flex;align-items:center;gap:0.5rem;font-size:0.9rem;cursor:pointer;">
+            <input type="checkbox" id="useExpectedName" checked />
+            Pakai nama dari filename
+          </label>
+        </div>
+      </div>
+      <div class="controls" style="margin-top:1rem;margin-bottom:0;">
+        <div>
+          <label class="block" for="globalLimit">Limit default per jenis</label>
+          <input type="number" id="globalLimit" value="5" min="0" max="500" style="width:6rem;" />
+        </div>
+        <button type="button" class="secondary" id="btnApplyLimit">Terapkan ke semua</button>
+        <button type="button" class="secondary" id="btnSelectAll">Pilih semua</button>
+        <button type="button" class="secondary" id="btnSelectNone">Kosongkan</button>
+        <button type="button" id="btnRun">Jalankan test</button>
+        <button type="button" class="secondary hidden" id="btnDownload">Unduh JSON</button>
+      </div>
+      <p class="hint" id="datasetRootHint">Memuat daftar folder…</p>
+    </section>
+
+    <section class="panel">
+      <h2>Jenis dokumen</h2>
+      <div style="overflow-x:auto;">
+        <table>
+          <thead>
+            <tr>
+              <th style="width:2.5rem;"></th>
+              <th>Folder dataset</th>
+              <th>API type</th>
+              <th>File</th>
+              <th>Limit</th>
+            </tr>
+          </thead>
+          <tbody id="folderTable"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel hidden" id="progressPanel">
+      <h2>Progress</h2>
+      <div class="progress-wrap"><div class="progress-bar" id="progressBar"></div></div>
+      <div class="status" id="progressStatus">Menunggu…</div>
+    </section>
+
+    <section class="panel hidden" id="resultsPanel">
+      <h2>Hasil ringkasan</h2>
+      <div class="stats-grid" id="globalStats"></div>
+      <div class="timing-row" id="globalTiming"></div>
+      <h2 style="margin-top:1.5rem;">Per jenis dokumen</h2>
+      <div style="overflow-x:auto;">
+        <table>
+          <thead>
+            <tr>
+              <th>Folder</th>
+              <th>Total</th>
+              <th>Lolos</th>
+              <th>Gagal validasi</th>
+              <th>Error pipeline</th>
+              <th>Rasio sukses</th>
+              <th>Rasio gagal</th>
+              <th>Avg OCR (s)</th>
+              <th>Avg total (s)</th>
+            </tr>
+          </thead>
+          <tbody id="folderStatsTable"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const folderTable = document.getElementById("folderTable");
+    const datasetRootHint = document.getElementById("datasetRootHint");
+    const progressPanel = document.getElementById("progressPanel");
+    const progressBar = document.getElementById("progressBar");
+    const progressStatus = document.getElementById("progressStatus");
+    const resultsPanel = document.getElementById("resultsPanel");
+    const globalStats = document.getElementById("globalStats");
+    const globalTiming = document.getElementById("globalTiming");
+    const folderStatsTable = document.getElementById("folderStatsTable");
+    const btnRun = document.getElementById("btnRun");
+    const btnDownload = document.getElementById("btnDownload");
+
+    let folderRows = [];
+    let lastSummary = null;
+
+    function esc(s) {
+      return String(s ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    function pct(ratio) {
+      if (typeof ratio !== "number") return "—";
+      return (ratio * 100).toFixed(1) + "%";
+    }
+
+    function renderFolderTable() {
+      folderTable.innerHTML = folderRows.map((row, i) => {
+        const cls = row.supported ? "" : "unsupported";
+        const badge = row.supported
+          ? `<span class="badge ok">${esc(row.label)}</span>`
+          : `<span class="badge no">belum didukung</span>`;
+        return `<tr class="${cls}" data-idx="${i}">
+          <td><input type="checkbox" class="row-enable" ${row.supported ? "checked" : ""} ${row.supported ? "" : "disabled"} /></td>
+          <td>${esc(row.folder)}</td>
+          <td>${row.document_type ? esc(row.document_type) : "—"} ${badge}</td>
+          <td>${row.file_count}</td>
+          <td class="limit-cell"><input type="number" class="row-limit" value="5" min="0" max="500" ${row.supported ? "" : "disabled"} /></td>
+        </tr>`;
+      }).join("");
+    }
+
+    async function loadTypes() {
+      const res = await fetch("/api/v1/dataset/types");
+      if (!res.ok) throw new Error("Gagal memuat daftar folder: " + res.status);
+      const data = await res.json();
+      folderRows = data.folders || [];
+      datasetRootHint.textContent = "Dataset root: " + (data.dataset_root || "?");
+      renderFolderTable();
+    }
+
+    function getSelections() {
+      const trs = folderTable.querySelectorAll("tr[data-idx]");
+      const out = [];
+      trs.forEach((tr) => {
+        const idx = Number(tr.dataset.idx);
+        const row = folderRows[idx];
+        if (!row) return;
+        const enabled = tr.querySelector(".row-enable").checked;
+        const limit = Number(tr.querySelector(".row-limit").value) || 0;
+        out.push({ folder: row.folder, enabled, limit });
+      });
+      return out;
+    }
+
+    function setRunning(running) {
+      btnRun.disabled = running;
+      document.getElementById("btnApplyLimit").disabled = running;
+      document.getElementById("btnSelectAll").disabled = running;
+      document.getElementById("btnSelectNone").disabled = running;
+      folderTable.querySelectorAll("input").forEach((el) => { el.disabled = running || el.classList.contains("row-limit") && el.closest("tr")?.classList.contains("unsupported"); });
+    }
+
+    function renderSummary(stats) {
+      lastSummary = stats;
+      resultsPanel.classList.remove("hidden");
+      btnDownload.classList.remove("hidden");
+
+      const cards = [
+        { lbl: "Total diuji", val: stats.total, cls: "" },
+        { lbl: "Lolos validasi", val: stats.validation_pass, cls: "ok" },
+        { lbl: "Gagal validasi", val: stats.validation_fail, cls: "err" },
+        { lbl: "Error pipeline", val: stats.pipeline_error, cls: "warn" },
+        { lbl: "Rasio sukses", val: pct(stats.success_ratio), cls: "ok" },
+        { lbl: "Rasio gagal", val: pct(stats.failure_ratio), cls: "err" },
+        { lbl: "Rasio error", val: pct(stats.error_ratio), cls: "warn" },
+      ];
+      globalStats.innerHTML = cards.map((c) =>
+        `<div class="stat-card ${c.cls}"><div class="val">${esc(c.val)}</div><div class="lbl">${esc(c.lbl)}</div></div>`
+      ).join("");
+
+      const t = stats.timing_avg_s || {};
+      globalTiming.innerHTML = [
+        ["Preprocess", t.preprocess],
+        ["OCR", t.ocr],
+        ["Validasi", t.validation],
+        ["Total", t.total],
+      ].map(([label, val]) =>
+        `<span>${label}: <strong>${typeof val === "number" ? val.toFixed(2) : "—"}s</strong></span>`
+      ).join("");
+
+      const byFolder = stats.by_folder || [];
+      folderStatsTable.innerHTML = byFolder.map((f) => {
+        const ta = f.timing_avg_s || {};
+        return `<tr>
+          <td>${esc(f.folder)}</td>
+          <td>${f.total}</td>
+          <td>${f.validation_pass}</td>
+          <td>${f.validation_fail}</td>
+          <td>${f.pipeline_error}</td>
+          <td>${pct(f.success_ratio)}</td>
+          <td>${pct(f.failure_ratio)}</td>
+          <td>${typeof ta.ocr === "number" ? ta.ocr.toFixed(2) : "—"}</td>
+          <td>${typeof ta.total === "number" ? ta.total.toFixed(2) : "—"}</td>
+        </tr>`;
+      }).join("");
+    }
+
+    async function runBenchmark() {
+      const selections = getSelections().filter((s) => s.enabled && s.limit > 0);
+      if (!selections.length) {
+        alert("Pilih minimal satu jenis dokumen dengan limit > 0.");
+        return;
+      }
+
+      setRunning(true);
+      progressPanel.classList.remove("hidden");
+      progressBar.style.width = "0%";
+      progressStatus.textContent = "Memulai…";
+      progressStatus.className = "status";
+      resultsPanel.classList.add("hidden");
+      lastSummary = null;
+
+      const body = {
+        selections,
+        ocr_mode: document.getElementById("ocrMode").value,
+        pp_ocr_tier: document.getElementById("ppTier").value,
+        use_expected_name: document.getElementById("useExpectedName").checked,
+      };
+
+      try {
+        const res = await fetch("/api/v1/dataset/benchmark", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        if (!res.ok) {
+          const errText = await res.text();
+          throw new Error(errText || "HTTP " + res.status);
+        }
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() || "";
+
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            let ev;
+            try { ev = JSON.parse(line); } catch { continue; }
+
+            if (ev.type === "progress") {
+              const pctDone = ev.total ? (ev.index / ev.total) * 100 : 0;
+              progressBar.style.width = pctDone + "%";
+              progressStatus.textContent = `[${ev.index}/${ev.total}] ${ev.folder} — ${ev.file}`;
+            } else if (ev.type === "summary") {
+              lastSummary = ev;
+              renderSummary(ev.stats);
+              progressStatus.textContent = "Selesai.";
+              progressStatus.className = "status ok";
+              progressBar.style.width = "100%";
+            } else if (ev.type === "error") {
+              progressStatus.textContent = "Error: " + (ev.message || "unknown");
+              progressStatus.className = "status error";
+            }
+          }
+        }
+      } catch (e) {
+        progressStatus.textContent = "Gagal: " + e.message;
+        progressStatus.className = "status error";
+      } finally {
+        setRunning(false);
+        renderFolderTable();
+        folderTable.querySelectorAll("tr[data-idx]").forEach((tr) => {
+          const idx = Number(tr.dataset.idx);
+          const sel = selections.find((s) => s.folder === folderRows[idx]?.folder);
+          if (sel) {
+            tr.querySelector(".row-enable").checked = sel.enabled;
+            tr.querySelector(".row-limit").value = sel.limit;
+          }
+        });
+      }
+    }
+
+    document.getElementById("btnApplyLimit").addEventListener("click", () => {
+      const v = Number(document.getElementById("globalLimit").value) || 0;
+      folderTable.querySelectorAll(".row-limit:not(:disabled)").forEach((el) => { el.value = v; });
+    });
+
+    document.getElementById("btnSelectAll").addEventListener("click", () => {
+      folderTable.querySelectorAll(".row-enable:not(:disabled)").forEach((el) => { el.checked = true; });
+    });
+
+    document.getElementById("btnSelectNone").addEventListener("click", () => {
+      folderTable.querySelectorAll(".row-enable").forEach((el) => { el.checked = false; });
+    });
+
+    btnRun.addEventListener("click", runBenchmark);
+
+    btnDownload.addEventListener("click", () => {
+      if (!lastSummary) return;
+      const blob = new Blob([JSON.stringify(lastSummary, null, 2)], { type: "application/json" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = "dataset-benchmark-" + new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-") + ".json";
+      a.click();
+      URL.revokeObjectURL(a.href);
+    });
+
+    loadTypes().catch((e) => {
+      datasetRootHint.textContent = "Error: " + e.message;
+      datasetRootHint.style.color = "var(--err)";
+    });
+  </script>
+</body>
+</html>

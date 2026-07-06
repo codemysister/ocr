@@ -232,6 +232,259 @@ def extract_jkn_participant_names(ocr_text: str) -> list[str]:
     return out
 
 
+def iuran_modal_only_state(ocr_text: str) -> bool:
+    """Layar Info Iuran — modal peserta tanpa tagihan pribadi (nama biasanya tidak tampil)."""
+    blob = _normalize(ocr_text)
+    return (
+        "tidak memiliki tagihan pribadi" in blob
+        or "jenis peserta tidak terkategori" in blob
+    )
+
+
+def vaksinasi_1_first_dose_signal(ocr_text: str) -> bool:
+    """Penanda dosis pertama pada kartu/surat/sertifikat internasional vaksin COVID-19."""
+    blob = _normalize(ocr_text)
+    compact = blob.replace(" ", "").replace("-", "")
+    dose_markers = (
+        "vaksin primer 1",
+        "dosis pertama",
+        "1st dose",
+        "vaksin dosis pertama",
+        "telah selesai di vaksin 1",
+        "untuk dosis pertama",
+    )
+    if any(m.replace(" ", "") in compact or m in blob for m in dose_markers):
+        return True
+
+    intl_markers = (
+        "international covid",
+        "sertifikat vaksinasi covid-19 internasional",
+        "vaccination certificate",
+    )
+    if not any(m in blob for m in intl_markers):
+        return False
+    return bool(
+        re.search(
+            r"(?:dose\s*number|dosis\s*ke|vaccination\s+details|rinician\s+vaksinasi)"
+            r"[\s\S]{0,500}?\b1\b",
+            ocr_text or "",
+            re.I,
+        )
+    )
+
+
+def vaksinasi_1_wrong_dose_primary(ocr_text: str) -> bool:
+    """Kartu/surat yang utamanya primer 2+, booster, tanpa bukti dosis 1."""
+    if vaksinasi_1_first_dose_signal(ocr_text):
+        return False
+    blob = _normalize(ocr_text)
+    compact = blob.replace(" ", "")
+    wrong_compact = (
+        "vaksinprimer2",
+        "vaksinprimer3",
+        "vaksinbooster",
+        "boosterpertama",
+        "vaksinboosterpertama",
+    )
+    return any(w in compact for w in wrong_compact)
+
+
+def extract_vaksinasi_1_names(ocr_text: str) -> list[str]:
+    """Nama penerima vaksin pada kartu/surat/sertifikat dosis pertama."""
+    seen: set[str] = set()
+    out: list[str] = []
+
+    def _add(raw: str) -> None:
+        cand = _trim_name_punctuation(raw.lstrip(":").strip())
+        if not cand:
+            return
+        key = _normalize(cand)
+        if key in seen:
+            return
+        if _is_probably_field_label(cand):
+            return
+        if _looks_like_person_name(cand) or (
+            cand.upper() == cand and re.search(r"[A-Z]{2,}", cand) and len(cand) >= 4
+        ):
+            seen.add(key)
+            out.append(cand)
+
+    segments = _split_segments(ocr_text)
+    for i, seg in enumerate(segments):
+        raw = seg.strip()
+        if not raw:
+            continue
+        low = _normalize(raw)
+        if low in {"diberikan kepada", "nama lengkap", "full name", "nama"}:
+            if i + 1 < len(segments):
+                _add(segments[i + 1])
+        if low.startswith("diberikan kepada"):
+            rest = raw.split("kepada", 1)[-1].strip(" :")
+            if rest and rest != raw:
+                _add(rest)
+        if "diberikan kepada" in low and ":" in raw:
+            _add(raw.split(":", 1)[-1])
+        if low in {"sertifikat ini diberikan kepada", "this is to certify that"}:
+            if i + 1 < len(segments):
+                _add(segments[i + 1])
+        if ":" in raw and low.split(":", 1)[0].strip() in {"nama lengkap", "nama"}:
+            _add(raw.split(":", 1)[1])
+
+    for i, seg in enumerate(segments):
+        low = _normalize(seg)
+        if low == "program pemerintah" and i + 1 < len(segments):
+            _add(segments[i + 1])
+            break
+
+    for seg in segments:
+        for m in _CAPS_NAME_RUN_RE.finditer(seg):
+            _add(m.group(1))
+
+    return out
+
+
+def extract_iuran_participant_names(ocr_text: str) -> list[str]:
+    """Nama peserta pada kartu Info Iuran (huruf kapital, bisa beberapa anggota)."""
+    seen: set[str] = set()
+    out: list[str] = []
+
+    skip_markers = (
+        "sisa saldo",
+        "tagihan",
+        "total tagihan",
+        "batas waktu",
+        "jenis peserta",
+        "peserta mandiri",
+        "kembali",
+        "tidak memiliki",
+        "info iuran",
+    )
+    non_name_tokens = frozenset(
+        {
+            "saldo",
+            "tagihan",
+            "total",
+            "kembali",
+            "mandiri",
+            "pekerja",
+            "bulan",
+            "berjalan",
+            "tanggal",
+            "pembayaran",
+            "peserta",
+            "bukan",
+            "terkategori",
+            "pribadi",
+            "pbpu",
+            "bp",
+        }
+    )
+
+    def _iuran_caps_is_name(raw: str) -> bool:
+        s = raw.strip()
+        if not s or re.fullmatch(r"[\d\s./:-]+", s):
+            return False
+        if re.fullmatch(r"0\d{12}", re.sub(r"\s+", "", s)):
+            return False
+        low = _normalize(s)
+        words = low.split()
+        if any(w in non_name_tokens for w in words):
+            return False
+        if any(low.startswith(marker) for marker in skip_markers):
+            return False
+        alpha = sum(c.isalpha() for c in s)
+        if alpha < max(3, len(s) * 0.5):
+            return False
+        if s.upper() == s:
+            if len(words) >= 2:
+                return True
+            if len(s) >= 4:
+                return True
+        return _looks_like_person_name(s)
+
+    def _add(raw: str) -> None:
+        cand = _trim_name_punctuation(raw)
+        if not _iuran_caps_is_name(cand):
+            return
+        key = _normalize(cand)
+        if key in seen:
+            return
+        seen.add(key)
+        out.append(cand)
+
+    skip_next_value = False
+    segments = _split_segments(ocr_text)
+    for i, seg in enumerate(segments):
+        raw = seg.strip()
+        low = _normalize(raw)
+        if not raw:
+            continue
+        if any(low.startswith(marker) for marker in skip_markers):
+            skip_next_value = True
+            continue
+        if skip_next_value:
+            skip_next_value = False
+            continue
+        if raw.upper() == raw and re.search(r"[A-Z]{2,}", raw):
+            _add(raw)
+            if i + 1 < len(segments):
+                nxt = segments[i + 1].strip()
+                if (
+                    nxt.upper() == nxt
+                    and re.search(r"[A-Z]{2,}", nxt)
+                    and len(nxt.split()) <= 2
+                ):
+                    _add(f"{raw} {nxt}")
+        for m in _CAPS_NAME_RUN_RE.finditer(raw):
+            _add(m.group(1))
+
+    return out
+
+
+def extract_bpjs_kesanggupan_name(ocr_text: str) -> str | None:
+    """Nama dari surat pernyataan kesanggupan BPJS (field Nama / tanda tangan)."""
+    segments = _split_segments(ocr_text)
+
+    def _clean(raw: str) -> str:
+        return _trim_name_punctuation(raw.lstrip(":").strip())
+
+    for i, seg in enumerate(segments):
+        raw = seg.strip()
+        if not raw:
+            continue
+        low = _normalize(raw)
+        if raw.startswith(":"):
+            cand = _clean(raw)
+            if cand and (_looks_like_person_name(cand) or len(cand.split()) >= 2):
+                return cand
+        if low in {"nama lengkap", "nama", "nana"}:
+            if i + 1 < len(segments):
+                nxt = _clean(segments[i + 1])
+                if nxt and not _is_probably_field_label(nxt):
+                    return nxt
+        if ":" in raw and low.split(":", 1)[0].strip() in {"nama lengkap", "nama"}:
+            cand = _clean(raw.split(":", 1)[1])
+            if cand:
+                return cand
+
+    for seg in reversed(segments):
+        raw = seg.strip()
+        if not raw:
+            continue
+        low = _normalize(raw)
+        if low in {"hormat saya", "yang menyatakan", "meterai tempel"}:
+            continue
+        m = re.search(r"\(([^)]+)\)", raw)
+        if m:
+            cand = _clean(m.group(1).strip("."))
+            if cand and _looks_like_person_name(cand):
+                return cand
+        if _looks_like_person_name(raw) and low not in {"bekasi", "hormat saya"}:
+            return raw
+
+    return None
+
+
 def _trim_name_punctuation(cand: str) -> str:
     return re.sub(r"[!?.;]+$", "", (cand or "").strip()).strip()
 
@@ -328,6 +581,35 @@ def extract_holder_name_candidate(ocr_text: str, document_profile_id: str) -> tu
         if kk_names:
             return kk_names[0], "kk_table_first_member"
 
+    if profile == "bpjs_tk":
+        for seg in person_like_segments(ocr_text):
+            if seg.upper() == seg and re.search(r"[A-Z]{2,}", seg) and len(seg.split()) >= 1:
+                words = seg.split()
+                if len(words) >= 2 or (len(words) == 1 and len(words[0]) >= 4):
+                    return seg, "bpjs_tk_caps_name"
+
+    if profile == "bpjs_kesanggupan":
+        ks_name = extract_bpjs_kesanggupan_name(ocr_text)
+        if ks_name:
+            return ks_name, "bpjs_kesanggupan_name"
+
+    if profile == "bpjs":
+        segments = _split_segments(ocr_text)
+        for i, seg in enumerate(segments):
+            raw = seg.strip()
+            low = _normalize(raw)
+            if low in {"nama", "nana", "name", "lama"} and i + 1 < len(segments):
+                nxt = segments[i + 1].strip()
+                if nxt and not _is_probably_field_label(nxt):
+                    merged = re.sub(r"\s+", " ", nxt)
+                    if _looks_like_person_name(merged) or (
+                        merged.upper() == merged and re.search(r"[A-Z]{2,}", merged)
+                    ):
+                        return merged, "bpjs_after_nama"
+        for seg in person_like_segments(ocr_text):
+            if seg.upper() == seg and re.search(r"[A-Z]{2,}", seg) and len(seg.split()) >= 2:
+                return seg, "bpjs_caps_name"
+
     if profile == "jkn":
         jkn_names = extract_jkn_participant_names(ocr_text)
         if jkn_names:
@@ -335,6 +617,23 @@ def extract_holder_name_candidate(ocr_text: str, document_profile_id: str) -> tu
         for seg in person_like_segments(ocr_text):
             if len(seg.split()) >= 2:
                 return seg, "jkn_participant_name"
+
+    if profile == "iuran":
+        iuran_names = extract_iuran_participant_names(ocr_text)
+        if iuran_names:
+            return iuran_names[0], "iuran_participant_name"
+        for seg in person_like_segments(ocr_text):
+            words = seg.split()
+            if len(words) >= 2 and seg.upper() == seg:
+                return seg, "iuran_participant_name"
+
+    if profile == "vaksinasi_1":
+        vax_names = extract_vaksinasi_1_names(ocr_text)
+        if vax_names:
+            return vax_names[0], "vaksinasi_1_recipient_name"
+        for seg in person_like_segments(ocr_text):
+            if seg.upper() == seg and re.search(r"[A-Z]{2,}", seg) and len(seg.split()) >= 1:
+                return seg, "vaksinasi_1_recipient_name"
 
     segments = _split_segments(ocr_text)
 
