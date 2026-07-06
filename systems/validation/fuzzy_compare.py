@@ -10,12 +10,14 @@ from rapidfuzz import fuzz
 
 from systems.validation.document_profiles import (
     CANONICAL_KEYWORDS,
+    any_keyword_groups_for_profile,
     excluded_keywords_for_profile,
     profile_label,
     skip_identity_validation,
 )
 from systems.validation.name_extraction import (
     extract_holder_name_candidate,
+    extract_jkn_participant_names,
     extract_kk_member_names,
     person_like_segments,
     sliding_name_windows,
@@ -264,6 +266,8 @@ _EXTRACTION_METHOD_ID: dict[str, str] = {
     "person_like_segment": "segmen mirip nama dengan skor identitas tertinggi vs referensi",
     "kk_table_row": "baris tabel anggota Kartu Keluarga (nama lengkap + NIK)",
     "kk_table_first_member": "anggota pertama pada tabel Kartu Keluarga",
+    "jkn_caps_name": "nama peserta JKN (huruf kapital di kartu Info Peserta)",
+    "jkn_participant_name": "nama peserta JKN pada kartu Mobile JKN",
     "failed": "tidak berhasil menarik nama dari OCR",
     "skipped_no_expected_name": "nama referensi kosong — identitas tidak diuji",
     "skipped_profile_no_identity": "profil dokumen tidak memeriksa nama (mis. mutasi)",
@@ -450,6 +454,59 @@ def _ocr_has_keyword_signal(ocr_normalized: str, keyword: str, *, min_ratio: flo
     return float(item["best_score"]) / 100.0 >= min_ratio
 
 
+def _evaluate_any_keyword_groups(
+    ocr_normalized: str,
+    groups: list[list[str]],
+    *,
+    min_ratio: float,
+) -> dict[str, Any]:
+    """Tiap grup: minimal satu keyword harus mencapai min_ratio (logika OR)."""
+    group_results: list[dict[str, Any]] = []
+    keyword_results: list[dict[str, Any]] = []
+    group_max_ratios: list[float] = []
+    all_groups_pass = True
+
+    for gi, group in enumerate(groups):
+        best_ratio = 0.0
+        best_kw: str | None = None
+        members: list[dict[str, Any]] = []
+        for raw_kw in group:
+            item = fuzzy_keyword_against_ocr(raw_kw, ocr_normalized)
+            item = {
+                **item,
+                "any_group_index": gi,
+                "any_group_member": True,
+            }
+            members.append(item)
+            keyword_results.append(item)
+            ratio = 0.0 if item.get("skipped") else float(item["best_score"]) / 100.0
+            if ratio > best_ratio:
+                best_ratio = ratio
+                best_kw = raw_kw
+        group_pass = best_ratio >= min_ratio
+        if not group_pass:
+            all_groups_pass = False
+        group_max_ratios.append(best_ratio)
+        group_results.append(
+            {
+                "group_index": gi,
+                "keywords": list(group),
+                "best_keyword": best_kw,
+                "best_ratio": round(best_ratio, 6),
+                "pass": group_pass,
+                "members": members,
+            }
+        )
+
+    aggregate = sum(group_max_ratios) / len(group_max_ratios) if group_max_ratios else 0.0
+    return {
+        "aggregate": aggregate,
+        "keyword_results": keyword_results,
+        "any_groups": group_results,
+        "any_groups_pass": all_groups_pass,
+    }
+
+
 def _evaluate_profile_keyword_match(
     profile_id: str,
     ocr_normalized: str,
@@ -458,6 +515,32 @@ def _evaluate_profile_keyword_match(
     exclusion_min_ratio: float = 0.7,
 ) -> dict[str, Any]:
     aggregate, keyword_results = _profile_aggregate_score(ocr_normalized, keywords)
+    flat_ratios = [
+        float(item["best_score"]) / 100.0
+        for item in keyword_results
+        if not item.get("skipped")
+    ]
+
+    any_groups = any_keyword_groups_for_profile(profile_id)
+    any_group_eval: dict[str, Any] | None = None
+    if any_groups:
+        any_group_eval = _evaluate_any_keyword_groups(
+            ocr_normalized,
+            any_groups,
+            min_ratio=exclusion_min_ratio,
+        )
+        keyword_results.extend(any_group_eval["keyword_results"])
+
+    if flat_ratios and any_group_eval:
+        flat_aggregate = sum(flat_ratios) / len(flat_ratios)
+        group_aggregate = float(any_group_eval["aggregate"])
+        aggregate = (flat_aggregate + group_aggregate) / 2.0
+    elif any_group_eval and not flat_ratios:
+        aggregate = float(any_group_eval["aggregate"])
+    elif flat_ratios:
+        aggregate = sum(flat_ratios) / len(flat_ratios)
+
+    any_groups_pass = bool(any_group_eval["any_groups_pass"]) if any_group_eval else True
     excluded_results: list[dict[str, Any]] = []
     exclusion_violated = False
     for raw_ex in excluded_keywords_for_profile(profile_id):
@@ -479,6 +562,9 @@ def _evaluate_profile_keyword_match(
         "keyword_results": keyword_results,
         "excluded_keyword_results": excluded_results,
         "exclusion_violated": exclusion_violated,
+        "any_groups": any_group_eval.get("any_groups") if any_group_eval else [],
+        "any_groups_pass": any_groups_pass,
+        "flat_keyword_count": len(flat_ratios),
     }
 
 
@@ -505,6 +591,11 @@ def _profile_structural_boost(profile_id: str, ocr_n: str) -> float:
             return 0.08
     if pid == "skck" and _ocr_has_keyword_signal(ocr_n, "skck"):
         return 0.08
+    if pid == "jkn":
+        if _ocr_has_keyword_signal(ocr_n, "info peserta"):
+            return 0.08
+        if _ocr_has_keyword_signal(ocr_n, "faskes"):
+            return 0.06
     return 0.0
 
 
@@ -548,6 +639,11 @@ def _detection_tiebreak_bonus(profile_id: str, ocr_n: str, hint_profile_id: str)
             bonus += 1.0
     if pid == "skck" and _ocr_has_keyword_signal(ocr_n, "skck"):
         bonus += 1.0
+    if pid == "jkn":
+        if _ocr_has_keyword_signal(ocr_n, "info peserta"):
+            bonus += 1.25
+        elif _ocr_has_keyword_signal(ocr_n, "faskes"):
+            bonus += 1.0
     if pid == hint and hint:
         bonus += 0.5
     return bonus
@@ -741,14 +837,33 @@ def validate_document_ocr(
     kw_ratios = [
         float(item["best_score"]) / 100.0
         for item in keyword_results
-        if not item.get("skipped")
+        if not item.get("skipped") and not item.get("any_group_member")
     ]
+    any_groups_pass = bool(profile_eval.get("any_groups_pass", True))
+    has_any_groups = bool(profile_eval.get("any_groups"))
 
     document_type_boosts = _document_type_score_boosts(profile, ocr_n, mistral_annotation)
     boost_total = min(0.15, sum(document_type_boosts.values()))
 
-    if not kw_ratios or exclusion_violated:
-        keyword_aggregate_raw = 0.0 if exclusion_violated else (sum(kw_ratios) / len(kw_ratios))
+    if exclusion_violated:
+        keyword_aggregate_raw = 0.0
+        document_type_aggregate_pass_ratio = 0.0
+        document_type_pass = False
+    elif has_any_groups and not kw_ratios:
+        keyword_aggregate_raw = float(profile_eval["aggregate"])
+        document_type_aggregate_pass_ratio = min(1.0, keyword_aggregate_raw + boost_total)
+        document_type_pass = any_groups_pass and document_type_aggregate_pass_ratio >= ratio_req
+    elif has_any_groups and kw_ratios:
+        flat_aggregate = sum(kw_ratios) / len(kw_ratios)
+        keyword_aggregate_raw = float(profile_eval["aggregate"])
+        document_type_aggregate_pass_ratio = min(1.0, keyword_aggregate_raw + boost_total)
+        document_type_pass = (
+            flat_aggregate >= ratio_req
+            and any_groups_pass
+            and document_type_aggregate_pass_ratio >= ratio_req
+        )
+    elif not kw_ratios:
+        keyword_aggregate_raw = 0.0
         document_type_aggregate_pass_ratio = 0.0
         document_type_pass = False
     else:
@@ -756,7 +871,7 @@ def validate_document_ocr(
         document_type_aggregate_pass_ratio = min(1.0, keyword_aggregate_raw + boost_total)
         document_type_pass = document_type_aggregate_pass_ratio >= ratio_req
 
-    document_type_components_count = len(kw_ratios)
+    document_type_components_count = len(kw_ratios) + len(profile_eval.get("any_groups") or [])
 
     skip_identity = skip_identity_validation(profile)
     want_identity = bool(expected_name.strip()) and not skip_identity
@@ -801,8 +916,17 @@ def validate_document_ocr(
                     ]
                 )
                 scored.append((scv, name, "kk_table_row"))
+        jkn_names = extract_jkn_participant_names(ocr_text) if profile == "jkn" else []
+        if profile == "jkn" and not ann_name:
+            for name in jkn_names:
+                scv = float(
+                    compare_extracted_identity_scores(name, expected_name)[
+                        "identity_combined_score"
+                    ]
+                )
+                scored.append((scv, name, "jkn_participant_name"))
 
-        if not ann_name:
+        if not ann_name and not (profile == "jkn" and jkn_names):
             window_sources: list[tuple[str, str]] = [(ocr_text, "person_like_segment")]
             for seg in person_like_segments(ocr_text):
                 window_sources.append((seg, "person_like_segment"))
@@ -940,6 +1064,8 @@ def validate_document_ocr(
         "identity": identity,
         "identity_pass": identity_pass,
         "keywords": keyword_results,
+        "any_groups": profile_eval.get("any_groups") or [],
+        "any_groups_pass": any_groups_pass,
         "excluded_keywords": excluded_keyword_results,
         "exclusion_violated": exclusion_violated,
         "document_matched": document_matched,

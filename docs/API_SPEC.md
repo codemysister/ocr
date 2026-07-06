@@ -36,7 +36,9 @@ String yang dikirim klien untuk menentukan **profil validasi**. Server menormali
 | `rekening` | Rekening | OCR + keyword fuzzy |
 | `mutasi` | Mutasi | OCR + keyword fuzzy |
 | `skck` | SKCK | OCR + keyword fuzzy |
+| `jkn` | JKN (Info Peserta) | OCR + keyword OR + identitas |
 | `foto_profile` | Foto Profil | **Gambar** (wajah + latar biru) |
+| `cv` | CV | **Ingest + search** (tanpa validasi OCR) |
 
 Daftar lengkap alias ada di [Profil dokumen](#profil-dokumen--ketentuan-validasi).
 
@@ -73,7 +75,7 @@ valid = document_matched = face_pass AND blue_background_pass
 | `verdict.summary` | string | Ringkasan bahasa Indonesia |
 | `verdict.is_own_document` | bool \| null | `null` jika `expected_name` kosong |
 | `verdict.document_type_current` | string \| null | Profil terdeteksi dari OCR/gambar |
-| `validation_mode` | `"ocr"` \| `"image"` | Hanya `"image"` untuk `foto_profile` |
+| `validation_mode` | `"ocr"` \| `"image"` \| `"cv"` | `"image"` untuk `foto_profile`; `"cv"` untuk ingest CV |
 
 ### Engine OCR (`ocr_mode`)
 
@@ -129,6 +131,7 @@ Content-Type: multipart/form-data
 | `pp_ocr_tier` | `medium` | Tier PP-OCRv6 saat `ocr_mode=fast` (default): `balanced` \| `medium` \| `small` \| `tiny` |
 | `include_preprocessed_image` | `false` | Sertakan `preprocessed_image.image_base64` |
 | `full_json` | `false` | Hanya `ocr_mode=vl`: lampirkan `result_json` penuh |
+| `cv_search_query` | — | Hanya `document_type=cv`: kata kunci hybrid search setelah ingest |
 
 Tanpa query `ocr_mode`, pipeline memakai **PP-OCRv6** (`fast`) dengan tier **`medium`**.
 
@@ -160,6 +163,16 @@ curl -X POST "http://127.0.0.1:8001/api/v1/pipeline" \
 
 Respons `foto_profile`: `ocr: null`, `validation_mode: "image"`, field `image_validation` berisi detail wajah & biru.
 
+### Contoh — CV (ingest + opsional search)
+
+```bash
+curl -X POST "http://127.0.0.1:8001/api/v1/pipeline?cv_search_query=pengalaman%20kerja%20python" \
+  -F "file=@dataset/cv/cv_Usep_Maulidin.md" \
+  -F "document_type=cv"
+```
+
+Respons `cv`: `validation_mode: "cv"`, `cv_ingest` (doc_id, chunk_count, parse_mode), `cv_search` bila query diisi. Butuh OpenSearch + `pip install -r requirements-cv.txt`.
+
 ### Contoh — JavaScript (fetch)
 
 ```javascript
@@ -185,10 +198,16 @@ if (data.document_matched) {
 
 ```mermaid
 flowchart TD
-  A[Upload file + document_type] --> B{Profil foto_profile?}
-  B -->|Ya| C[Decode gambar EXIF]
+  A[Upload file + document_type] --> B{Profil cv?}
+  B -->|Ya| I[Ingest chunk + embed OpenSearch]
+  I --> J{Ada cv_search_query?}
+  J -->|Ya| K[Hybrid search]
+  J -->|Tidak| H
+  K --> H[Respons JSON]
+  B -->|Tidak| L{Profil foto_profile?}
+  L -->|Ya| C[Decode gambar EXIF]
   C --> D[Validasi wajah + latar biru]
-  B -->|Tidak| E[Preprocess OCR]
+  L -->|Tidak| E[Preprocess OCR]
   E --> F[OCR PP-OCRv6 default / mistral / vl]
   F --> G[Validasi keyword + identitas]
   D --> H[Respons JSON + verdict]
@@ -209,7 +228,9 @@ flowchart TD
 | Rekening | `rekening`, `rekening tabungan` | Opsional | ✅ | Ada `tabungan`, **tidak** ada `e-statement` |
 | Mutasi | `mutasi`, `e-statement` | Tidak dipakai | ✅ | Ada `tabungan` **dan** `e-statement` (tanpa cek nama) |
 | SKCK | `skck` | Opsional | ✅ | Ada `skck` / `kepolisian` |
+| JKN | `jkn`, `info peserta`, `bpjs kesehatan` | **Disarankan wajib** | ✅ | Ada `info peserta` **atau** `faskes` **dan** identitas ≥65 (jika nama diisi) |
 | Foto Profil | `foto_profile`, `pas foto` | Tidak dipakai | ❌ | 1 wajah + latar biru cukup |
+| CV | `cv`, `resume`, `curriculum vitae` | Opsional (jadi query search) | ❌ | Ingest sukses ke index; search opsional |
 
 ---
 
@@ -318,6 +339,27 @@ curl -X POST "http://127.0.0.1:8001/api/v1/pipeline" \
   -F "file=@SKCK.jpg" \
   -F "document_type=skck" \
   -F "expected_name=Nama Pemohon"
+```
+
+---
+
+### `jkn`
+
+**Alias:** `jaminan kesehatan nasional`, `bpjs kesehatan`, `info peserta`, `mobile jkn`
+
+**Keyword (minimal satu harus terbaca, fuzzy ≥70%):**
+
+- `info peserta` **atau** `faskes`
+
+**Identitas:** Wajib dicek bila `expected_name` diisi — nama peserta di kartu Mobile JKN (biasanya huruf kapital) dibandingkan dengan referensi.
+
+**Preprocess:** Screenshot aplikasi — isolasi kartu fisik dilewati (sama seperti mutasi/rekening).
+
+```bash
+curl -X POST "http://127.0.0.1:8001/api/v1/pipeline" \
+  -F "file=@JKN_Info_Peserta.jpg" \
+  -F "document_type=jkn" \
+  -F "expected_name=Bagus Junda Winata"
 ```
 
 ---
@@ -613,6 +655,7 @@ Log berisi ringkasan request terakhir per subsistem (overwrite tiap panggilan).
 | Mutasi / e-statement | `POST /api/v1/pipeline` | `mutasi` |
 | SKCK | `POST /api/v1/pipeline` | `skck` |
 | Pas foto biru | `POST /api/v1/pipeline` | `foto_profile` |
+| Upload CV + index | `POST /api/v1/pipeline` | `cv` (+ `cv_search_query` opsional) |
 | Validasi teks OCR manual | `POST /systems/validation/api/v1/validate-document` | sesuai profil |
 | Validasi pas foto saja | `POST /systems/validation/api/v1/validate-foto-profile` | `foto_profile` |
 

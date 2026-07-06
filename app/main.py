@@ -15,6 +15,14 @@ from systems.validation.routes import router as validation_router
 from systems.preprocessing.routes import api_router as preprocessing_api_router
 from systems.preprocessing.routes import ui_router as preprocessing_ui_router
 
+try:
+    from systems.cv.routes import router as cv_router
+
+    _CV_AVAILABLE = True
+except ImportError:
+    cv_router = None  # type: ignore[assignment,misc]
+    _CV_AVAILABLE = False
+
 HUB_PATH = Path(__file__).resolve().parent / "static" / "hub.html"
 PIPELINE_PATH = Path(__file__).resolve().parent / "static" / "pipeline.html"
 
@@ -54,6 +62,8 @@ app.include_router(preprocessing_ui_router)
 app.include_router(preprocessing_api_router)
 app.include_router(ocr_router)
 app.include_router(validation_router)
+if _CV_AVAILABLE and cv_router is not None:
+    app.include_router(cv_router)
 
 
 @app.get("/health")
@@ -68,7 +78,13 @@ def health() -> dict:
             "preprocessing": "/systems/preprocessing/health",
             "ocr": "/systems/ocr/health",
             "validation": "/systems/validation/health",
+            **(
+                {"cv": "/systems/cv/health"}
+                if _CV_AVAILABLE
+                else {}
+            ),
         },
+        "cv_search": _CV_AVAILABLE,
         "last_tuning_log": {
             "path": "logs/last_tuning.json",
             "absolute_note": "Di root repo; override dengan env LAST_TUNING_LOG_PATH.",

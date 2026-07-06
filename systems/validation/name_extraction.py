@@ -128,6 +128,110 @@ _AFTER_COMMA_NAME_RE = re.compile(
 _CAPS_NAME_RUN_RE = re.compile(r"\b([A-Z]{2,}(?:\s+[A-Z]{2,})+)\b")
 
 
+def extract_jkn_participant_names(ocr_text: str) -> list[str]:
+    """Nama peserta dari kartu Mobile JKN (biasanya huruf kapital, bisa beberapa anggota)."""
+    seen: set[str] = set()
+    out: list[str] = []
+
+    skip_next_value = False
+    skip_markers = (
+        "faskes",
+        "lahir",
+        "kelas",
+        "kelompok",
+        "tagihan",
+        "saldo",
+        "sisa",
+    )
+    non_name_tokens = frozenset(
+        {
+            "aktif",
+            "tidak",
+            "non",
+            "bulan",
+            "kelas",
+            "lahir",
+            "faskes",
+            "kelompok",
+            "peserta",
+            "anak",
+            "istri",
+            "kepesertaan",
+            "info",
+            "jenis",
+            "tampilan",
+            "terdaftar",
+            "prolanis",
+            "hipertensi",
+            "daerah",
+            "pemerintah",
+            "pbpu",
+            "pbi",
+            "apbn",
+            "pbpu",
+            "pega",
+            "swasta",
+        }
+    )
+
+    def _jkn_caps_is_name(raw: str) -> bool:
+        s = raw.strip()
+        if not s or re.fullmatch(r"[\d\s./:-]+", s):
+            return False
+        low = _normalize(s)
+        words = low.split()
+        if any(w in non_name_tokens for w in words):
+            return False
+        if any(low.startswith(marker) for marker in skip_markers):
+            return False
+        alpha = sum(c.isalpha() for c in s)
+        if alpha < max(3, len(s) * 0.5):
+            return False
+        if s.upper() == s:
+            if len(words) >= 2:
+                return True
+            if len(s) >= 4:
+                return True
+        return _looks_like_person_name(s)
+
+    def _add(raw: str) -> None:
+        cand = _trim_name_punctuation(raw)
+        if not _jkn_caps_is_name(cand):
+            return
+        key = _normalize(cand)
+        if key in seen:
+            return
+        seen.add(key)
+        out.append(cand)
+
+    segments = _split_segments(ocr_text)
+    for i, seg in enumerate(segments):
+        raw = seg.strip()
+        low = _normalize(raw)
+        if not raw:
+            continue
+        if any(low.startswith(marker) for marker in skip_markers):
+            skip_next_value = True
+            continue
+        if skip_next_value:
+            skip_next_value = False
+            continue
+        if raw.upper() == raw and re.search(r"[A-Z]{2,}", raw):
+            _add(raw)
+            if i + 1 < len(segments):
+                nxt = segments[i + 1].strip()
+                if (
+                    nxt.upper() == nxt
+                    and re.search(r"[A-Z]{2,}", nxt)
+                    and len(nxt.split()) <= 2
+                ):
+                    _add(f"{raw} {nxt}")
+        for m in _CAPS_NAME_RUN_RE.finditer(raw):
+            _add(m.group(1))
+
+    return out
+
+
 def _trim_name_punctuation(cand: str) -> str:
     return re.sub(r"[!?.;]+$", "", (cand or "").strip()).strip()
 
@@ -223,6 +327,14 @@ def extract_holder_name_candidate(ocr_text: str, document_profile_id: str) -> tu
         kk_names = extract_kk_member_names(ocr_text)
         if kk_names:
             return kk_names[0], "kk_table_first_member"
+
+    if profile == "jkn":
+        jkn_names = extract_jkn_participant_names(ocr_text)
+        if jkn_names:
+            return jkn_names[0], "jkn_participant_name"
+        for seg in person_like_segments(ocr_text):
+            if len(seg.split()) >= 2:
+                return seg, "jkn_participant_name"
 
     segments = _split_segments(ocr_text)
 

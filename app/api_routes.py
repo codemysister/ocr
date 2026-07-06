@@ -24,6 +24,7 @@ from systems.observability.last_tuning_log import (
 )
 from systems.preprocessing.pipeline import decode_image_bytes_bgr, preprocess_image_bytes
 from systems.validation.document_profiles import (
+    is_cv_ingest_profile,
     is_image_only_profile,
     list_supported_document_types,
     resolve_keywords,
@@ -74,7 +75,7 @@ def api_info() -> dict:
                     "include_preprocessed_image": "true | false (default false)",
                     "full_json": "true | false — hanya ocr_mode=vl",
                 },
-                "description": "Preprocess → OCR (pilihan engine) → validasi dokumen dalam satu request.",
+                "description": "Preprocess → OCR (pilihan engine) → validasi dokumen dalam satu request. Untuk cv: ingest + opsional search.",
                 "ocr_modes": {
                     "mistral": "Cloud Mistral OCR + document_annotation (disarankan)",
                     "fast": "Lokal PP-OCRv6 (pp_ocr_tier)",
@@ -198,6 +199,18 @@ async def api_pipeline(
         description="Sertakan image_base64 hasil preprocess di respons",
     ),
     full_json: bool = Query(False, description="Untuk ocr_mode=vl: lampirkan result_json lengkap"),
+    cv_search_query: str = Query(
+        "",
+        description="(Legacy) Alias expected_name untuk match CV",
+    ),
+    cv_education_query: str = Query(
+        "",
+        description="Hanya document_type=cv: kata kunci tambahan section pendidikan",
+    ),
+    cv_experience_query: str = Query(
+        "",
+        description="Hanya document_type=cv: kata kunci tambahan section pengalaman",
+    ),
 ) -> JSONResponse:
     """
     Pipeline lengkap: preprocess gambar → OCR (pilihan model) → validasi dokumen.
@@ -239,6 +252,111 @@ async def api_pipeline(
         raise HTTPException(status_code=400, detail=detail)
 
     canonical_id, keywords = resolved
+
+    if is_cv_ingest_profile(canonical_id):
+        try:
+            from systems.cv.ingest.pipeline import ingest_cv_bytes
+        except ImportError as e:
+            detail = {
+                "code": "CV_SUBSYSTEM_UNAVAILABLE",
+                "message": "Subsistem CV belum terpasang.",
+                "install": "pip install -r requirements-cv.txt",
+                "opensearch": "docker compose -f docker-compose.cv.yml up -d",
+            }
+            log_safe_failure(subsystem="pipeline", method="POST", path=path, http_status=503, detail=detail)
+            raise HTTPException(status_code=503, detail=detail) from e
+
+        filename = file.filename or "cv"
+        cv_name = (name_ref or cv_search_query).strip()
+        try:
+            ingest_result = ingest_cv_bytes(
+                raw,
+                filename=filename,
+                expected_name=cv_name,
+                education_query=cv_education_query.strip(),
+                experience_query=cv_experience_query.strip(),
+            )
+        except ValueError as e:
+            log_safe_failure(subsystem="pipeline", method="POST", path=path, http_status=400, detail=str(e))
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        except Exception as e:
+            from systems.cv.index.opensearch_client import (
+                OpenSearchUnavailableError,
+                is_opensearch_connection_error,
+                opensearch_unavailable_detail,
+            )
+
+            if isinstance(e, OpenSearchUnavailableError) or is_opensearch_connection_error(e):
+                detail = opensearch_unavailable_detail(exc=e)
+                log_safe_failure(subsystem="pipeline", method="POST", path=path, http_status=503, detail=detail)
+                raise HTTPException(status_code=503, detail=detail) from e
+            log_safe_failure(subsystem="pipeline", method="POST", path=path, http_status=500, detail=str(e))
+            raise HTTPException(status_code=500, detail=str(e)) from e
+
+        cv_match = ingest_result.get("cv_match") or {}
+        matched = bool(cv_match.get("matched", True))
+
+        payload = {
+            "success": True,
+            "valid": matched,
+            "ocr_mode": None,
+            "pp_ocr_tier": None,
+            "validation_mode": "cv",
+            "preprocess": {"skipped": True, "reason": "cv_ingest"},
+            "ocr": None,
+            "validation": {
+                "document_profile_id": canonical_id,
+                "keywords_from_profile": keywords,
+                "document_matched": matched,
+            },
+            "cv_ingest": ingest_result,
+            "cv_match": cv_match,
+            "verdict": {
+                "summary": cv_match.get("summary")
+                or (
+                    f"CV terindeks: {ingest_result.get('chunk_count', 0)} chunk "
+                    f"({ingest_result.get('parse_mode', '?')})."
+                ),
+                "is_own_document": (
+                    cv_match.get("dimensions", {}).get("nama", {}).get("pass")
+                    if cv_name
+                    else None
+                ),
+                "document_type_current": canonical_id,
+                "document_type_current_label": "CV",
+            },
+            "is_own_document": None,
+            "document_type_current": canonical_id,
+            "document_type_current_label": "CV",
+        }
+
+        write_last_tuning_log(
+            {
+                "success": True,
+                "subsystem": "pipeline",
+                "method": "POST",
+                "path": path,
+                "input_bytes": len(raw),
+                "query": {
+                    "expected_name": cv_name or None,
+                    "cv_education_query": cv_education_query or None,
+                    "cv_experience_query": cv_experience_query or None,
+                },
+                "request": {"document_type": doc_type, "filename": filename},
+                "preprocess": payload["preprocess"],
+                "ocr": {"skipped": True, "reason": "cv"},
+                "cv_ingest": {
+                    "doc_id": ingest_result.get("doc_id"),
+                    "chunk_count": ingest_result.get("chunk_count"),
+                    "parse_mode": ingest_result.get("parse_mode"),
+                },
+                "cv_match": {
+                    "matched": matched,
+                    "overall_percent": cv_match.get("overall_percent"),
+                },
+            }
+        )
+        return JSONResponse(content=jsonable_encoder(payload))
 
     if is_image_only_profile(canonical_id):
         try:

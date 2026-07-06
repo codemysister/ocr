@@ -226,6 +226,7 @@
       (<code class="endpoint">POST /systems/validation/api/v1/validate-document</code>).
       Default: <strong>Mistral</strong> + <code>document_annotation</code>. Alternatif: PP-OCRv6 lokal atau PaddleOCR-VL.
       Untuk <strong>foto_profile</strong>: validasi gambar saja (wajah + latar biru) — tanpa OCR.
+      Untuk <strong>cv</strong>: ingest ke index pencarian + opsional hybrid search — tanpa validasi dokumen.
     </p>
     <p class="nav-top"><a href="/">← Beranda platform</a> · <a href="/systems/preprocessing/">Preprocessing saja</a> · <a href="/systems/ocr/">OCR saja</a> · <a href="/systems/validation/">Validasi saja</a></p>
   </header>
@@ -234,7 +235,7 @@
       <h2>Input</h2>
       <div class="row two">
         <div>
-          <label class="block" for="file">Gambar dokumen</label>
+          <label class="block" for="file" id="fileLabel">Gambar dokumen</label>
           <input type="file" id="file" accept="image/*" />
         </div>
         <div>
@@ -247,7 +248,9 @@
             <option value="rekening">Rekening tabungan</option>
             <option value="mutasi">Mutasi / e-statement</option>
             <option value="skck">SKCK</option>
+            <option value="jkn">JKN (Info Peserta)</option>
             <option value="foto_profile">Foto profil (latar biru)</option>
+            <option value="cv">CV (curriculum vitae)</option>
           </select>
         </div>
       </div>
@@ -282,6 +285,8 @@
         <span id="st-prep">1 Preprocess</span>
         <span id="st-ocr">2 OCR</span>
         <span id="st-val">3 Validasi</span>
+        <span id="st-ingest" style="display: none;">1 Ingest CV</span>
+        <span id="st-cvsearch" style="display: none;">2 Match</span>
         <span id="st-img" style="display: none;">Validasi gambar</span>
       </div>
       <div class="status" id="status" role="status"></div>
@@ -325,6 +330,8 @@
     const stOcr = document.getElementById("st-ocr");
     const stVal = document.getElementById("st-val");
     const stImg = document.getElementById("st-img");
+    const stIngest = document.getElementById("st-ingest");
+    const stCvSearch = document.getElementById("st-cvsearch");
     const tierRow = document.getElementById("tierRow");
     const ppOcrTier = document.getElementById("ppOcrTier");
     const ocrSection = document.getElementById("ocrSection");
@@ -334,25 +341,56 @@
     const previewTitle = document.getElementById("previewTitle");
     const jsonTitle = document.getElementById("jsonTitle");
 
+    const fileLabel = document.getElementById("fileLabel");
+    const fileInputEl = document.getElementById("file");
+
     function isFotoProfile(docType) {
       return (docType || "").trim() === "foto_profile";
     }
 
+    function isCvProfile(docType) {
+      return (docType || "").trim() === "cv";
+    }
+
     function syncUiForDocType() {
       const foto = isFotoProfile(docInput.value);
-      ocrSection.classList.toggle("hidden-for-foto", foto);
-      panelOcr.classList.toggle("hidden-for-foto", foto);
+      const cv = isCvProfile(docInput.value);
+      const special = foto || cv;
+      ocrSection.classList.toggle("hidden-for-foto", special);
+      panelOcr.classList.toggle("hidden-for-foto", special);
       expectedLabel.classList.toggle("hidden-for-foto", foto);
       expectedInputEl.classList.toggle("hidden-for-foto", foto);
-      stPrep.style.display = foto ? "none" : "";
-      stOcr.style.display = foto ? "none" : "";
-      stVal.style.display = foto ? "none" : "";
+      stPrep.style.display = special ? "none" : "";
+      stOcr.style.display = special ? "none" : "";
+      stVal.style.display = special ? "none" : "";
       stImg.style.display = foto ? "" : "none";
-      pipelineHint.textContent = foto
-        ? "foto_profile: validasi gambar (wajah + latar biru) via POST /api/v1/pipeline — tanpa OCR."
-        : "Urutan: preprocess → OCR pada PNG keluaran → validasi dengan teks OCR.";
-      previewTitle.textContent = foto ? "Kotak foto profil" : "Gambar setelah preprocess";
-      jsonTitle.textContent = foto ? "Hasil validasi" : "JSON validasi (mentah)";
+      stIngest.style.display = cv ? "" : "none";
+      stCvSearch.style.display = cv ? "" : "none";
+      if (cv) {
+        fileLabel.textContent = "File CV (PDF, DOCX, MD, gambar)";
+        fileInputEl.accept = ".pdf,.doc,.docx,.md,.txt,.markdown,image/*";
+        expectedLabel.textContent = "Nama referensi (opsional)";
+        expectedInputEl.placeholder = "Contoh: Usep Maulidin — dicek fuzzy vs teks CV.";
+        pipelineHint.textContent =
+          "cv: ingest + match nama / pendidikan / pengalaman (keyword wajib: pendidikan, experience).";
+        previewTitle.textContent = "File CV";
+        jsonTitle.textContent = "Hasil ingest & match";
+      } else if (foto) {
+        fileLabel.textContent = "Gambar dokumen";
+        fileInputEl.accept = "image/*";
+        pipelineHint.textContent =
+          "foto_profile: validasi gambar (wajah + latar biru) via POST /api/v1/pipeline — tanpa OCR.";
+        previewTitle.textContent = "Kotak foto profil";
+        jsonTitle.textContent = "Hasil validasi";
+      } else {
+        fileLabel.textContent = "Gambar dokumen";
+        fileInputEl.accept = "image/*";
+        expectedLabel.textContent = "Nama referensi (opsional)";
+        expectedInputEl.placeholder = "Kosongkan bila hanya mengecek keyword profil dokumen.";
+        pipelineHint.textContent = "Urutan: preprocess → OCR pada PNG keluaran → validasi dengan teks OCR.";
+        previewTitle.textContent = "Gambar setelah preprocess";
+        jsonTitle.textContent = "JSON validasi (mentah)";
+      }
     }
 
     function selectedMode() {
@@ -383,9 +421,22 @@
     }
 
     function resetStepClasses() {
-      [stPrep, stOcr, stVal, stImg].forEach((el) => {
+      [stPrep, stOcr, stVal, stImg, stIngest, stCvSearch].forEach((el) => {
         el.classList.remove("done", "run", "fail");
       });
+    }
+
+    function formatApiDetail(detail, fallbackBody) {
+      if (typeof detail === "string" && detail.trim()) return detail;
+      if (detail && typeof detail === "object") {
+        if (typeof detail.message === "string" && detail.message.trim()) return detail.message;
+        const keys = Object.keys(detail);
+        if (keys.length) return JSON.stringify(detail);
+      }
+      if (fallbackBody && typeof fallbackBody === "object" && fallbackBody.message) {
+        return String(fallbackBody.message);
+      }
+      return "Terjadi kesalahan pada server (tanpa detail). Coba restart server atau lihat log terminal.";
     }
 
     function showPreviewFromBlob(blob, alt) {
@@ -441,6 +492,81 @@
         .replace(/</g, "&lt;")
         .replace(/>/g, "&gt;")
         .replace(/"/g, "&quot;");
+    }
+
+    function renderCvSummary(data) {
+      const ing = data.cv_ingest || {};
+      const match = data.cv_match || ing.cv_match || {};
+      const dims = match.dimensions || {};
+      const valid = data.valid === true || match.matched === true;
+      let html =
+        '<p class="val-badge ' +
+        (valid ? "ok" : "no") +
+        '">' +
+        esc(valid ? "CV COCOK" : "CV TIDAK COCOK") +
+        "</p>" +
+        "<p>" +
+        esc((data.verdict && data.verdict.summary) || match.summary || "Ingest selesai.") +
+        "</p>";
+      if (match.overall_percent != null) {
+        html += "<p>Skor keseluruhan: <strong>" + esc(String(match.overall_percent)) + "%</strong></p>";
+      }
+      html +=
+        "<ul>" +
+        "<li>doc_id: <code>" +
+        esc(ing.doc_id || "?") +
+        "</code></li>" +
+        "<li>File: " +
+        esc(ing.source_file || "?") +
+        "</li>" +
+        "<li>Chunk: " +
+        esc(String(ing.chunk_count || 0)) +
+        "</li>" +
+        "<li>Parse: " +
+        esc(ing.parse_mode || "?") +
+        "</li>";
+      if (ing.timing && ing.timing.total_s != null) {
+        html +=
+          "<li>Waktu: " +
+          esc(String(ing.timing.total_s)) +
+          " dtk</li>";
+      }
+      html += "</ul><ul>";
+      ["nama", "pendidikan", "pengalaman"].forEach(function (key) {
+        const d = dims[key] || {};
+        if (d.skipped) {
+          html += "<li>" + esc(key) + ": tidak dicek</li>";
+          return;
+        }
+        const pct = d.percent != null ? d.percent + "%" : "?";
+        const mark = d.pass ? "✓" : "✗";
+        html += "<li>" + esc(key) + ": " + mark + " (" + esc(String(pct)) + ")";
+        if (key === "nama" && d.extracted) {
+          html += " — terdeteksi: " + esc(d.extracted);
+        }
+        if (d.keywords_hit && d.keywords_hit.length) {
+          html += " — kata kunci: " + esc(d.keywords_hit.join(", "));
+        }
+        html += "</li>";
+      });
+      html += "</ul>";
+      valSummary.innerHTML = html;
+    }
+
+    function showCvFilePreview(file) {
+      previewPre.innerHTML = "";
+      const wrap = document.createElement("div");
+      wrap.className = "placeholder";
+      wrap.style.textAlign = "left";
+      wrap.innerHTML =
+        "<strong>" +
+        esc(file.name) +
+        "</strong><br><span class=\"ex-hint\">" +
+        esc(file.type || "application/octet-stream") +
+        " · " +
+        esc(String(Math.round(file.size / 1024)) + " KB") +
+        "</span>";
+      previewPre.appendChild(wrap);
     }
 
     function renderFotoProfileSummary(valid, valData) {
@@ -559,6 +685,63 @@
       runBtn.disabled = true;
       setStatus("Memproses…");
 
+      if (isCvProfile(document_type)) {
+        stIngest.classList.add("run");
+        const fd = new FormData();
+        fd.append("file", f);
+        fd.append("document_type", document_type);
+        if (expected_name) {
+          fd.append("expected_name", expected_name);
+        }
+        try {
+          const r = await fetch("/api/v1/pipeline", {
+            method: "POST",
+            body: fd,
+          });
+          const data = await r.json().catch(() => ({}));
+          stIngest.classList.remove("run");
+          if (!r.ok) {
+            stIngest.classList.add("fail");
+            const d = data.detail;
+            const msg = typeof d === "string" ? d : JSON.stringify(d || data);
+            outVal.value = JSON.stringify(data, null, 2);
+            valSummary.className = "val-summary no";
+            valSummary.textContent = msg;
+            setStatus("CV gagal.", "error");
+            return;
+          }
+          stIngest.classList.add("done");
+          stCvSearch.classList.add("run");
+          stCvSearch.classList.remove("run");
+          stCvSearch.classList.add("done");
+          const valid = data.valid === true;
+          valSummary.className = "val-summary " + (valid ? "ok" : "no");
+          renderCvSummary(data);
+          outVal.value = JSON.stringify(
+            {
+              cv_ingest: data.cv_ingest,
+              cv_match: data.cv_match,
+              valid: data.valid,
+              verdict: data.verdict,
+            },
+            null,
+            2,
+          );
+          showCvFilePreview(f);
+          setStatus(
+            valid ? "Selesai — CV cocok" : "Selesai — CV tidak cocok",
+            valid ? "ok" : "error",
+          );
+        } catch (e) {
+          stIngest.classList.remove("run");
+          stIngest.classList.add("fail");
+          setStatus(e.message || String(e), "error");
+        } finally {
+          updateRunEnabled();
+        }
+        return;
+      }
+
       if (isFotoProfile(document_type)) {
         stImg.classList.add("run");
         const fd = new FormData();
@@ -574,7 +757,7 @@
           if (!r.ok) {
             stImg.classList.add("fail");
             const d = data.detail;
-            const msg = typeof d === "string" ? d : JSON.stringify(d || data);
+            const msg = formatApiDetail(d, data);
             outVal.value = JSON.stringify(data, null, 2);
             valSummary.className = "val-summary no";
             valSummary.textContent = msg;
@@ -625,8 +808,7 @@
         const preJson = await rPre.json().catch(() => ({}));
         if (!rPre.ok) {
           const d = preJson.detail;
-          const msg = typeof d === "string" ? d : JSON.stringify(d || preJson);
-          throw new Error("Preprocess: " + msg);
+          throw new Error("Preprocess: " + formatApiDetail(d, preJson));
         }
         stPrep.classList.remove("run");
         stPrep.classList.add("done");

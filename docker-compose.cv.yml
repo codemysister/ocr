@@ -1,0 +1,33 @@
+# OpenSearch untuk subsistem CV search (jalankan terpisah dari OCR API).
+#
+#   docker compose -f docker-compose.cv.yml up -d
+#
+# API: http://localhost:9200
+
+services:
+  opensearch:
+    image: opensearchproject/opensearch:2.13.0
+    container_name: ocr-cv-opensearch
+    environment:
+      - discovery.type=single-node
+      - DISABLE_SECURITY_PLUGIN=true
+      - DISABLE_INSTALL_DEMO_CONFIG=true
+      - OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m
+      - bootstrap.memory_lock=false
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    ports:
+      - "9200:9200"
+      - "9600:9600"
+    volumes:
+      - opensearch-data:/usr/share/opensearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+volumes:
+  opensearch-data:

@@ -23,15 +23,27 @@ CANONICAL_KEYWORDS: Final[dict[str, list[str]]] = {
     # Mutasi: tabungan + e-statement wajib keduanya.
     "mutasi": ["tabungan", "e-statement"],
     "skck": ["skck", "kepolisian"],
+    # JKN: screenshot Mobile JKN — gate keyword lewat PROFILE_ANY_KEYWORD_GROUPS.
+    "jkn": [],
     # Validasi berbasis gambar (wajah + latar biru), bukan OCR keyword.
     "foto_profile": [],
+    # Ingest + index ke OpenSearch (tanpa validasi OCR).
+    "cv": [],
 }
 
 # Profil yang divalidasi dari pixel gambar, bukan teks OCR.
 IMAGE_ONLY_PROFILES: Final[frozenset[str]] = frozenset({"foto_profile"})
 
+# Profil yang di-pipeline lewat subsistem CV (ingest + search).
+CV_INGEST_PROFILES: Final[frozenset[str]] = frozenset({"cv"})
+
 # Screenshot aplikasi / e-statement — jangan crop kartu atau full-bleed di preprocessing.
-SCREEN_CAPTURE_PROFILES: Final[frozenset[str]] = frozenset({"mutasi", "rekening"})
+SCREEN_CAPTURE_PROFILES: Final[frozenset[str]] = frozenset({"mutasi", "rekening", "jkn"})
+
+# Minimal satu keyword per grup harus lolos fuzzy (OR dalam grup, AND antar grup).
+PROFILE_ANY_KEYWORD_GROUPS: Final[dict[str, list[list[str]]]] = {
+    "jkn": [["info peserta", "faskes"]],
+}
 
 # Profil yang tidak memvalidasi nama vs expected_name (hanya keyword dokumen).
 PROFILES_WITHOUT_IDENTITY: Final[frozenset[str]] = frozenset({"mutasi"})
@@ -48,7 +60,9 @@ PROFILE_LABELS: Final[dict[str, str]] = {
     "rekening": "Rekening",
     "mutasi": "Mutasi",
     "skck": "SKCK",
+    "jkn": "JKN (Info Peserta)",
     "foto_profile": "Foto Profil",
+    "cv": "CV",
 }
 
 # Sinonim input pengguna (setelah strip + casefold, spasi tunggal antar kata)
@@ -64,11 +78,18 @@ ALIASES: Final[dict[str, str]] = {
     "mutasi rekening": "mutasi",
     "e-statement": "mutasi",
     "surat keterangan catatan kepolisian": "skck",
+    "jaminan kesehatan nasional": "jkn",
+    "bpjs kesehatan": "jkn",
+    "info peserta": "jkn",
+    "mobile jkn": "jkn",
     "foto profil": "foto_profile",
     "foto profile": "foto_profile",
     "pas foto": "foto_profile",
     "pass foto": "foto_profile",
     "passport photo": "foto_profile",
+    "curriculum vitae": "cv",
+    "resume": "cv",
+    "daftar riwayat hidup": "cv",
 }
 
 
@@ -84,6 +105,11 @@ def profile_label(profile_id: str) -> str:
 def is_image_only_profile(profile_id: str) -> bool:
     pid = (profile_id or "").strip().casefold()
     return pid in IMAGE_ONLY_PROFILES
+
+
+def is_cv_ingest_profile(profile_id: str) -> bool:
+    pid = (profile_id or "").strip().casefold()
+    return pid in CV_INGEST_PROFILES
 
 
 def is_screen_capture_profile(profile_id: str) -> bool:
@@ -110,6 +136,11 @@ def skip_identity_validation(profile_id: str) -> bool:
 def excluded_keywords_for_profile(profile_id: str) -> list[str]:
     pid = (profile_id or "").strip().casefold()
     return list(PROFILE_EXCLUDED_KEYWORDS.get(pid, []))
+
+
+def any_keyword_groups_for_profile(profile_id: str) -> list[list[str]]:
+    pid = (profile_id or "").strip().casefold()
+    return [list(group) for group in PROFILE_ANY_KEYWORD_GROUPS.get(pid, [])]
 
 
 def resolve_keywords(document_type: str) -> tuple[str, list[str]] | None:
