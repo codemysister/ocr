@@ -5,8 +5,6 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from mistralai.client.models import JSONSchema, ResponseFormat
-
 PLACEHOLDER_HOLDER_NAMES = frozenset(
     {
         "",
@@ -50,7 +48,9 @@ _SCHEMA_DEFINITION: dict[str, Any] = {
 }
 
 
-def build_document_annotation_format() -> ResponseFormat:
+def build_document_annotation_format() -> Any:
+    from mistralai.client.models import JSONSchema, ResponseFormat
+
     schema = JSONSchema(
         name="id_document",
         schema_definition=_SCHEMA_DEFINITION,
