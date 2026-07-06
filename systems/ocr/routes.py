@@ -57,6 +57,7 @@ def ocr_health() -> dict:
                 "OCR_FAST_DET_MODEL": "override det, mis. PP-OCRv6_medium_det",
                 "OCR_FAST_REC_MODEL": "override rec, mis. PP-OCRv6_small_rec",
                 "OCR_FAST_DET_LIMIT_SIDE_LEN": "opsional, panjang sisi deteksi",
+                "OCR_ENABLE_MKLDNN": "default 0 — MKLDNN/oneDNN mati (bug PIR PaddlePaddle 3.x); set 1 untuk aktifkan",
             },
         },
         "vl_memory_tuning": {

@@ -44,6 +44,13 @@ def _env_bool(name: str, *, default: bool) -> bool:
     return raw in ("1", "true", "yes", "on")
 
 
+def paddle_mkldnn_enabled() -> bool:
+    """MKLDNN (oneDNN) default MATI: pada PaddlePaddle 3.x + PIR, PP-OCRv6 memicu
+    'ConvertPirAttribute2RuntimeAttribute not support' di jalur onednn. Set
+    OCR_ENABLE_MKLDNN=1 untuk mengaktifkan kembali (mis. bila wheel sudah diperbaiki)."""
+    return _env_bool("OCR_ENABLE_MKLDNN", default=False)
+
+
 def paddle_fast_module_flags() -> dict[str, bool]:
     """Flag modul Paddle (orientation / unwarp / textline) untuk PP-OCRv6 fast."""
     return {
@@ -94,10 +101,12 @@ def _get_paddle_ocr(*, pp_ocr_tier: str | None = None) -> Any:
     det, rec, tier_id = _resolve_fast_models(pp_ocr_tier)
     mod_flags = paddle_fast_module_flags()
     lim = (os.environ.get("OCR_FAST_DET_LIMIT_SIDE_LEN") or "").strip()
+    mkldnn = paddle_mkldnn_enabled()
     cache_key = (
         f"{lang}|{det}|{rec}|ori={int(mod_flags['use_doc_orientation_classify'])}"
         f"|unwarp={int(mod_flags['use_doc_unwarping'])}"
         f"|tline={int(mod_flags['use_textline_orientation'])}|lim={lim or '-'}"
+        f"|mkldnn={int(mkldnn)}"
     )
     cached = _ocr_cache.get(cache_key)
     if cached is not None:
@@ -126,6 +135,7 @@ def _get_paddle_ocr(*, pp_ocr_tier: str | None = None) -> Any:
             **mod_flags,
             "text_detection_model_name": det,
             "text_recognition_model_name": rec,
+            "enable_mkldnn": mkldnn,
         }
 
         if lim.isdigit():

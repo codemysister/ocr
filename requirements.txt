@@ -1,4 +1,5 @@
 # Jalankan server (venv + pip + uvicorn): ./run.sh   atau   bash scripts/dev_server.sh
+# Docker (Python 3.12 + PaddlePaddle): docker compose up -d --build
 #
 # Pasang dependensi manual (setelah: python3.12 -m venv .venv):
 #   source .venv/bin/activate && pip install -r requirements.txt

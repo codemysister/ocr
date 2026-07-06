@@ -114,9 +114,13 @@ def get_vl_pipeline():
         backend = os.environ.get("OCR_VL_BACKEND")
         server_url = os.environ.get("OCR_VL_SERVER_URL")
         version = _pipeline_version()
+        from systems.ocr.fast_runner import paddle_mkldnn_enabled
+
         kw: dict[str, Any] = {
             "pipeline_version": version,
             "use_queues": False,
+            # oneDNN rusak di PaddlePaddle 3.x + PIR (lihat fast_runner). Diteruskan ke sub-predictor.
+            "enable_mkldnn": paddle_mkldnn_enabled(),
         }
         if backend:
             kw["vl_rec_backend"] = backend

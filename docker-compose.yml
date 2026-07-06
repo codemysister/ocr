@@ -1,0 +1,40 @@
+# OCR platform (Python 3.12 + PaddlePaddle / PP-OCRv6).
+#
+#   cp .env.example .env   # opsional: MISTRAL_API_KEY, dll.
+#   docker compose up -d --build
+#   Buka: http://127.0.0.1:8001/pipeline
+#
+# OpenSearch untuk CV search (terpisah):
+#   docker compose -f docker-compose.cv.yml up -d
+
+services:
+  ocr:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: checkinpro-ocr
+    ports:
+      - "${PORT:-8001}:8001"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      HOST: 0.0.0.0
+      PORT: "8001"
+      CORS_ORIGINS: ${CORS_ORIGINS:-*}
+      OCR_FAST_LANG: ${OCR_FAST_LANG:-latin}
+      OCR_FAST_DOC_UNWARPING: ${OCR_FAST_DOC_UNWARPING:-1}
+      PREPROCESS_AUTO_ROTATE_QUARTERS: ${PREPROCESS_AUTO_ROTATE_QUARTERS:-auto}
+      PREPROCESS_PROJECTION_DESKEW: ${PREPROCESS_PROJECTION_DESKEW:-1}
+      PREPROCESS_FULL_BLEED_STRAIGHTEN: ${PREPROCESS_FULL_BLEED_STRAIGHTEN:-1}
+      PREPROCESS_CARD_WARP: ${PREPROCESS_CARD_WARP:-1}
+      PREPROCESS_MIN_SIDE_TARGET: ${PREPROCESS_MIN_SIDE_TARGET:-900}
+    volumes:
+      # Cache model PaddleOCR/PaddleX (unduh otomatis saat inferensi pertama)
+      - paddle-models:/root/.paddlex
+      - ocr-logs:/app/logs
+    restart: unless-stopped
+
+volumes:
+  paddle-models:
+  ocr-logs:
