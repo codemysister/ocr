@@ -108,6 +108,13 @@ def _get_paddle_ocr(*, pp_ocr_tier: str | None = None) -> Any:
             return cached
         os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
         try:
+            import paddle  # noqa: F401
+        except ImportError as e:
+            raise RuntimeError(
+                "PaddlePaddle belum terpasang. Pasang wheel untuk OS dan Python Anda "
+                "(lihat https://www.paddlepaddle.org.cn/install/quick)."
+            ) from e
+        try:
             from paddleocr import PaddleOCR
         except ImportError as e:
             raise RuntimeError(

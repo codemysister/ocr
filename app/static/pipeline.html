@@ -224,7 +224,7 @@
       → OCR (pilihan model di bawah)
       → validasi jenis dokumen &amp; nama
       (<code class="endpoint">POST /systems/validation/api/v1/validate-document</code>).
-      Default: <strong>Mistral</strong> + <code>document_annotation</code>. Alternatif: PP-OCRv6 lokal atau PaddleOCR-VL.
+      Default: <strong>PP-OCRv6</strong> lokal (<code>ocr_mode=fast</code>). Alternatif: Mistral cloud atau PaddleOCR-VL.
       Untuk <strong>foto_profile</strong>: validasi gambar saja (wajah + latar biru) — tanpa OCR.
       Untuk <strong>cv</strong>: ingest ke index pencarian + opsional hybrid search — tanpa validasi dokumen.
     </p>
@@ -260,8 +260,8 @@
       <div id="ocrSection">
       <label class="block">Engine OCR</label>
       <div class="mode-row" role="radiogroup" aria-label="Engine OCR">
-        <label><input type="radio" name="ocrMode" value="mistral" checked /> Mistral (cloud, default)</label>
-        <label><input type="radio" name="ocrMode" value="fast" /> PP-OCRv6 (lokal)</label>
+        <label><input type="radio" name="ocrMode" value="mistral" /> Mistral (cloud)</label>
+        <label><input type="radio" name="ocrMode" value="fast" checked /> PP-OCRv6 (lokal, default)</label>
         <label><input type="radio" name="ocrMode" value="vl" /> PaddleOCR-VL-1.6</label>
       </div>
       <div id="tierRow" class="row two" style="display: none; margin-top: 0.75rem;">
@@ -395,7 +395,7 @@
 
     function selectedMode() {
       const r = document.querySelector('input[name="ocrMode"]:checked');
-      return r ? r.value : "mistral";
+      return r ? r.value : "fast";
     }
 
     function syncTierRow() {

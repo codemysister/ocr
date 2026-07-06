@@ -70,15 +70,15 @@ def api_info() -> dict:
                     "expected_name": "string (optional)",
                 },
                 "query": {
-                    "ocr_mode": "mistral (default) | fast | vl",
+                    "ocr_mode": "fast (default PP-OCRv6) | mistral | vl",
                     "pp_ocr_tier": "balanced | medium | small | tiny — hanya ocr_mode=fast",
                     "include_preprocessed_image": "true | false (default false)",
                     "full_json": "true | false — hanya ocr_mode=vl",
                 },
                 "description": "Preprocess → OCR (pilihan engine) → validasi dokumen dalam satu request. Untuk cv: ingest + opsional search.",
                 "ocr_modes": {
-                    "mistral": "Cloud Mistral OCR + document_annotation (disarankan)",
-                    "fast": "Lokal PP-OCRv6 (pp_ocr_tier)",
+                    "fast": "Lokal PP-OCRv6 (default pipeline, pp_ocr_tier)",
+                    "mistral": "Cloud Mistral OCR + document_annotation (opsional)",
                     "vl": "Lokal PaddleOCR-VL-1.6 (layout + markdown)",
                 },
                 "pp_ocr_tiers": list_pp_ocr_tiers(),
@@ -163,8 +163,9 @@ def _run_ocr(
                     "env": ["MISTRAL_API_KEY", "MISTRAL_OCR_MODEL"],
                 },
             ) from e
-        if any(x in msg for x in ("paddlepaddle", "dependency", "engine", "unavailable")):
-            det = ocr_inference_unavailable_detail()
+        if any(x in msg for x in ("paddlepaddle", "dependency", "engine", "unavailable", "paddleocr")):
+            paddle_mode = "vl" if ocr_mode == "vl" else "fast"
+            det = ocr_inference_unavailable_detail(mode=paddle_mode, exc=e)
             raise HTTPException(status_code=503, detail=det) from e
         raise HTTPException(status_code=500, detail=str(e)) from e
     except Exception as e:
@@ -187,8 +188,8 @@ async def api_pipeline(
     document_type: str = Form(..., description="Jenis dokumen, mis. KTP / NPWP"),
     expected_name: str = Form("", description="Nama referensi (opsional)"),
     ocr_mode: OcrMode = Query(
-        "mistral",
-        description="Engine OCR: mistral (default, cloud + annotation), fast (PP-OCRv6 lokal), vl",
+        "fast",
+        description="Engine OCR: fast (default, PP-OCRv6 lokal), mistral (cloud), vl (PaddleOCR-VL)",
     ),
     pp_ocr_tier: PpOcrTier = Query(
         "medium",

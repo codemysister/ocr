@@ -181,8 +181,8 @@
     <section class="panel">
       <h2>Input</h2>
       <div class="mode-row" role="radiogroup" aria-label="Mode OCR">
-        <label><input type="radio" name="ocrMode" value="mistral" checked /> Mistral (cloud)</label>
-        <label><input type="radio" name="ocrMode" value="fast" /> PP-OCRv6 (lokal)</label>
+        <label><input type="radio" name="ocrMode" value="mistral" /> Mistral (cloud)</label>
+        <label><input type="radio" name="ocrMode" value="fast" checked /> PP-OCRv6 (lokal, default)</label>
         <label><input type="radio" name="ocrMode" value="vl" /> VL-1.6 (layout)</label>
       </div>
       <div id="tierRow" style="display: none;">
@@ -238,7 +238,7 @@
 
     function selectedMode() {
       const r = document.querySelector('input[name="ocrMode"]:checked');
-      return r ? r.value : "mistral";
+      return r ? r.value : "fast";
     }
 
     function syncTierRow() {

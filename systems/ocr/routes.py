@@ -31,7 +31,8 @@ def ocr_health() -> dict:
     return {
         "status": "ok",
         "system": "ocr",
-        "model": "PaddleOCR-VL-1.6",
+        "default_engine": "pp-ocrv6",
+        "model": "PP-OCRv6 (default) / PaddleOCR-VL-1.6 (opsional)",
         "api_vl": "/systems/ocr/api/v1/ocr",
         "api_fast": "/systems/ocr/api/v1/ocr-fast",
         "api_mistral": "/systems/ocr/api/v1/ocr-mistral",
@@ -137,7 +138,7 @@ async def api_ocr_vl(
                 "unavailable",
             )
         ):
-            det = ocr_inference_unavailable_detail()
+            det = ocr_inference_unavailable_detail(mode="vl", exc=e)
             log_safe_failure(subsystem=sub, method="POST", path=path, http_status=503, detail=det)
             raise HTTPException(status_code=503, detail=det) from e
         log_safe_failure(subsystem=sub, method="POST", path=path, http_status=500, detail=str(e))
@@ -195,9 +196,10 @@ async def api_ocr_fast(
                 "dependency",
                 "engine",
                 "unavailable",
+                "paddleocr",
             )
         ):
-            det = ocr_inference_unavailable_detail()
+            det = ocr_inference_unavailable_detail(mode="fast", exc=e)
             log_safe_failure(subsystem=sub, method="POST", path=path, http_status=503, detail=det)
             raise HTTPException(status_code=503, detail=det) from e
         log_safe_failure(subsystem=sub, method="POST", path=path, http_status=500, detail=str(e))
