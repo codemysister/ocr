@@ -52,7 +52,7 @@ String yang dikirim klien untuk menentukan **profil validasi**. Server menormali
 | `pemadanan_npwp` | Pemadanan NPWP | OCR + keyword fuzzy |
 | `keterangan_kesehatan` | Surat Keterangan Kesehatan | OCR + keyword fuzzy |
 | `foto_profile` | Foto Profil | **Gambar** (wajah + latar biru) |
-| `cv` | CV | **Ingest + search** (tanpa validasi OCR) |
+| `cv` | CV | **Ingest + match** 3 dimensi (nama / pendidikan / pengalaman) — bukan validasi OCR keyword |
 
 Daftar lengkap alias ada di [Profil dokumen](#profil-dokumen--ketentuan-validasi).
 
@@ -107,17 +107,22 @@ valid = document_matched = face_pass AND blue_background_pass
 |--------|------|--------------|--------|
 | GET | `/health` | — | Health check platform |
 | GET | `/api/v1` | — | Daftar endpoint & `document_types` |
-| **POST** | **`/api/v1/pipeline`** | **multipart** | **Preprocess → OCR → validasi (1 request)** |
+| **POST** | **`/api/v1/pipeline`** | **multipart** | **OCR → validasi (1 request); persiapan gambar: default passthrough ringan, opsional raw (`skip_passthrough`) atau penuh (`enable_preprocess`)** |
 | POST | `/api/v1/preprocess` | multipart | Preprocess gambar saja |
 | POST | `/systems/ocr/api/v1/ocr-mistral` | multipart | OCR cloud Mistral (opsional) |
 | POST | `/systems/ocr/api/v1/ocr-fast` | multipart | **OCR lokal PP-OCRv6 (default pipeline)** |
 | POST | `/systems/ocr/api/v1/ocr` | multipart | OCR lokal PaddleOCR-VL |
 | POST | `/systems/validation/api/v1/validate-document` | JSON | Validasi teks OCR vs profil |
-| POST | `/systems/validation/api/v1/validate-foto-profile` | multipart | Validasi foto profil biru |
+| POST | `/systems/validation/api/v1/validate-foto-profile` | multipart | Validasi foto profil biru (tanpa pipeline) |
 | POST | `/systems/validation/api/v1/compare-names` | JSON | Bandingkan dua string nama |
+| POST | `/systems/cv/api/v1/ingest` | multipart | Ingest CV (PDF/DOCX/MD/gambar) → OpenSearch |
+| POST | `/systems/cv/api/v1/match` | JSON | Match CV terindeks (nama / pendidikan / pengalaman) |
+| GET | `/systems/cv/api/v1/documents` | — | Daftar CV terindeks |
+| DELETE | `/systems/cv/api/v1/documents/{doc_id}` | — | Hapus CV dari index |
 | GET | `/api/v1/dataset/types` | — | Daftar folder `dataset/` + pemetaan `document_type` |
+| GET | `/api/v1/dataset/file` | — | Preview/unduh file dataset (`folder` + `file` query) |
 | POST | `/api/v1/dataset/benchmark` | JSON | Benchmark pipeline terhadap file dataset (NDJSON stream) |
-| GET | `/dataset-test` | — | UI benchmark dataset (dev) |
+| GET | `/dataset-test` | — | UI benchmark dataset (dev): mode batch atau file spesifik |
 
 ---
 
@@ -147,16 +152,70 @@ Content-Type: multipart/form-data
 | `ocr_mode` | **`fast`** | **`fast`** = PP-OCRv6 lokal (default) \| `mistral` \| `vl` — **diabaikan untuk `foto_profile`** |
 | `pp_ocr_tier` | `medium` | Tier PP-OCRv6 saat `ocr_mode=fast` (default): `balanced` \| `medium` \| `small` \| `tiny` |
 | `include_preprocessed_image` | `false` | Sertakan `preprocessed_image.image_base64` |
+| `enable_preprocess` | **`false`** | `true` = crop/rotate/enhance penuh sebelum OCR; `false` = passthrough ringan atau raw (lihat di bawah) |
+| `skip_passthrough` | **`false`** | `true` = kirim bytes upload **langsung** ke OCR (tanpa resize/grayscale). Hanya efektif bila `enable_preprocess=false` |
 | `full_json` | `false` | Hanya `ocr_mode=vl`: lampirkan `result_json` penuh |
-| `cv_search_query` | — | Hanya `document_type=cv`: kata kunci hybrid search setelah ingest |
+| `cv_search_query` | — | Hanya `document_type=cv`: kata kunci hybrid search (legacy alias `expected_name`) |
+| `cv_education_query` | — | Hanya `document_type=cv`: filter tambahan section pendidikan |
+| `cv_experience_query` | — | Hanya `document_type=cv`: filter tambahan section pengalaman |
 
 Tanpa query `ocr_mode`, pipeline memakai **PP-OCRv6** (`fast`) dengan tier **`medium`**.
+
+### Preprocessing (`enable_preprocess` & `skip_passthrough`)
+
+| Kombinasi | Perilaku |
+|-----------|----------|
+| default (`enable_preprocess=false`, `skip_passthrough=false`) | **Passthrough ringan:** decode EXIF → upscale/downscale (`PREPROCESS_MIN_SIDE_TARGET`) → **grayscale 8-bit** → OCR |
+| `skip_passthrough=true` | **Raw ke OCR:** bytes upload diteruskan apa adanya (hanya dicek bisa didecode). Tanpa EXIF rotate, resize, atau grayscale |
+| `enable_preprocess=true` | **Preprocess penuh:** resize, orientasi NPWP, dual-crop (bila perlu), warp kartu (env), enhance grayscale, lalu OCR. `skip_passthrough` **diabaikan** |
+
+Metadata `preprocess` saat passthrough ringan (default):
+
+| Field | Arti |
+|-------|------|
+| `skipped` | `true` |
+| `light_upscale_only` | `true` |
+| `grayscale_applied` | `true` |
+| `encoding` | `grayscale_8bit_passthrough` |
+| `resize_applied`, `resize_scale`, `resize_reason` | Info upscale/downscale |
+| `resize_min_side_target_boosted` | `true` bila thumbnail kecil (<500px) naik target efektif otomatis |
+
+Metadata `preprocess` saat `skip_passthrough=true`:
+
+| Field | Arti |
+|-------|------|
+| `skipped` | `true` |
+| `skip_passthrough` | `true` |
+| `reason` | `direct_upload_bytes` |
+| `encoding` | `raw_upload_bytes` |
+| `mime` | MIME terdeteksi dari magic bytes upload |
+| `input_bytes` | Ukuran file upload (byte) |
+
+**Tips:** Thumbnail upload kecil (~300–500px) sering butuh upscale agresif; set `PREPROCESS_MIN_SIDE_TARGET=900` (atau lebih) di server. NPWP/portrait rumit tetap bisa butuh `enable_preprocess=true`.
 
 ### Contoh — KTP + cek nama (default PP-OCRv6)
 
 ```bash
 curl -X POST "http://127.0.0.1:8001/api/v1/pipeline" \
   -F "file=@KTP_Siti.jpg" \
+  -F "document_type=KTP" \
+  -F "expected_name=Siti Dwi Sarah"
+```
+
+### Contoh — KTP + raw ke OCR (tanpa passthrough)
+
+```bash
+curl -X POST "http://127.0.0.1:8001/api/v1/pipeline?skip_passthrough=true" \
+  -F "file=@KTP_scan_1200px.jpg" \
+  -F "document_type=KTP" \
+  -F "expected_name=Siti Dwi Sarah"
+```
+
+### Contoh — KTP + preprocess penuh (crop kartu)
+
+```bash
+curl -X POST "http://127.0.0.1:8001/api/v1/pipeline?enable_preprocess=true" \
+  -F "file=@KTP_foto_meja.jpg" \
   -F "document_type=KTP" \
   -F "expected_name=Siti Dwi Sarah"
 ```
@@ -178,17 +237,26 @@ curl -X POST "http://127.0.0.1:8001/api/v1/pipeline" \
   -F "document_type=foto_profile"
 ```
 
-Respons `foto_profile`: `ocr: null`, `validation_mode: "image"`, field `image_validation` berisi detail wajah & biru.
+Query `ocr_mode`, `enable_preprocess`, dan `pp_ocr_tier` **diabaikan** untuk profil ini. Lihat [Foto profil (`foto_profile`)](#foto_profile).
 
-### Contoh — CV (ingest + opsional search)
+### Contoh — CV PDF + match nama
 
 ```bash
-curl -X POST "http://127.0.0.1:8001/api/v1/pipeline?cv_search_query=pengalaman%20kerja%20python" \
-  -F "file=@dataset/cv/cv_Usep_Maulidin.md" \
-  -F "document_type=cv"
+curl -X POST "http://127.0.0.1:8001/api/v1/pipeline?cv_education_query=S1%20Teknik%20Informatika&cv_experience_query=Python%20backend" \
+  -F "file=@dataset/cv/cv_Usep_Maulidin.pdf" \
+  -F "document_type=cv" \
+  -F "expected_name=Usep Maulidin"
 ```
 
-Respons `cv`: `validation_mode: "cv"`, `cv_ingest` (doc_id, chunk_count, parse_mode), `cv_search` bila query diisi. Butuh OpenSearch + `pip install -r requirements-cv.txt`.
+Query CV (semua **query string**, bukan form field):
+
+| Param | Fungsi |
+|-------|--------|
+| `cv_search_query` | Legacy alias `expected_name` untuk nama |
+| `cv_education_query` | Kata kunci tambahan section pendidikan |
+| `cv_experience_query` | Kata kunci tambahan section pengalaman |
+
+Respons: `validation_mode: "cv"`, `cv_ingest`, `cv_match`. Detail PDF & gate match → [CV (`cv`)](#cv).
 
 ### Contoh — JavaScript (fetch)
 
@@ -224,8 +292,14 @@ flowchart TD
   B -->|Tidak| L{Profil foto_profile?}
   L -->|Ya| C[Decode gambar EXIF]
   C --> D[Validasi wajah + latar biru]
-  L -->|Tidak| E[Preprocess OCR]
-  E --> F[OCR PP-OCRv6 default / mistral / vl]
+  L -->|Tidak| E{enable_preprocess?}
+  E -->|true| E2[Preprocess penuh OCR]
+  E -->|false| E0{skip_passthrough?}
+  E0 -->|true| E3[Raw bytes ke OCR]
+  E0 -->|false| E1[Passthrough: resize + grayscale]
+  E1 --> F[OCR PP-OCRv6 default / mistral / vl]
+  E2 --> F[OCR PP-OCRv6 default / mistral / vl]
+  E3 --> F[OCR PP-OCRv6 default / mistral / vl]
   F --> G[Validasi keyword + identitas]
   D --> H[Respons JSON + verdict]
   G --> H
@@ -251,8 +325,17 @@ flowchart TD
 | JKN | `jkn`, `info peserta` | **Disarankan wajib** | ✅ | Ada `info peserta` **atau** `faskes` **dan** identitas ≥65 (jika nama diisi) |
 | Iuran JKN | `iuran`, `info iuran`, `iuran jkn` | **Disarankan wajib** | ✅ | Ada `info iuran` **dan** (salah satu keyword konten) **dan** identitas (modal tanpa nama: skip) |
 | Vaksinasi 1 | `vaksinasi_1`, `vaksinasi 1`, `vaksin dosis pertama` | **Disarankan wajib** | ✅ | Kartu/surat dosis 1 ≥70% **dan** identitas (jika nama diisi) |
-| Foto Profil | `foto_profile`, `pas foto` | Tidak dipakai | ❌ | 1 wajah + latar biru cukup |
-| CV | `cv`, `resume`, `curriculum vitae` | Opsional (jadi query search) | ❌ | Ingest sukses ke index; search opsional |
+| Vaksinasi 2 | `vaksinasi_2`, `vaksinasi 2` | **Disarankan wajib** | ✅ | Kartu/surat dosis 2 ≥70% **dan** identitas (jika nama diisi) |
+| Vaksinasi 3 | `vaksinasi_3`, `vaksinasi 3`, `vaksin booster` | **Disarankan wajib** | ✅ | Kartu/surat dosis 3/booster ≥70% **dan** identitas (jika nama diisi) |
+| Ijazah | `ijasah`, `ijazah` | Opsional | ✅ | Keyword ijazah/pendidikan ≥70% |
+| Transkrip | `transkrip`, `transkrip nilai` | Opsional | ✅ | Keyword transkrip/nilai ≥70% |
+| Formulir OKB | `formulir_okb`, `formulir okb` | Opsional | ✅ | Keyword formulir OKB ≥70% |
+| Formulir lamaran | `formulir_lamaran`, `formulir lamaran pekerjaan` | Opsional | ✅ | Keyword lamaran pekerjaan ≥70% |
+| Surat lamaran | `surat_lamaran`, `surat lamaran` | Opsional | ✅ | Keyword surat lamaran ≥70% |
+| Pemadanan NPWP | `pemadanan_npwp`, `pemadanan npwp` | Opsional | ✅ | Keyword pemadanan/npwp ≥70% |
+| Surat keterangan kesehatan | `keterangan_kesehatan`, `keterangan kesehatan` | Opsional | ✅ | Keyword surat keterangan/kesehatan ≥70% |
+| CV | `cv`, `resume`, `curriculum vitae` | Disarankan (dimensi nama) | ❌ (match struktural) | **PDF/DOCX/MD/gambar** → ingest + match nama/pendidikan/pengalaman |
+| Foto Profil | `foto_profile`, `pas foto` | Tidak dipakai | ❌ | **JPEG/PNG/WebP** — 1 wajah + latar biru |
 
 ---
 
@@ -286,9 +369,17 @@ curl -X POST "http://127.0.0.1:8001/api/v1/pipeline" \
 
 **Alias:** `nomor pokok wajib pajak`, `npwp 16 digit`
 
-**Keyword:** `npwp`, `pajak`, `wajib pajak`
+**Keyword (fuzzy, rata-rata ≥70%):** `npwp`, `pajak`, `kantor pelayanan`, `pratama`
 
-**Bonus:** kata `npwp` di OCR.
+**Bonus struktural:** marker NPWP (`npwp` / variasi OCR), nomor 15–16 digit, `kantor pelayanan`, `pratama`, `kpp`, `djp`.
+
+**Anchor jenis dokumen:** Bila keyword aggregate <70% tetapi OCR punya **marker NPWP** + **nomor pajak 15–16 digit**, `document_type_pass` tetap lolos.
+
+**Identitas:** Ekstraksi nama dari baris kapital dekat nomor NPWP; prioritas `holder_name` dari Mistral bila `ocr_mode=mistral`.
+
+**Fallback NIK:** Pipeline mengisi `expected_nik` dari **16 digit di filename** (`{tipe}_{Nama}_{NIK16}.ext`). Bila nama OCR gagal tapi NIK 16 digit di OCR cocok dengan filename, `identity_pass` lolos (`npwp_nik_fallback`).
+
+**Preprocess:** Thumbnail landscape kecil — passthrough ringan + upscale sering cukup; foto miring/portrait dual-crop → `enable_preprocess=true`.
 
 ```bash
 curl -X POST "http://127.0.0.1:8001/api/v1/pipeline" \
@@ -538,44 +629,108 @@ curl -X POST "http://127.0.0.1:8001/api/v1/pipeline" \
 
 **Alias:** `foto profil`, `foto profile`, `pas foto`, `pass foto`, `passport photo`
 
-**Mode:** `validation_mode: "image"` — **tidak ada OCR**, preprocess kartu dilewati.
+**Mode:** `validation_mode: "image"` — **tidak ada OCR**, preprocess kartu & query `enable_preprocess` **dilewati**.
 
-**Gate:**
+#### Request (`POST /api/v1/pipeline`)
 
-| Gate | Syarat default |
-|------|----------------|
-| Wajah | Tepat **1** wajah (setelah koreksi orientasi ±90° + isolasi area biru) |
-| Ukuran wajah | Area wajah **3%–75%** dari frame analisis |
-| Latar biru | ≥ **40%** area sampel di luar wajah (HSV) |
+| Field / param | Wajib | Keterangan |
+|---------------|-------|------------|
+| `file` | ✅ | **Gambar saja:** JPEG, PNG, WebP (bukan PDF) |
+| `document_type` | ✅ | `foto_profile` atau alias |
+| `expected_name` | — | **Diabaikan** untuk gate (belum ada face recognition) |
+| `include_preprocessed_image` | — | `true` → lampirkan crop analisis (`preprocessed_image.image_base64`) |
+| `ocr_mode`, `pp_ocr_tier`, `enable_preprocess` | — | **Diabaikan** |
 
-**Catatan upload:** Foto paspor fisik di atas meja putih atau menyamping didukung — server memutar gambar dan mengisolasi region biru terbesar sebelum validasi.
+#### Gate validasi
 
-**Field respons utama:**
+| Gate | Syarat default | Blocker |
+|------|----------------|---------|
+| Wajah | Tepat **1** wajah frontal (Haar cascade, setelah koreksi orientasi ±90°) | `FACE` |
+| Ukuran wajah | Area wajah **3%–75%** dari frame analisis | `FACE` |
+| Latar biru | ≥ **40%** area sampel biru di luar wajah (HSV) | `BLUE_BACKGROUND` |
 
-| Field | Contoh | Arti |
-|-------|--------|------|
-| `valid` | `true` | **VALID** — wajah + latar biru lolos |
-| `valid` | `false` | **TIDAK VALID** |
-| `validation.image_validation` | `{ ... }` | Detail gate (opsional untuk UI/debug) |
+```
+document_matched = valid = face_pass AND blue_background_pass
+```
 
-Respons minimal yang disarankan untuk klien:
+Server otomatis: koreksi orientasi (0° / ±90°), isolasi region biru terbesar (`portrait_crop_applied`), lalu analisis wajah + biru. Foto paspor di meja putih / menyamping sering tetap lolos setelah crop.
+
+#### Respons pipeline (sukses)
+
+| Field | Tipe | Keterangan |
+|-------|------|------------|
+| `valid` | boolean | **`true` = VALID**, `false` = TIDAK VALID — baca ini dulu di frontend |
+| `document_matched` | boolean | Sama dengan `valid` |
+| `validation_mode` | `"image"` | Bukan OCR |
+| `ocr` | `null` | Tidak ada teks OCR |
+| `preprocess.skipped` | `true` | Alasan: `image_only_profile` |
+| `validation.image_validation` | object | Metrik deteksi (lihat tabel di bawah) |
+| `validation.explanation` | object | `summary`, `detail_lines`, `primary_blockers`, `hints` |
+| `verdict.summary` | string | Ringkasan bahasa Indonesia |
+| `verdict.is_own_document` | `null` | Identitas wajah vs nama belum diimplementasi |
+| `preprocessed_image` | object | Hanya jika `include_preprocessed_image=true` |
+
+**`validation.image_validation` (utama):**
+
+| Field | Arti |
+|-------|------|
+| `face_count` | Jumlah wajah terdeteksi |
+| `face_pass` | Semua gate wajah lolos |
+| `face_area_ratio` | Proporsi area wajah |
+| `blue_background_pass` | Latar biru cukup |
+| `blue_background_ratio` | Rasio biru (0–1) |
+| `blue_background_ratio_method` | `card_mask_excluding_face` atau `frame_border` |
+| `orientation_correction_90ccw_steps` | Putar koreksi (0–3 × 90° CCW) |
+| `portrait_crop_applied` | Crop kotak pas foto dari gambar penuh |
+| `image_width`, `image_height` | Dimensi frame analisis |
 
 ```json
 {
+  "success": true,
   "valid": true,
-  "document_profile_id": "foto_profile",
-  "image_validation": {
-    "face_count": 1,
-    "face_pass": true,
-    "blue_background_pass": true,
-    "blue_background_ratio": 0.68
+  "document_matched": true,
+  "validation_mode": "image",
+  "ocr": null,
+  "preprocess": { "skipped": true, "reason": "image_only_profile" },
+  "validation": {
+    "document_profile_id": "foto_profile",
+    "document_matched": true,
+    "image_validation": {
+      "face_count": 1,
+      "face_pass": true,
+      "face_area_ratio": 0.18,
+      "blue_background_pass": true,
+      "blue_background_ratio": 0.68,
+      "orientation_correction_90ccw_steps": 0,
+      "portrait_crop_applied": true
+    },
+    "explanation": {
+      "summary": "Foto profil valid: wajah terdeteksi dengan latar biru yang memadai.",
+      "primary_blockers": []
+    }
+  },
+  "verdict": {
+    "document_type_current": "foto_profile",
+    "document_type_current_label": "Foto Profil",
+    "summary": "..."
   }
 }
 ```
 
-**Field respons lengkap:** `validation.image_validation`
+#### Endpoint khusus (tanpa pipeline)
 
-**Endpoint khusus (tanpa pipeline):**
+```
+POST /systems/validation/api/v1/validate-foto-profile
+Content-Type: multipart/form-data
+```
+
+| Field | Default | Keterangan |
+|-------|---------|------------|
+| `file` | — | Gambar foto profil (wajib) |
+| `document_type` | `foto_profile` | Harus profil gambar |
+| `expected_name` | `""` | Opsional, tidak mempengaruhi gate |
+
+Respons flat: `valid`, `image_validation`, `explanation`, `verdict` (tanpa wrapper `validation` nested seperti pipeline).
 
 ```bash
 curl -X POST "http://127.0.0.1:8001/systems/validation/api/v1/validate-foto-profile" \
@@ -583,7 +738,7 @@ curl -X POST "http://127.0.0.1:8001/systems/validation/api/v1/validate-foto-prof
   -F "document_type=foto_profile"
 ```
 
-**Tuning threshold (env):**
+#### Tuning threshold (env)
 
 | Env | Default |
 |-----|---------|
@@ -591,7 +746,250 @@ curl -X POST "http://127.0.0.1:8001/systems/validation/api/v1/validate-foto-prof
 | `FOTO_PROFILE_FACE_MIN_AREA_RATIO` | `0.03` |
 | `FOTO_PROFILE_FACE_MAX_AREA_RATIO` | `0.75` |
 
-**Catatan:** `expected_name` **tidak** memvalidasi identitas wajah vs nama (belum ada face recognition). Field diabaikan untuk gate.
+#### Error umum
+
+| HTTP | Penyebab |
+|------|----------|
+| 400 | File kosong, decode gagal, bukan gambar |
+| 400 | `document_type` bukan profil gambar (endpoint validate-foto-profile) |
+
+---
+
+### `cv`
+
+**Alias:** `resume`, `curriculum vitae`, `daftar riwayat hidup`
+
+**Mode:** `validation_mode: "cv"` — **bukan validasi OCR keyword**. Upload → parse → chunk → embed (BGE-M3) → index OpenSearch → **match terstruktur** 3 dimensi.
+
+Spesifikasi match lengkap: [`docs/CV_SEARCH_SPEC.md`](CV_SEARCH_SPEC.md).
+
+#### Format file didukung
+
+| Format | Ekstensi | Catatan |
+|--------|----------|---------|
+| **PDF** | `.pdf` | Native text, Docling, atau OCR per halaman (lihat alur di bawah) |
+| Word | `.docx` | Via Docling |
+| Markdown / teks | `.md`, `.txt`, `.markdown` | UTF-8 langsung |
+| Gambar scan | `.jpg`, `.png`, `.webp`, `.tif`, `.bmp` | OCR PP-OCRv6 (`ocr_fast`) |
+
+#### Alur parse PDF (case paling umum)
+
+```mermaid
+flowchart TD
+  P[Upload PDF] --> T{Ada teks native?}
+  T -->|Ya, cukup| A[pdf_text — PyMuPDF]
+  T -->|Tidak / scan| D{Docling OK?}
+  D -->|Ya| B[docling]
+  D -->|Tidak| C[ocr_fast — render halaman + PP-OCRv6]
+  A --> CH[Chunk section + embed + index]
+  B --> CH
+  C --> CH
+  CH --> M[match_cv: nama / pendidikan / pengalaman]
+```
+
+| `parse_mode` | Arti |
+|--------------|------|
+| `pdf_text` | Teks selectable dari PDF (PyMuPDF) |
+| `docling` | Layout Docling (PDF/DOCX kompleks) |
+| `ocr_fast` | PDF/gambar scan — render 150 DPI + PP-OCRv6 per halaman |
+| `text_native` | File `.md` / `.txt` |
+
+#### Gate match (`document_matched`)
+
+```
+document_matched = valid = cv_match.matched
+```
+
+| Dimensi | Dicek bila | Lolos jika |
+|---------|------------|------------|
+| **nama** | `expected_name` diisi | Skor fuzzy ≥ **65%** — nama diekstrak dari teks CV (bukan pola label KTP) |
+| **pendidikan** | Selalu | Keyword section pendidikan + `cv_education_query` ≥ **70%** (`partial_ratio`) |
+| **pengalaman** | Selalu | Keyword section pengalaman + `cv_experience_query` ≥ **70%** |
+
+#### Ekstraksi nama CV (dimensi `nama`)
+
+Berbeda dari KTP/NPWP: CV jarang punya label `Nama:`. Server memakai `extract_cv_holder_name()`:
+
+1. Label eksplisit: baris setelah `nama` / `name` / `nama lengkap` / `full name`
+2. Baris prominent di header CV (biasanya **ALL CAPS**, 2–5 kata) — mis. `AIGA TARA NASUCHA` di section `TENTANG SAYA`
+3. Fallback fuzzy: baris teks yang paling mirip `expected_name` (berguna di benchmark dataset)
+
+Baris yang **diabaikan** sebagai nama: `TENTANG SAYA`, `FRESH GRADUATE`, email, telepon, alamat, `- Status`, dll.
+
+| `method` (debug) | Arti |
+|------------------|------|
+| `cv_after_nama_label` | Baris setelah label nama |
+| `cv_nama_colon` | `Nama: …` inline |
+| `cv_name_line` / `cv_person_segment` | Heuristik baris nama di CV |
+| `cv_best_expected_line` | Baris terbaik vs `expected_name` (benchmark) |
+| `cv_fuzzy_line_match` | Fuzzy langsung ke teks CV |
+
+**Benchmark dataset:** bila `use_expected_name=true`, nama referensi di-parse dari filename `{folder}_{Nama Lengkap}_{NIK16}.ext` (folder `cv` → `expected_name` untuk dimensi nama).
+
+`cv_match.overall_percent` = rata-rata skor dimensi yang aktif.
+
+#### Request pipeline (`POST /api/v1/pipeline`)
+
+| Field / param | Wajib | Keterangan |
+|---------------|-------|------------|
+| `file` | ✅ | CV: **PDF**, DOCX, MD, atau gambar |
+| `document_type` | ✅ | `cv` |
+| `expected_name` | Disarankan | Nama untuk dimensi **nama** (form field) |
+| `cv_education_query` | — | Query string — section pendidikan |
+| `cv_experience_query` | — | Query string — section pengalaman |
+| `cv_search_query` | — | Legacy alias `expected_name` (query string) |
+| `ocr_mode`, `enable_preprocess` | — | **Diabaikan** (parse/OCR internal CV) |
+
+```bash
+# PDF native (teks bisa diseleksi)
+curl -X POST "http://127.0.0.1:8001/api/v1/pipeline" \
+  -F "file=@cv_Andika.pdf" \
+  -F "document_type=cv" \
+  -F "expected_name=Andika Pratama"
+
+# PDF scan (otomatis ocr_fast bila teks native kosong)
+curl -X POST "http://127.0.0.1:8001/api/v1/pipeline?cv_education_query=S1&cv_experience_query=software%20engineer" \
+  -F "file=@cv_scan.pdf" \
+  -F "document_type=cv" \
+  -F "expected_name=Nama di CV"
+```
+
+#### Respons pipeline (contoh PDF)
+
+```json
+{
+  "success": true,
+  "valid": true,
+  "document_matched": true,
+  "validation_mode": "cv",
+  "ocr_mode": null,
+  "ocr": null,
+  "preprocess": { "skipped": true, "reason": "cv_ingest" },
+  "validation": {
+    "document_profile_id": "cv",
+    "document_matched": true
+  },
+  "cv_ingest": {
+    "doc_id": "a1b2c3…",
+    "doc_title": "cv Andika Pratama",
+    "source_file": "cv_Andika.pdf",
+    "parse_mode": "pdf_text",
+    "num_pages": 2,
+    "text_chars": 4820,
+    "chunk_count": 12,
+    "index": { "indexed": 12 },
+    "timing": { "parse_s": 0.04, "chunk_s": 0.01, "embed_s": 1.2, "index_s": 0.3, "total_s": 1.6 }
+  },
+  "cv_match": {
+    "matched": true,
+    "overall_percent": 82.3,
+    "summary": "nama ✓ (91.2%) · pendidikan ✓ (78.0%) · pengalaman ✓ (77.7%)",
+    "dimensions": {
+      "nama": { "pass": true, "percent": 91.2, "extracted": "ANDIKA PRATAMA" },
+      "pendidikan": { "pass": true, "percent": 78.0, "keywords_hit": ["pendidikan", "s1"] },
+      "pengalaman": { "pass": true, "percent": 77.7, "keywords_hit": ["pengalaman kerja"] }
+    }
+  },
+  "verdict": {
+    "summary": "CV cocok: nama ✓ (91.2%) · pendidikan ✓ (78.0%) · pengalaman ✓ (77.7%)",
+    "is_own_document": true,
+    "document_type_current": "cv",
+    "document_type_current_label": "CV"
+  },
+  "timing": { "validation_s": 1.8, "total_s": 1.8 }
+}
+```
+
+Bila `expected_name` kosong: dimensi **nama** di-skip; `matched` hanya pendidikan + pengalaman.
+
+**Contoh respons gagal (nama tidak cocok):**
+
+```json
+{
+  "success": true,
+  "valid": false,
+  "document_matched": false,
+  "validation_mode": "cv",
+  "cv_match": {
+    "matched": false,
+    "overall_percent": 66.7,
+    "summary": "nama ✗ (0.0%) · pendidikan ✓ (100.0%) · pengalaman ✓ (100.0%)",
+    "dimensions": {
+      "nama": {
+        "pass": false,
+        "percent": 0.0,
+        "expected": "AIGA TARA NASUCHA",
+        "extracted": null,
+        "method": "failed"
+      },
+      "pendidikan": { "pass": true, "percent": 100.0 },
+      "pengalaman": { "pass": true, "percent": 100.0 }
+    }
+  }
+}
+```
+
+#### Prasyarat & error
+
+| Kondisi | HTTP | Respons |
+|---------|------|---------|
+| `requirements-cv.txt` belum terpasang | 503 | `{ "code": "CV_SUBSYSTEM_UNAVAILABLE", "message": "Subsistem CV belum terpasang.", ... }` |
+| OpenSearch tidak jalan | 503 | Detail koneksi + `docker compose -f docker-compose.cv.yml up -d` |
+
+Cek cepat: `GET /health` → `cv_search: true` dan entry `systems.cv` ada bila subsistem siap.
+
+#### Subsistem CV (langsung)
+
+Prasyarat: OpenSearch jalan + `pip install -r requirements-cv.txt`
+
+| Method | Path | Fungsi |
+|--------|------|--------|
+| `GET` | `/systems/cv/health` | Status OpenSearch + embedder |
+| `POST` | `/systems/cv/api/v1/ingest` | Ingest saja (sama engine parse PDF) |
+| `POST` | `/systems/cv/api/v1/match` | Match chunk CV yang sudah terindeks (`doc_id` wajib) |
+| `GET` | `/systems/cv/api/v1/documents` | Daftar `doc_id` |
+| `DELETE` | `/systems/cv/api/v1/documents/{doc_id}` | Hapus dari index |
+
+**Ingest (multipart):**
+
+```bash
+curl -X POST "http://127.0.0.1:8001/systems/cv/api/v1/ingest" \
+  -F "file=@cv.pdf" \
+  -F "expected_name=Nama Lengkap" \
+  -F "education_query=S1 Teknik Informatika" \
+  -F "experience_query=Python"
+```
+
+**Match terindeks (JSON):**
+
+```bash
+curl -X POST "http://127.0.0.1:8001/systems/cv/api/v1/match" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "doc_id": "a1b2c3…",
+    "expected_name": "Nama Lengkap",
+    "education_query": "S1",
+    "experience_query": "backend"
+  }'
+```
+
+#### Prasyarat & error
+
+| HTTP | `error_kind` / code | Penyebab |
+|------|---------------------|----------|
+| 503 | `cv_unavailable` / `CV_SUBSYSTEM_UNAVAILABLE` | `requirements-cv.txt` belum terpasang |
+| 503 | OpenSearch down | `docker compose -f docker-compose.cv.yml up -d` |
+| 400 | — | File kosong, parse gagal, tidak ada teks/chunk |
+| 404 | — | `doc_id` tidak ada (endpoint match) |
+
+#### Env CV (ringkas)
+
+| Env | Default | Fungsi |
+|-----|---------|--------|
+| `OPENSEARCH_URL` | `http://localhost:9200` | Cluster OpenSearch |
+| `CV_OPENSEARCH_INDEX` | `cv_chunks` | Nama index |
+| `CV_EMBED_MODEL` | `BAAI/bge-m3` | Model embedding |
+| `CV_OCR_PP_TIER` | `small` | Tier OCR saat PDF/gambar scan |
 
 ---
 
@@ -601,7 +999,50 @@ Uji otomatis pipeline terhadap file di folder `dataset/` (pola nama: `{folder}_{
 
 ### `GET /api/v1/dataset/types`
 
-Mengembalikan daftar subfolder dataset, jumlah file, ID kanonik, dan label.
+Mengembalikan daftar subfolder dataset, jumlah file, ID kanonik, label, dan `supported` (semua folder dataset saat ini terpetakan ke profil API).
+
+**Contoh respons:**
+
+```json
+{
+  "dataset_root": "/path/to/dataset",
+  "folders": [
+    {
+      "folder": "cv",
+      "file_count": 198,
+      "document_type": "cv",
+      "supported": true,
+      "label": "CV"
+    },
+    {
+      "folder": "ktp",
+      "file_count": 199,
+      "document_type": "ktp",
+      "supported": true,
+      "label": "KTP"
+    }
+  ]
+}
+```
+
+**Folder `cv`:** butuh subsistem CV terpasang (`cv_search: true` di `/health`). Tanpa itu, benchmark CV gagal dengan `failure_kind: "cv_unavailable"`.
+
+### `GET /api/v1/dataset/file`
+
+Preview atau unduh file dataset (dipakai UI review kegagalan).
+
+**Query**
+
+| Param | Wajib | Keterangan |
+|-------|-------|------------|
+| `folder` | ✅ | Subfolder dataset, mis. `npwp` |
+| `file` | ✅ | Nama file, mis. `npwp_Nama_3216....jpg` |
+
+**Respons:** binary (`image/jpeg`, `image/png`, `application/pdf`, dll.).
+
+```bash
+curl -o preview.jpg "http://127.0.0.1:8001/api/v1/dataset/file?folder=npwp&file=npwp_Nama_3216....jpg"
+```
 
 ### `POST /api/v1/dataset/benchmark`
 
@@ -610,17 +1051,94 @@ Mengembalikan daftar subfolder dataset, jumlah file, ID kanonik, dan label.
 ```json
 {
   "selections": [
-    { "folder": "ktp", "enabled": true, "limit": 10 }
+    {
+      "folder": "ktp",
+      "enabled": true,
+      "limit": 10,
+      "offset": 0,
+      "files": []
+    },
+    {
+      "folder": "npwp",
+      "enabled": true,
+      "limit": 0,
+      "offset": 0,
+      "files": [
+        "npwp_MUHAMAD EKA GALIH PERMANA_3215261708010003.jpg",
+        "npwp/npwp_M. CHAIRIL HAMZAH_3213080506990001.jpg"
+      ]
+    }
   ],
   "ocr_mode": "fast",
   "pp_ocr_tier": "medium",
-  "use_expected_name": true
+  "use_expected_name": true,
+  "enable_preprocess": false,
+  "skip_passthrough": false
 }
 ```
 
-**Respons:** stream `application/x-ndjson` — event `progress`, `result`, lalu `summary`.
+| Field selection | Keterangan |
+|-----------------|------------|
+| `folder` | Nama subfolder di `DATASET_ROOT` |
+| `enabled` | Dipakai mode **batch** (abaikan bila `files` diisi) |
+| `limit` | Maks file per folder (0–500); mode batch |
+| `offset` | Lewati N file pertama (pagination batch) |
+| `files` | **Mode file spesifik:** daftar nama file; **abaikan** `limit`/`offset` bila non-kosong. Boleh `file.jpg` atau `folder/file.jpg` |
 
-**Keberhasilan benchmark** = `document_matched == true` (sama gate validasi pipeline).
+| Field root | Default | Keterangan |
+|------------|---------|------------|
+| `ocr_mode` | `fast` | Sama pipeline |
+| `pp_ocr_tier` | `medium` | Hanya `ocr_mode=fast` |
+| `use_expected_name` | `true` | Parse nama dari filename benchmark |
+| `enable_preprocess` | **`false`** | Sama query pipeline |
+| `skip_passthrough` | **`false`** | Sama query pipeline |
+
+**Dua mode di UI `/dataset-test`:**
+
+| Mode | Cara pakai |
+|------|------------|
+| **Batch** | Centang folder + `limit` / `offset` per jenis dokumen |
+| **File spesifik** | Paste daftar file (satu per baris) + folder default |
+
+**Respons:** stream `application/x-ndjson` — event `progress`, `result`, `error` (file tidak ditemukan), lalu `summary`.
+
+**Keberhasilan benchmark** = `document_matched == true` (sama gate validasi pipeline — untuk CV: `cv_match.matched`).
+
+**Event stream (urutan):**
+
+| `type` | Isi |
+|--------|-----|
+| `progress` | `folder`, `file`, `index`, `total` |
+| `result` | Hasil per file (lihat tabel di bawah) |
+| `error` | Folder/file tidak ditemukan (batch) |
+| `summary` | Statistik agregat + `failures[]` + `results[]` |
+
+**Event `result` (per file):**
+
+| Field | Keterangan |
+|-------|------------|
+| `pipeline_ok` | Pipeline selesai tanpa exception |
+| `document_matched` | Gate validasi lolos |
+| `timing` | `{ preprocess, ocr, validation, total }` detik |
+| `failure_kind` | Hanya bila gagal — lihat tabel |
+| `failure_reason` | Penjelasan manusia (bahasa Indonesia) |
+| `ocr_text` | Teks OCR mentah (profil OCR) — review QA |
+| `pipeline_response` | Ringkasan `validation` / `verdict` / `cv_match` |
+
+**`failure_kind` umum:**
+
+| Nilai | Arti |
+|-------|------|
+| `validation_fail` | Pipeline OK, `document_matched=false` |
+| `cv_unavailable` | Subsistem CV belum terpasang |
+| `empty_ocr` | OCR tidak menghasilkan teks |
+| `opencv_unavailable` | OpenSearch / CV infra tidak siap |
+| `preprocess_error`, `decode_error`, … | Error tahap pipeline |
+
+**`failure_reason` per profil:**
+
+- **OCR biasa (KTP, NPWP, …):** `validation.explanation.summary` + `primary_blockers` (mis. `DOCUMENT_TYPE`, `IDENTITY`)
+- **CV:** `cv_match.summary` + dimensi gagal, mis. `nama gagal (0.0%) · pendidikan ✓ · pengalaman ✓`
 
 **Statistik ringkasan (`summary.stats`):**
 
@@ -632,8 +1150,22 @@ Mengembalikan daftar subfolder dataset, jumlah file, ID kanonik, dan label.
 | `success_ratio` | `validation_pass / total` |
 | `failure_ratio` | `validation_fail / total` |
 | `timing_avg_s` | Rata-rata detik per tahap: `preprocess`, `ocr`, `validation`, `total` |
+| `failures[]` | `{ folder, file, document_type, expected_name, failure_kind, failure_reason }` |
 
-UI: [`/dataset-test`](http://127.0.0.1:8001/dataset-test)
+**Contoh `failures[]` untuk CV:**
+
+```json
+{
+  "folder": "cv",
+  "file": "cv_AIGA TARA NASUCHA_3216085009070001.pdf",
+  "document_type": "cv",
+  "expected_name": "AIGA TARA NASUCHA",
+  "failure_kind": "validation_fail",
+  "failure_reason": "nama ✗ (0.0%) · pendidikan ✓ (100.0%) · pengalaman ✓ (100.0%) — nama gagal (0.0%)"
+}
+```
+
+UI: [`/dataset-test`](http://127.0.0.1:8001/dataset-test) — layout dua kolom (setting kiri, hasil + **Detail kegagalan** kanan).
 
 ---
 
@@ -668,7 +1200,33 @@ Content-Type: application/json
 | `identity_min_score` | `65` | Ambang skor identitas 0–100 |
 | `mistral_annotation` | null | Opsional; prioritas nama dari Mistral |
 
-> **Jangan** pakai endpoint ini untuk `foto_profile` — butuh gambar, bukan `ocr_text`. Pakai pipeline atau `validate-foto-profile`.
+> **Jangan** pakai endpoint ini untuk `foto_profile` — butuh gambar, bukan `ocr_text`. Pakai pipeline atau `validate-foto-profile`. Lihat [Foto profil](#foto_profile).
+
+---
+
+### Validasi foto profil (multipart)
+
+```
+POST /systems/validation/api/v1/validate-foto-profile
+Content-Type: multipart/form-data
+```
+
+Field: `file` (wajib), `document_type` (default `foto_profile`), `expected_name` (opsional, diabaikan).
+
+Respons: `valid`, `image_validation`, `explanation`, `verdict` — struktur flat (beda dari pipeline yang nest di `validation.*`).
+
+---
+
+### CV ingest & match
+
+Prasyarat: OpenSearch + `requirements-cv.txt`. Detail PDF & respons → [CV (`cv`)](#cv).
+
+| Method | Path | Body |
+|--------|------|------|
+| `POST` | `/systems/cv/api/v1/ingest` | multipart: `file`, `expected_name`, `education_query`, `experience_query` |
+| `POST` | `/systems/cv/api/v1/match` | JSON: `doc_id`, `expected_name`, `education_query`, `experience_query` |
+| `GET` | `/systems/cv/api/v1/documents` | — |
+| `DELETE` | `/systems/cv/api/v1/documents/{doc_id}` | — |
 
 ---
 
@@ -726,7 +1284,16 @@ Alur modular: **preprocess → OCR → validate-document** (3 request) jika tida
   "success": true,
   "ocr_mode": "fast",
   "pp_ocr_tier": "medium",
-  "preprocess": { "width": 1200, "height": 800, "card_warped": false },
+  "preprocess": {
+    "width": 1200,
+    "height": 800,
+    "encoding": "grayscale_8bit_passthrough",
+    "skipped": true,
+    "light_upscale_only": true,
+    "grayscale_applied": true,
+    "resize_applied": true,
+    "resize_scale": 2.0
+  },
   "ocr": { "text": "...", "mode": "fast", "model": "PP-OCRv6" },
   "validation": {
     "document_profile_id": "ktp",
@@ -782,6 +1349,36 @@ Alur modular: **preprocess → OCR → validate-document** (3 request) jika tida
 
 > Untuk integrasi frontend: cukup baca **`valid`** (`true` = VALID, `false` = TIDAK VALID). Abaikan `ocr` dan teks OCR.
 
+### Pipeline — `cv` (contoh PDF)
+
+```json
+{
+  "success": true,
+  "valid": true,
+  "document_matched": true,
+  "validation_mode": "cv",
+  "ocr": null,
+  "cv_ingest": {
+    "doc_id": "…",
+    "parse_mode": "pdf_text",
+    "num_pages": 2,
+    "chunk_count": 12
+  },
+  "cv_match": {
+    "matched": true,
+    "overall_percent": 82.3,
+    "dimensions": {
+      "nama": { "pass": true, "percent": 91.2 },
+      "pendidikan": { "pass": true, "percent": 78.0 },
+      "pengalaman": { "pass": true, "percent": 77.7 }
+    }
+  },
+  "verdict": { "summary": "…", "is_own_document": true }
+}
+```
+
+Lihat [CV (`cv`)](#cv) untuk alur parse PDF (`pdf_text` / `docling` / `ocr_fast`).
+
 ### Interpretasi `verdict.is_own_document`
 
 | Nilai | Arti |
@@ -804,6 +1401,7 @@ Untuk `foto_profile`, `is_own_document` selalu `null` (identitas dari gambar bel
 | 400 | `ocr_text` kosong (validate-document) | `"ocr_text tidak boleh kosong."` |
 | 503 | Mistral belum dikonfigurasi | `{ "code": "MISTRAL_OCR_UNAVAILABLE", ... }` |
 | 503 | Paddle/OCR lokal belum siap | `{ "code": "OCR_INFERENCE_UNAVAILABLE", ... }` |
+| 503 | Subsistem CV / OpenSearch | `{ "code": "CV_SUBSYSTEM_UNAVAILABLE", ... }` atau detail OpenSearch |
 
 ---
 
@@ -835,8 +1433,19 @@ Untuk `foto_profile`, `is_own_document` selalu `null` (identitas dari gambar bel
 
 | Env | Default | Fungsi |
 |-----|---------|--------|
-| `PREPROCESS_CARD_WARP` | `0` | `1` = isolasi kartu dari latar foto |
-| `PREPROCESS_MAX_SIDE` | `2400` | Downscale jika lebih besar |
+| `PREPROCESS_MIN_SIDE_TARGET` | `0` | Upscale sisi pendek di bawah target (passthrough & preprocess penuh). Dev sering `900`. `0` = tanpa upscale. |
+| `PREPROCESS_MIN_SIDE_MAX_SCALE` | tier otomatis | Cap faktor upscale (`6` / `4.5` / `4` / `3` by min side). |
+| `PREPROCESS_MAX_SIDE` | `2400` | Downscale jika sisi terpanjang melebihi ini |
+| `PREPROCESS_CARD_WARP` | `0` | `1` = isolasi kartu dari latar foto (hanya `enable_preprocess=true`) |
+| `PREPROCESS_AUTO_ROTATE_QUARTERS` | `off` | `auto` \| `on` — putar 4 arah sebelum/sesudah warp |
+| `PREPROCESS_CARD_WARP_STYLE` | `auto` | `auto` \| `axis_box` \| `perspective` |
+
+**Upscale thumbnail kecil (otomatis, tanpa env tambahan):**
+
+| Sisi pendek input | Target efektif (min.) |
+|-------------------|------------------------|
+| `< 350px` | `max(PREPROCESS_MIN_SIDE_TARGET, sisi × 3)` + snap faktor 3×/4× |
+| `< 500px` | `max(PREPROCESS_MIN_SIDE_TARGET, 1000)` |
 
 ### Foto profil
 
@@ -845,6 +1454,18 @@ Untuk `foto_profile`, `is_own_document` selalu `null` (identitas dari gambar bel
 | `FOTO_PROFILE_MIN_BLUE_RATIO` | `0.40` |
 | `FOTO_PROFILE_FACE_MIN_AREA_RATIO` | `0.03` |
 | `FOTO_PROFILE_FACE_MAX_AREA_RATIO` | `0.75` |
+
+### CV search & ingest
+
+| Env | Default | Fungsi |
+|-----|---------|--------|
+| `OPENSEARCH_URL` | `http://localhost:9200` | Cluster OpenSearch |
+| `CV_OPENSEARCH_INDEX` | `cv_chunks` | Index chunk CV |
+| `CV_EMBED_MODEL` | `BAAI/bge-m3` | Model embedding |
+| `CV_OCR_PP_TIER` | `small` | Tier PP-OCRv6 untuk PDF/gambar scan |
+| `CV_MAX_CHUNK_CHARS` | `1500` | Ukuran chunk maks |
+
+Jalankan OpenSearch: `docker compose -f docker-compose.cv.yml up -d` · Install: `pip install -r requirements-cv.txt`
 
 ### Dataset benchmark
 
@@ -872,11 +1493,15 @@ Log berisi ringkasan request terakhir per subsistem (overwrite tiap panggilan).
 | Bukti rekening tabungan | `POST /api/v1/pipeline` | `rekening` |
 | Mutasi / e-statement | `POST /api/v1/pipeline` | `mutasi` |
 | SKCK | `POST /api/v1/pipeline` | `skck` |
-| Pas foto biru | `POST /api/v1/pipeline` | `foto_profile` |
-| Upload CV + index | `POST /api/v1/pipeline` | `cv` (+ `cv_search_query` opsional) |
+| Pas foto biru (JPEG/PNG) | `POST /api/v1/pipeline` | `foto_profile` — baca `valid` |
+| Upload CV PDF + match | `POST /api/v1/pipeline` | `cv` + `expected_name` + query `cv_*` |
+| Ingest CV saja | `POST /systems/cv/api/v1/ingest` | multipart PDF/DOCX |
+| Match CV terindeks | `POST /systems/cv/api/v1/match` | JSON + `doc_id` |
 | Validasi teks OCR manual | `POST /systems/validation/api/v1/validate-document` | sesuai profil |
 | Validasi pas foto saja | `POST /systems/validation/api/v1/validate-foto-profile` | `foto_profile` |
-| QA batch dari dataset lokal | `POST /api/v1/dataset/benchmark` | per folder dataset |
+| QA batch dari dataset lokal | `POST /api/v1/dataset/benchmark` | batch: `limit`/`offset` per folder |
+| QA spot-check file tertentu | `POST /api/v1/dataset/benchmark` | isi `selections[].files` |
+| Preview gambar dataset | `GET /api/v1/dataset/file` | `folder` + `file` |
 
 **Decision tree:**
 
@@ -886,4 +1511,4 @@ Log berisi ringkasan request terakhir per subsistem (overwrite tiap panggilan).
 
 ---
 
-*Versi spec: 1.2 — Tambah profil dokumen dataset (ijasah, transkrip, dll.) + endpoint benchmark dataset.*
+*Versi spec: 1.5 — Ekstraksi nama CV (`extract_cv_holder_name`), profil dataset tambahan (ijasah, transkrip, vaksinasi 2/3, dll.), dokumentasi benchmark kegagalan per profil termasuk CV.*

@@ -13,13 +13,18 @@ from systems.ocr.fast_runner import run_paddleocr_fast
 from systems.ocr.mistral_annotation import parse_document_annotation
 from systems.ocr.mistral_runner import run_mistral_ocr
 from systems.ocr.vl_runner import run_paddleocr_vl
-from systems.preprocessing.pipeline import decode_image_bytes_bgr, preprocess_image_bytes
+from systems.preprocessing.pipeline import (
+    decode_image_bytes_bgr,
+    encode_image_bytes_for_ocr_direct,
+    encode_image_bytes_for_ocr_passthrough,
+    preprocess_image_bytes,
+)
 from systems.validation.document_profiles import (
     is_cv_ingest_profile,
     is_image_only_profile,
     resolve_keywords,
 )
-from systems.validation.fuzzy_compare import validate_document_ocr
+from systems.validation.fuzzy_compare import validate_document_ocr, parse_nik16_from_filename
 from systems.validation.portrait_photo_validate import validate_foto_profile
 
 OcrMode = Literal["mistral", "fast", "vl"]
@@ -111,6 +116,8 @@ def run_pipeline_bytes(
     ocr_mode: OcrMode = "fast",
     pp_ocr_tier: str | None = "medium",
     include_preprocessed_image: bool = False,
+    enable_preprocess: bool = False,
+    skip_passthrough: bool = False,
     full_json: bool = False,
     cv_education_query: str = "",
     cv_experience_query: str = "",
@@ -295,7 +302,12 @@ def run_pipeline_bytes(
 
     t_pre0 = time.perf_counter()
     try:
-        png_bytes, pre_meta = preprocess_image_bytes(raw, document_profile_id=canonical_id)
+        if enable_preprocess:
+            png_bytes, pre_meta = preprocess_image_bytes(raw, document_profile_id=canonical_id)
+        elif skip_passthrough:
+            png_bytes, pre_meta = encode_image_bytes_for_ocr_direct(raw)
+        else:
+            png_bytes, pre_meta = encode_image_bytes_for_ocr_passthrough(raw)
     except ValueError as e:
         timing.total_s = time.perf_counter() - t_total0
         return PipelineResult(ok=False, error=str(e), error_kind="preprocess_error", timing=timing)
@@ -348,6 +360,7 @@ def run_pipeline_bytes(
         document_profile_id=canonical_id,
         keywords=keywords,
         expected_name=name_ref,
+        expected_nik=parse_nik16_from_filename(filename) or "",
         mistral_annotation=mistral_ann,
     )
     timing.validation_s = time.perf_counter() - t_val0
@@ -372,8 +385,9 @@ def run_pipeline_bytes(
         "timing": timing.as_dict(),
     }
     if include_preprocessed_image:
+        preview_mime = pre_meta.get("mime") if isinstance(pre_meta.get("mime"), str) else "image/png"
         payload["preprocessed_image"] = {
-            "mime": "image/png",
+            "mime": preview_mime,
             "image_base64": base64.b64encode(png_bytes).decode("ascii"),
         }
 

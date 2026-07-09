@@ -16,7 +16,7 @@ CANONICAL_KEYWORDS: Final[dict[str, list[str]]] = {
         "kewarganegaraan",
         "status perkawinan",
     ],
-    "npwp": ["npwp", "pajak", "wajib pajak"],
+    "npwp": ["npwp", "pajak", "kantor pelayanan", "pratama"],
     "kk": ["kartu keluarga", "kepala keluarga", "nik"],
     # Rekening: hanya tabungan; e-statement dilarang (lihat PROFILE_EXCLUDED_KEYWORDS).
     "rekening": ["tabungan"],

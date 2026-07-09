@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import re
 
+from rapidfuzz import fuzz
+
 
 def _normalize(s: str) -> str:
     s = (s or "").strip().casefold()
@@ -125,7 +127,156 @@ _AFTER_COMMA_NAME_RE = re.compile(
     r",\s*([A-Za-z][A-Za-z\s'.-]{2,50}?)(?=\s*[!?.]|\s{2,}|\s+[a-z]{3,}\b|$)",
 )
 
-_CAPS_NAME_RUN_RE = re.compile(r"\b([A-Z]{2,}(?:\s+[A-Z]{2,})+)\b")
+_CAPS_NAME_RUN_RE = re.compile(r"\b([A-Z]{3,}(?:\s+[A-Z]{2,})+)\b")
+
+_NPWP_NUMBER_IN_TEXT_RE = re.compile(r"\d{4}[\s.\-]?\d{4}[\s.\-]?\d{4}[\s.\-]?\d{4}")
+
+_NPWP_LINE_SKIP_FRAGMENTS = (
+    "kantor pelayanan",
+    "www.",
+    "tanggal terdaftar",
+    "pajak kita",
+    "untuk kita",
+    " rt",
+    " rw",
+    "kab.",
+    "jawa barat",
+    "djp",
+    "npwp",
+    "np vp",
+)
+
+
+def _npwp_line_is_noise(line: str) -> bool:
+    low = _normalize(line)
+    if not low:
+        return True
+    if any(frag in low for frag in _NPWP_LINE_SKIP_FRAGMENTS):
+        return True
+    if re.search(r"\d{6,}", line):
+        return True
+    return False
+
+
+def _npwp_name_plausible(cand: str) -> bool:
+    """Tolak sampah OCR singkat (mis. «OA AH» dari logo/belakang kartu)."""
+    s = (cand or "").strip()
+    if not s:
+        return False
+    words = s.split()
+    if not words:
+        return False
+    if all(len(w) <= 2 for w in words):
+        return False
+    alpha_words = [w for w in words if any(c.isalpha() for c in w)]
+    if not alpha_words:
+        return False
+    if s.upper() == s:
+        if len(words) >= 2 and all(len(w) <= 3 for w in words):
+            return False
+        if sum(len(w) for w in words) < 8:
+            return False
+    return _looks_like_person_name(s) or (len(words) >= 2 and sum(len(w) for w in words) >= 10)
+
+
+def _merge_npwp_adjacent_name_lines(lines: list[str]) -> list[str]:
+    """NPWP lama: nama depan+belakang sering di baris terpisah (mis. ACHMAD SAEFUL + RHOMADHONI)."""
+    if not lines:
+        return lines
+    out: list[str] = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        nxt = lines[i + 1] if i + 1 < len(lines) else ""
+        if (
+            line.upper() == line
+            and len(line.split()) >= 2
+            and nxt
+            and nxt.upper() == nxt
+            and len(nxt.split()) == 1
+            and len(nxt) >= 4
+            and not re.search(r"\d", nxt)
+            and not _npwp_line_is_noise(nxt)
+        ):
+            out.append(f"{line} {nxt}")
+            i += 2
+            continue
+        out.append(line)
+        i += 1
+    return out
+
+
+def extract_npwp_holder_names(ocr_text: str) -> list[str]:
+    """Nama pemilik dari kartu NPWP (baris kapital di bawah/atas nomor 16 digit)."""
+    lines = _merge_npwp_adjacent_name_lines(
+        [ln.strip() for ln in (ocr_text or "").splitlines() if ln.strip()]
+    )
+    seen: set[str] = set()
+    out: list[str] = []
+
+    def _add(raw: str) -> None:
+        cand = _trim_name_punctuation(raw)
+        if not cand or _npwp_line_is_noise(cand) or not _npwp_name_plausible(cand):
+            return
+        words = cand.split()
+        if cand.upper() == cand:
+            if len(words) < 2:
+                return
+        elif not _looks_like_person_name(cand):
+            return
+        key = _normalize(cand)
+        if key in seen:
+            return
+        seen.add(key)
+        out.append(cand)
+
+    for i, line in enumerate(lines):
+        if len(re.sub(r"\D", "", line)) != 16:
+            continue
+        for j in (i - 1, i + 1):
+            if 0 <= j < len(lines) and not _npwp_line_is_noise(lines[j]):
+                _add(lines[j])
+
+    # NPWP lama: «NAMA DEPAN» lalu NIK 16 digit lalu «NAMA BELAKANG» di baris terpisah.
+    for i, line in enumerate(lines):
+        if _npwp_line_is_noise(line) or line.upper() != line or len(line.split()) < 2:
+            continue
+        for j in range(i + 1, min(i + 4, len(lines))):
+            cand = lines[j]
+            if len(re.sub(r"\D", "", cand)) == 16:
+                continue
+            if (
+                cand.upper() == cand
+                and len(cand.split()) == 1
+                and len(cand) >= 4
+                and not re.search(r"\d", cand)
+                and not _npwp_line_is_noise(cand)
+            ):
+                _add(f"{line} {cand}")
+                break
+
+    for line in lines:
+        if _npwp_line_is_noise(line):
+            continue
+        if line.upper() == line and len(line.split()) >= 2:
+            _add(line)
+        elif (
+            line.upper() == line
+            and len(line.split()) == 1
+            and len(line) >= 4
+            and not re.search(r"\d", line)
+        ):
+            _add(line)
+
+    for m in _CAPS_NAME_RUN_RE.finditer(ocr_text or ""):
+        _add(m.group(1))
+
+    if not out and _NPWP_NUMBER_IN_TEXT_RE.search(ocr_text or ""):
+        for seg in person_like_segments(ocr_text):
+            if len(seg.split()) >= 2:
+                _add(seg)
+
+    return out
 
 
 def extract_jkn_participant_names(ocr_text: str) -> list[str]:
@@ -570,12 +721,194 @@ def person_like_segments(ocr_text: str) -> list[str]:
     return out
 
 
+_CV_LINE_NOISE = frozenset(
+    {
+        "tentang saya",
+        "about me",
+        "profil",
+        "ringkasan profil",
+        "summary",
+        "curriculum vitae",
+        "cv",
+        "daftar riwayat hidup",
+        "data pribadi",
+        "personal data",
+        "kontak",
+        "contact",
+        "fresh graduate",
+        "fresh graduete",
+        "fresh graduation",
+        "lulusan baru",
+        "pendidikan",
+        "education",
+        "keahlian",
+        "skills",
+        "pengalaman",
+        "pengalaman kerja",
+        "organisasi",
+        "bahasa",
+        "hobi",
+        "media sosial",
+        "referensi",
+        "pelatihan",
+        "sertifikasi",
+    }
+)
+
+_CV_JUNK_CHARS_RE = re.compile(r"[★☆⭐◇◆●○◎✓✗☑☒]")
+
+_CV_SECTION_HEADER_RE = re.compile(
+    r"^(pendidikan|keahlian|pengalaman|organisasi|bahasa|hobi|media\s+sosial|"
+    r"education|experience|skills|personal\s+data|riwayat\s+pendidikan|"
+    r"riwayat\s+pekerjaan|work\s+experience|no\s+data)$",
+    re.I,
+)
+
+_CV_JOB_NOISE_RE = re.compile(
+    r"\b(fresh\s+grad\w*|lulusan\s+baru|mahasiswa|student|internship|magang|undergraduate)\b",
+    re.I,
+)
+
+_CV_NAME_LABELS = frozenset({"nama", "name", "nama lengkap", "full name"})
+
+
+def _latin_letter_count(s: str) -> int:
+    return sum(1 for c in s if c.isascii() and c.isalpha())
+
+
+def _cv_line_has_latin_name(s: str) -> bool:
+    return _latin_letter_count(s) >= 3 and bool(re.search(r"[A-Za-z]{3,}", s))
+
+
+def _looks_like_cv_name_line(seg: str, *, expected_name: str = "") -> bool:
+    s = (seg or "").strip()
+    s = re.sub(r"^[-•*|]+\s*", "", s).strip()
+    if not s:
+        return False
+    if _CV_JUNK_CHARS_RE.search(s):
+        return False
+    if not _cv_line_has_latin_name(s):
+        return False
+    low = _normalize(s)
+    if low in _CV_LINE_NOISE:
+        return False
+    if _CV_SECTION_HEADER_RE.match(low):
+        return False
+    if low in {"status", "email", "telepon", "phone", "alamat", "address", "kontak", "contact"}:
+        return False
+    if _CV_JOB_NOISE_RE.search(s):
+        return False
+    if "@" in s or re.search(r"\d{5,}", s):
+        return False
+    if re.search(r"\b(jl\.?|jalan|street|grand\s+mutiara|kec\.|kel\.|kab\.)\b", low):
+        return False
+
+    exp_n = _normalize(expected_name)
+    words = s.split()
+
+    # Nama satu kata di header CV (mis. ANNISA) — umum di template Canva/design
+    if len(words) == 1 and re.fullmatch(r"[A-Za-z'.-]+", s):
+        if exp_n:
+            return float(fuzz.WRatio(low, exp_n)) >= 65.0
+        if s.upper() == s and 4 <= len(s) <= 30:
+            return True
+
+    if not _looks_like_person_name(s):
+        return False
+    return True
+
+
+def extract_cv_holder_name(
+    ocr_text: str,
+    *,
+    expected_name: str = "",
+) -> tuple[str | None, str]:
+    """
+    Ekstrak nama dari teks CV (bukan pola label KTP).
+    `expected_name` opsional — dipakai untuk memilih kandidat terbaik bila ada beberapa baris mirip nama.
+    """
+    segments = _split_segments(ocr_text)
+
+    for i, seg in enumerate(segments):
+        raw = seg.strip()
+        low = _normalize(raw)
+        if ":" in raw:
+            label_part, _, after = raw.partition(":")
+            if _normalize(label_part) in _CV_NAME_LABELS:
+                after = after.strip()
+                if _looks_like_cv_name_line(after, expected_name=expected_name):
+                    return after, "cv_nama_colon"
+        if low in _CV_NAME_LABELS and i + 1 < len(segments):
+            nxt = segments[i + 1].strip()
+            if _looks_like_cv_name_line(nxt, expected_name=expected_name):
+                return nxt, "cv_after_nama_label"
+
+    exp_n = _normalize(expected_name)
+    candidates: list[tuple[float, str, str]] = []
+
+    for line in re.split(r"[\n|]+", ocr_text or ""):
+        line = re.sub(r"^[-•*|]+\s*", "", (line or "").strip()).strip()
+        if not _looks_like_cv_name_line(line, expected_name=expected_name):
+            continue
+        score = 0.0
+        words = line.split()
+        line_n = _normalize(line)
+        if exp_n:
+            wr = float(fuzz.WRatio(line_n, exp_n))
+            score += wr * 2.0
+            if wr >= 90.0:
+                score += 25.0
+        if line.upper() == line and re.search(r"[A-Z]{2,}", line):
+            score += 10.0
+        if 2 <= len(words) <= 5:
+            score += 6.0
+        if len(words) == 1 and 4 <= len(line) <= 30:
+            score += 5.0
+        candidates.append((score, line, "cv_name_line"))
+
+    for seg in person_like_segments(ocr_text):
+        if not _looks_like_cv_name_line(seg, expected_name=expected_name):
+            continue
+        if any(seg == c[1] for c in candidates):
+            continue
+        score = 0.0
+        if seg.upper() == seg and re.search(r"[A-Z]{2,}", seg):
+            score += 12.0
+        if exp_n:
+            score += float(fuzz.WRatio(_normalize(seg), exp_n))
+        candidates.append((score, seg, "cv_person_segment"))
+
+    if candidates:
+        candidates.sort(key=lambda x: -x[0])
+        best = candidates[0]
+        return best[1], best[2]
+
+    if exp_n:
+        text_n = _normalize(ocr_text)
+        if float(fuzz.partial_ratio(exp_n, text_n)) >= 65.0:
+            for line in re.split(r"[\n|]+", ocr_text or ""):
+                line = re.sub(r"^[-•*|]+\s*", "", (line or "").strip()).strip()
+                if not line or len(line) < 4:
+                    continue
+                if not _cv_line_has_latin_name(line):
+                    continue
+                if _CV_JUNK_CHARS_RE.search(line):
+                    continue
+                if float(fuzz.WRatio(_normalize(line), exp_n)) >= 65.0:
+                    return line, "cv_fuzzy_line_match"
+
+    return None, "failed"
+
+
 def extract_holder_name_candidate(ocr_text: str, document_profile_id: str) -> tuple[str | None, str]:
     """
     Mengembalikan (teks nama perkiraan atau None, metode / alasan).
     `document_profile_id` kanonik: ktp, npwp, dll.
     """
     profile = (document_profile_id or "").strip().casefold()
+    if profile == "cv":
+        return extract_cv_holder_name(ocr_text)
+
     if profile == "kk":
         kk_names = extract_kk_member_names(ocr_text)
         if kk_names:
@@ -634,6 +967,11 @@ def extract_holder_name_candidate(ocr_text: str, document_profile_id: str) -> tu
         for seg in person_like_segments(ocr_text):
             if seg.upper() == seg and re.search(r"[A-Z]{2,}", seg) and len(seg.split()) >= 1:
                 return seg, "vaksinasi_1_recipient_name"
+
+    if profile in {"npwp", "pemadanan_npwp"}:
+        npwp_names = extract_npwp_holder_names(ocr_text)
+        if npwp_names:
+            return npwp_names[0], "npwp_name_line"
 
     segments = _split_segments(ocr_text)
 

@@ -20,6 +20,7 @@ from systems.validation.name_extraction import (
     extract_iuran_participant_names,
     extract_jkn_participant_names,
     extract_kk_member_names,
+    extract_npwp_holder_names,
     extract_vaksinasi_1_names,
     iuran_modal_only_state,
     person_like_segments,
@@ -27,6 +28,31 @@ from systems.validation.name_extraction import (
     vaksinasi_1_first_dose_signal,
     vaksinasi_1_wrong_dose_primary,
 )
+
+_NIK16_SPACED_RE = re.compile(r"\d{4}[\s.\-]?\d{4}[\s.\-]?\d{4}[\s.\-]?\d{4}")
+_NIK16_FILENAME_RE = re.compile(r"_(\d{16})(?:\.[^.]+)?$", re.I)
+
+
+def parse_nik16_from_filename(filename: str) -> str | None:
+    """Ambil NIK 16 digit dari pola umum benchmark: `{tipe}_{Nama}_{NIK16}.ext`."""
+    stem = (filename or "").rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+    if "." in stem:
+        stem = stem.rsplit(".", 1)[0]
+    m = _NIK16_FILENAME_RE.search(stem)
+    return m.group(1) if m else None
+
+
+def extract_nik16_from_ocr(ocr_text: str) -> list[str]:
+    """Kumpulkan NIK/NPWP 16 digit dari teks OCR (spasi/titik diperbolehkan)."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for m in _NIK16_SPACED_RE.finditer(ocr_text or ""):
+        digits = re.sub(r"\D", "", m.group(0))
+        if len(digits) != 16 or digits in seen:
+            continue
+        seen.add(digits)
+        out.append(digits)
+    return out
 
 try:
     from systems.ocr.mistral_annotation import (
@@ -202,6 +228,22 @@ def _fuzzy_scores_for_pair(a: str, b: str) -> dict[str, float]:
     }
 
 
+_NPWP_OCR_MARKERS = ("npwp", "npvp", "pvp", "nvp", "np vp", "pv p")
+
+
+def _ocr_has_npwp_marker(ocr_n: str) -> bool:
+    compact = re.sub(r"[^a-z0-9]", "", (ocr_n or "").casefold())
+    if any(m.replace(" ", "") in compact for m in _NPWP_OCR_MARKERS):
+        return True
+    return bool(re.search(r"\bnp\s*vp\b", ocr_n or "", re.I))
+
+
+def _npwp_tax_id_in_ocr(ocr_n: str) -> bool:
+    """Nomor NPWP 15–16 digit (sering terbaca dengan spasi di OCR)."""
+    digits = re.sub(r"\D", "", ocr_n or "")
+    return bool(re.search(r"\d{15,16}", digits))
+
+
 def fuzzy_keyword_against_ocr(keyword: str, ocr_normalized: str) -> dict[str, Any]:
     """
     Skor fuzzy keyword terhadap teks OCR: ambil terbaik dari teks penuh, segmen baris,
@@ -251,6 +293,11 @@ def fuzzy_keyword_against_ocr(keyword: str, ocr_normalized: str) -> dict[str, An
             if compact_kw and compact_kw in compact_corpus:
                 merged["partial_ratio"] = max(merged["partial_ratio"], 100.0)
                 merged["wratio"] = max(merged["wratio"], 100.0)
+            if kw == "npwp":
+                for alias in ("npvp", "pvp", "nvp"):
+                    if alias in compact_corpus:
+                        merged["partial_ratio"] = max(merged["partial_ratio"], 100.0)
+                        merged["wratio"] = max(merged["wratio"], 100.0)
 
     best = max(merged.values())
     return {
@@ -282,6 +329,7 @@ _EXTRACTION_METHOD_ID: dict[str, str] = {
         "layar modal Info Iuran tanpa tagihan pribadi — nama tidak ditampilkan di layar"
     ),
     "vaksinasi_1_recipient_name": "nama penerima pada sertifikat/kartu vaksin dosis 1",
+    "npwp_name_line": "baris nama kapital pada kartu NPWP (dekat nomor 16 digit)",
     "failed": "tidak berhasil menarik nama dari OCR",
     "skipped_no_expected_name": "nama referensi kosong — identitas tidak diuji",
     "skipped_profile_no_identity": "profil dokumen tidak memeriksa nama (mis. mutasi)",
@@ -594,8 +642,21 @@ def _profile_structural_boost(profile_id: str, ocr_n: str) -> float:
             bonus += 0.04
         return min(0.10, bonus)
     if pid == "npwp":
-        if re.search(r"\bnpwp\b", ocr_n) or "npwp" in compact:
-            return 0.06
+        bonus = 0.0
+        compact_np = re.sub(r"[^a-z0-9]", "", ocr_n)
+        if _ocr_has_npwp_marker(ocr_n):
+            bonus += 0.04
+        if re.search(r"\d{15,16}", compact_np):
+            bonus += 0.05
+        if _ocr_has_keyword_signal(ocr_n, "kantor pelayanan"):
+            bonus += 0.04
+        if re.search(r"\bpratama\b", ocr_n) or "pratama" in compact_np:
+            bonus += 0.03
+        if re.search(r"\bkpp\b", ocr_n) or "kpp" in compact_np:
+            bonus += 0.03
+        if re.search(r"\bdjp\b", ocr_n) or "djp" in compact_np:
+            bonus += 0.03
+        return min(0.10, bonus)
     if pid == "kk" and "kartukeluarga" in compact:
         return 0.08
     if pid == "mutasi" and _ocr_has_keyword_signal(ocr_n, "e-statement"):
@@ -677,7 +738,7 @@ def _detection_tiebreak_bonus(profile_id: str, ocr_n: str, hint_profile_id: str)
     compact = re.sub(r"\s+", "", ocr_n)
     if pid == "kk" and "kartu keluarga" in ocr_n:
         bonus += 1.0
-    if pid == "npwp" and re.search(r"\bnpwp\b", ocr_n):
+    if pid == "npwp" and _ocr_has_npwp_marker(ocr_n):
         bonus += 1.0
     if pid == "ktp" and (re.search(r"\bnik\b", ocr_n) or "nik" in compact):
         bonus += 0.75
@@ -896,6 +957,7 @@ def validate_document_ocr(
     document_profile_id: str = "",
     keywords: list[str] | None = None,
     expected_name: str = "",
+    expected_nik: str = "",
     aggregate_min_pass_ratio: float = 0.7,
     identity_min_score: float = 65.0,
     mistral_annotation: dict[str, Any] | None = None,
@@ -983,6 +1045,23 @@ def validate_document_ocr(
         document_type_aggregate_pass_ratio = min(1.0, keyword_aggregate_raw + boost_total)
         document_type_pass = document_type_aggregate_pass_ratio >= ratio_req
 
+    if (
+        profile in {"npwp", "pemadanan_npwp"}
+        and not exclusion_violated
+        and not document_type_pass
+        and _ocr_has_npwp_marker(ocr_n)
+        and _npwp_tax_id_in_ocr(ocr_n)
+    ):
+        document_type_pass = True
+        document_type_aggregate_pass_ratio = max(
+            document_type_aggregate_pass_ratio,
+            ratio_req,
+        )
+        document_type_boosts["npwp_tax_id_anchor"] = round(
+            max(0.0, ratio_req - keyword_aggregate_raw),
+            4,
+        )
+
     document_type_components_count = len(kw_ratios) + len(profile_eval.get("any_groups") or [])
 
     skip_identity = skip_identity_validation(profile)
@@ -1058,11 +1137,26 @@ def validate_document_ocr(
                 )
                 scored.append((scv, name, "vaksinasi_1_recipient_name"))
 
+        npwp_names = (
+            extract_npwp_holder_names(ocr_text)
+            if profile in {"npwp", "pemadanan_npwp"}
+            else []
+        )
+        if profile in {"npwp", "pemadanan_npwp"} and not ann_name:
+            for name in npwp_names:
+                scv = float(
+                    compare_extracted_identity_scores(name, expected_name)[
+                        "identity_combined_score"
+                    ]
+                )
+                scored.append((scv, name, "npwp_name_line"))
+
         skip_person_like = (
             (profile == "jkn" and jkn_names)
             or (profile == "iuran" and iuran_names)
             or (profile == "iuran" and iuran_modal_only_state(ocr_text))
             or (profile == "vaksinasi_1" and vax_names)
+            or (profile in {"npwp", "pemadanan_npwp"} and npwp_names)
         )
         if not ann_name and not skip_person_like:
             window_sources: list[tuple[str, str]] = [(ocr_text, "person_like_segment")]
@@ -1138,6 +1232,30 @@ def validate_document_ocr(
                 "extraction_failed": True,
             }
             identity_pass = False
+
+        exp_nik = re.sub(r"\D", "", expected_nik or "")
+        if (
+            not identity_pass
+            and profile in {"npwp", "pemadanan_npwp"}
+            and document_type_pass
+            and len(exp_nik) == 16
+        ):
+            ocr_niks = extract_nik16_from_ocr(ocr_text)
+            if exp_nik in ocr_niks:
+                identity_pass = True
+                identity = {
+                    **(identity or {}),
+                    "expected_normalized": _normalize(expected_name),
+                    "nik_match_fallback": True,
+                    "expected_nik": exp_nik,
+                    "ocr_nik_matched": exp_nik,
+                    "note": (
+                        "Nama OCR tidak cukup mirip, tetapi NIK 16 digit di dokumen "
+                        "cocok dengan referensi — identitas dianggap lolos."
+                    ),
+                }
+                if not name_extraction.get("candidate_raw"):
+                    name_extraction["method"] = "npwp_nik_fallback"
 
         document_matched = bool(document_type_pass and identity_pass)
     elif skip_identity:

@@ -26,64 +26,122 @@
       line-height: 1.5;
     }
     header {
-      padding: 1.5rem clamp(1rem, 4vw, 2.5rem);
+      padding: 1.25rem clamp(1rem, 4vw, 2rem);
       border-bottom: 1px solid var(--border);
       background: linear-gradient(180deg, #151c26 0%, var(--bg) 100%);
     }
-    header h1 { margin: 0; font-size: clamp(1.15rem, 2.5vw, 1.5rem); font-weight: 600; }
-    header p { margin: 0.35rem 0 0; color: var(--muted); font-size: 0.9rem; max-width: 52rem; }
-    .nav-top { margin-top: 0.75rem; }
+    header h1 { margin: 0; font-size: clamp(1.15rem, 2.5vw, 1.4rem); font-weight: 600; }
+    header p { margin: 0.35rem 0 0; color: var(--muted); font-size: 0.85rem; }
+    .nav-top { margin-top: 0.6rem; }
     .nav-top a { color: var(--accent); font-size: 0.875rem; margin-right: 1rem; }
-    main {
-      padding: clamp(1rem, 3vw, 2rem);
-      max-width: 1200px;
+
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(280px, 340px) 1fr;
+      gap: 1rem;
+      padding: 1rem clamp(1rem, 3vw, 1.5rem);
+      max-width: 1600px;
       margin: 0 auto;
+      align-items: start;
     }
+    @media (max-width: 960px) {
+      .layout { grid-template-columns: 1fr; }
+      .col-right { min-height: auto; }
+    }
+
+    .col-left {
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+    }
+    @media (min-width: 961px) {
+      .col-left {
+        position: sticky;
+        top: 1rem;
+        max-height: calc(100vh - 2rem);
+        overflow: auto;
+      }
+    }
+
+    .col-right {
+      min-height: calc(100vh - 8rem);
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+      min-width: 0;
+    }
+
     .panel {
       background: var(--surface);
       border: 1px solid var(--border);
       border-radius: 12px;
-      padding: 1.25rem;
-      margin-bottom: 1.25rem;
+      padding: 1.1rem;
     }
     .panel h2 {
-      margin: 0 0 1rem;
-      font-size: 0.85rem;
+      margin: 0 0 0.85rem;
+      font-size: 0.8rem;
       font-weight: 600;
       text-transform: uppercase;
       letter-spacing: 0.06em;
       color: var(--muted);
     }
-    .row { display: grid; gap: 1rem; grid-template-columns: 1fr; }
-    @media (min-width: 720px) {
-      .row.three { grid-template-columns: 1fr 1fr 1fr; }
-      .row.two { grid-template-columns: 1fr 1fr; }
+    .panel-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
+      margin-bottom: 0.85rem;
     }
+    .panel-head h2 { margin: 0; }
+
+    .config-grid {
+      display: grid;
+      gap: 0.75rem;
+      grid-template-columns: 1fr 1fr;
+    }
+    .config-grid .full { grid-column: 1 / -1; }
+
     label.block {
       display: block;
-      font-size: 0.8rem;
+      font-size: 0.75rem;
       font-weight: 600;
       color: var(--muted);
-      margin-bottom: 0.35rem;
+      margin-bottom: 0.3rem;
     }
-    input[type="text"],
     input[type="number"],
-    select {
+    select,
+    textarea {
       width: 100%;
       font-family: inherit;
-      font-size: 0.9rem;
-      padding: 0.55rem 0.65rem;
+      font-size: 0.875rem;
+      padding: 0.5rem 0.6rem;
       border-radius: 8px;
       border: 1px solid var(--border);
       background: #0a0e14;
       color: var(--text);
     }
+    textarea {
+      min-height: 6.5rem;
+      resize: vertical;
+      line-height: 1.45;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 0.8rem;
+    }
     input[type="checkbox"] { accent-color: var(--accent); }
+    .check-row {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-size: 0.875rem;
+      cursor: pointer;
+      padding-top: 1.35rem;
+    }
+
     button {
       font-family: inherit;
-      font-size: 0.9rem;
+      font-size: 0.875rem;
       font-weight: 600;
-      padding: 0.6rem 1.2rem;
+      padding: 0.55rem 1rem;
       border-radius: 8px;
       border: none;
       cursor: pointer;
@@ -98,37 +156,169 @@
     }
     button.secondary:hover:not(:disabled) { border-color: var(--accent); }
     button:disabled { opacity: 0.45; cursor: not-allowed; }
-    .controls { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: center; margin-bottom: 1rem; }
-    .hint { font-size: 0.8rem; color: var(--muted); }
+
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem 1rem;
+      align-items: flex-end;
+      margin-top: 0.85rem;
+    }
+    .toolbar .limit-group {
+      display: flex;
+      flex-direction: column;
+      min-width: 6.5rem;
+    }
+    .toolbar .limit-group input { width: 6.5rem; }
+    .hint { font-size: 0.75rem; color: var(--muted); margin: 0.6rem 0 0; }
+
     table {
       width: 100%;
       border-collapse: collapse;
-      font-size: 0.85rem;
+      font-size: 0.8rem;
     }
     th, td {
-      padding: 0.55rem 0.65rem;
+      padding: 0.45rem 0.5rem;
       text-align: left;
       border-bottom: 1px solid var(--border);
     }
-    th { color: var(--muted); font-weight: 600; font-size: 0.75rem; text-transform: uppercase; }
-    tr.unsupported td { opacity: 0.55; }
-    td.limit-cell input { width: 5rem; }
+    th {
+      color: var(--muted);
+      font-weight: 600;
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      position: sticky;
+      top: 0;
+      background: var(--surface);
+      z-index: 1;
+    }
+    tr.unsupported td { opacity: 0.5; }
+    th.limit-col, th.offset-col,
+    td.limit-cell, td.offset-cell {
+      min-width: 5.75rem;
+      width: 5.75rem;
+    }
+    td.limit-cell input,
+    td.offset-cell input {
+      width: 100%;
+      min-width: 5rem;
+      padding: 0.4rem 0.5rem;
+      font-size: 0.85rem;
+    }
+    td.folder-name {
+      min-width: 7rem;
+      max-width: 14rem;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    td.file-count-cell {
+      min-width: 3rem;
+      text-align: right;
+      color: var(--muted);
+    }
     .badge {
       display: inline-block;
-      font-size: 0.7rem;
-      padding: 0.15rem 0.45rem;
+      font-size: 0.65rem;
+      padding: 0.1rem 0.35rem;
       border-radius: 4px;
       font-weight: 600;
     }
     .badge.ok { background: rgba(110, 231, 183, 0.15); color: var(--ok); }
     .badge.no { background: rgba(248, 113, 113, 0.15); color: var(--err); }
+
+    .btn-run-wrap { margin-top: 0.75rem; }
+    .btn-run-wrap button { width: 100%; padding: 0.7rem; font-size: 0.95rem; }
+
+    .mode-switch {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.5rem;
+      margin-bottom: 0.85rem;
+    }
+    .mode-option {
+      display: flex;
+      align-items: flex-start;
+      gap: 0.45rem;
+      padding: 0.65rem 0.75rem;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      cursor: pointer;
+      font-size: 0.82rem;
+      background: #0a0e14;
+      transition: border-color 0.15s, background 0.15s;
+    }
+    .mode-option:hover { border-color: #3d5168; }
+    .mode-option.active {
+      border-color: var(--accent);
+      background: rgba(61, 156, 245, 0.08);
+    }
+    .mode-option input { margin-top: 0.15rem; accent-color: var(--accent); flex-shrink: 0; }
+    .mode-option strong { display: block; font-size: 0.84rem; margin-bottom: 0.15rem; }
+    .mode-option span { color: var(--muted); font-size: 0.74rem; line-height: 1.35; }
+
+    .mode-panel { margin-top: 0.25rem; }
+    .panel-docs {
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+    .panel-docs .mode-switch {
+      flex-shrink: 0;
+    }
+    .panel-docs .mode-panel:not(.hidden) {
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .panel-docs .mode-panel:not(.hidden) .toolbar {
+      flex-shrink: 0;
+    }
+    #modeSpecific:not(.hidden) {
+      flex: 0 1 auto;
+      overflow: visible;
+    }
+    .panel-docs .mode-panel .table-scroll {
+      flex: 1;
+      min-height: 12rem;
+      max-height: min(32rem, 50vh);
+      overflow: auto;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+    }
+    .panel-docs .mode-panel .table-scroll table { margin: 0; }
+    .panel-docs .btn-run-wrap {
+      flex-shrink: 0;
+      margin-top: auto;
+      padding-top: 0.75rem;
+    }
+
+    /* Kolom kanan — hasil */
+    .empty-state {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: 3rem 1.5rem;
+      color: var(--muted);
+      border: 1px dashed var(--border);
+      border-radius: 12px;
+      background: rgba(26, 34, 45, 0.5);
+      min-height: 280px;
+    }
+    .empty-state p { margin: 0.35rem 0; font-size: 0.9rem; max-width: 22rem; }
+
     .progress-wrap {
       background: #0a0e14;
       border-radius: 8px;
       border: 1px solid var(--border);
-      height: 10px;
+      height: 8px;
       overflow: hidden;
-      margin: 0.75rem 0;
+      margin-bottom: 0.6rem;
     }
     .progress-bar {
       height: 100%;
@@ -136,148 +326,418 @@
       width: 0%;
       transition: width 0.2s ease;
     }
-    .status { font-size: 0.85rem; color: var(--muted); min-height: 1.25rem; }
+    .status { font-size: 0.8rem; color: var(--muted); }
     .status.error { color: var(--err); }
+    .status.ok { color: var(--ok); }
+
     .stats-grid {
       display: grid;
-      gap: 0.75rem;
-      grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+      gap: 0.6rem;
+      grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
     }
     .stat-card {
       background: #0a0e14;
       border: 1px solid var(--border);
       border-radius: 8px;
-      padding: 0.75rem;
+      padding: 0.65rem;
     }
-    .stat-card .val { font-size: 1.35rem; font-weight: 700; }
-    .stat-card .lbl { font-size: 0.75rem; color: var(--muted); margin-top: 0.2rem; }
+    .stat-card .val { font-size: 1.2rem; font-weight: 700; line-height: 1.2; }
+    .stat-card .lbl { font-size: 0.7rem; color: var(--muted); margin-top: 0.15rem; }
     .stat-card.ok .val { color: var(--ok); }
     .stat-card.err .val { color: var(--err); }
     .stat-card.warn .val { color: var(--warn); }
+
     .timing-row {
       display: flex;
       flex-wrap: wrap;
-      gap: 1rem;
+      gap: 0.75rem 1.25rem;
       margin-top: 0.75rem;
-      font-size: 0.85rem;
+      padding-top: 0.75rem;
+      border-top: 1px solid var(--border);
+      font-size: 0.8rem;
     }
     .timing-row span { color: var(--muted); }
     .timing-row strong { color: var(--text); }
+
+    .results-table-wrap { overflow-x: auto; margin-top: 0.5rem; }
+    .failures-panel { margin-top: 1.25rem; }
+    .failures-panel h2 { margin-bottom: 0.75rem; }
+    .failures-empty {
+      font-size: 0.85rem;
+      color: var(--ok);
+      padding: 0.75rem;
+      background: rgba(110, 231, 183, 0.08);
+      border: 1px solid rgba(110, 231, 183, 0.25);
+      border-radius: 8px;
+    }
+    .fail-table td.reason {
+      font-size: 0.78rem;
+      color: var(--muted);
+      max-width: 28rem;
+      line-height: 1.45;
+    }
+    .fail-table td.file-cell {
+      font-family: ui-monospace, monospace;
+      font-size: 0.75rem;
+      word-break: break-all;
+    }
+    .fail-cards {
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+    }
+    .fail-card {
+      background: #0a0e14;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      overflow: hidden;
+    }
+    .fail-card-head {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: flex-start;
+      gap: 0.75rem 1rem;
+      padding: 0.85rem 1rem;
+      border-bottom: 1px solid var(--border);
+      background: rgba(248, 113, 113, 0.04);
+    }
+    .fail-card-meta {
+      flex: 1;
+      min-width: 200px;
+    }
+    .fail-card-meta .fname {
+      font-family: ui-monospace, monospace;
+      font-size: 0.8rem;
+      word-break: break-all;
+      margin: 0.25rem 0 0.5rem;
+    }
+    .fail-card-meta .reason {
+      font-size: 0.8rem;
+      color: var(--muted);
+      line-height: 1.45;
+      margin: 0;
+    }
+    .fail-card.preview-only .fail-card-head {
+      flex-direction: column;
+      border-bottom: none;
+      padding-bottom: 0.5rem;
+    }
+    .fail-card.preview-only .fail-card-meta {
+      width: 100%;
+    }
+    .fail-card-meta .expected {
+      font-size: 0.75rem;
+      color: var(--muted);
+      margin-top: 0.35rem;
+    }
+    .fail-preview {
+      flex-shrink: 0;
+      width: 140px;
+      height: 100px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: #151c26;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+    }
+    .fail-preview.large {
+      width: 100%;
+      height: auto;
+      min-height: 200px;
+      max-height: min(420px, 55vh);
+      flex-shrink: 1;
+    }
+    .fail-preview.large img {
+      width: 100%;
+      height: auto;
+      max-height: min(420px, 55vh);
+      object-fit: contain;
+    }
+    .fail-preview img {
+      max-width: 100%;
+      max-height: 100%;
+      object-fit: contain;
+      display: block;
+    }
+    .fail-preview .pdf-label {
+      font-size: 0.7rem;
+      color: var(--muted);
+      text-align: center;
+      padding: 0.5rem;
+    }
+    .fail-preview a {
+      color: var(--accent);
+      font-size: 0.7rem;
+    }
+    .fail-ocr {
+      padding: 0.85rem 1rem;
+    }
+    .fail-section-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.5rem;
+      margin-bottom: 0.4rem;
+    }
+    .fail-section-head label {
+      margin: 0;
+    }
+    .fail-ocr label {
+      display: block;
+      font-size: 0.7rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--muted);
+      margin-bottom: 0.4rem;
+    }
+    .fail-ocr pre {
+      margin: 0;
+      padding: 0.65rem 0.75rem;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      font-family: ui-monospace, "SF Mono", monospace;
+      font-size: 0.75rem;
+      line-height: 1.45;
+      white-space: pre-wrap;
+      word-break: break-word;
+      max-height: 220px;
+      overflow: auto;
+      color: var(--text);
+      user-select: text;
+      cursor: text;
+    }
+    .fail-preview-wrap {
+      position: relative;
+      width: 100%;
+    }
+    .fail-preview-wrap .copy-img-btn {
+      position: absolute;
+      top: 0.5rem;
+      right: 0.5rem;
+      z-index: 2;
+    }
+    button.copy-btn {
+      font-size: 0.7rem;
+      font-weight: 600;
+      padding: 0.28rem 0.55rem;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--text);
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+    button.copy-btn:hover { border-color: var(--accent); color: var(--accent); }
+    button.copy-btn.copied {
+      border-color: var(--ok);
+      color: var(--ok);
+    }
+    .fail-ocr .no-ocr {
+      font-size: 0.8rem;
+      color: var(--muted);
+      font-style: italic;
+    }
+    .tag {
+      display: inline-block;
+      font-size: 0.65rem;
+      font-weight: 600;
+      padding: 0.12rem 0.4rem;
+      border-radius: 4px;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+    }
+    .tag.pipeline { background: rgba(251, 191, 36, 0.15); color: var(--warn); }
+    .tag.validation { background: rgba(248, 113, 113, 0.15); color: var(--err); }
     .hidden { display: none !important; }
-    code { font-size: 0.8rem; background: #0a0e14; padding: 0.15rem 0.35rem; border-radius: 4px; }
+    code { font-size: 0.75rem; background: #0a0e14; padding: 0.1rem 0.3rem; border-radius: 4px; }
   </style>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;600&display=swap" rel="stylesheet" />
 </head>
 <body>
   <header>
     <h1>Dataset benchmark</h1>
-    <p>
-      Uji pipeline OCR terhadap file di folder <code>dataset/</code>.
-      Keberhasilan = <code>document_matched</code> (validasi keyword + nama).
-      Respons stream NDJSON dari <code>POST /api/v1/dataset/benchmark</code>.
-    </p>
+    <p>Uji pipeline OCR · keberhasilan = <code>document_matched</code></p>
     <div class="nav-top">
       <a href="/">← Beranda</a>
       <a href="/pipeline">Pipeline manual</a>
     </div>
   </header>
 
-  <main>
-    <section class="panel">
-      <h2>Konfigurasi global</h2>
-      <div class="row three">
-        <div>
-          <label class="block" for="ocrMode">Engine OCR</label>
-          <select id="ocrMode">
-            <option value="fast" selected>fast (PP-OCRv6)</option>
-            <option value="mistral">mistral (cloud)</option>
-            <option value="vl">vl (PaddleOCR-VL)</option>
-          </select>
+  <div class="layout">
+    <!-- Kolom kiri: pengaturan -->
+    <div class="col-left">
+      <section class="panel">
+        <h2>Pengaturan</h2>
+        <div class="config-grid">
+          <div>
+            <label class="block" for="ocrMode">Engine OCR</label>
+            <select id="ocrMode">
+              <option value="fast" selected>fast (PP-OCRv6)</option>
+              <option value="mistral">mistral (cloud)</option>
+              <option value="vl">vl (PaddleOCR-VL)</option>
+            </select>
+          </div>
+          <div>
+            <label class="block" for="ppTier">PP-OCR tier</label>
+            <select id="ppTier">
+              <option value="balanced">balanced</option>
+              <option value="medium" selected>medium</option>
+              <option value="small">small</option>
+              <option value="tiny">tiny</option>
+            </select>
+          </div>
+          <div class="full">
+            <label class="check-row">
+              <input type="checkbox" id="enablePreprocess" />
+              Jalankan preprocessing (crop NPWP, rotate, dll.)
+            </label>
+          </div>
+          <div class="full">
+            <label class="check-row">
+              <input type="checkbox" id="skipPassthrough" />
+              Raw ke OCR (skip passthrough resize/grayscale)
+            </label>
+          </div>
+          <div class="full">
+            <label class="check-row">
+              <input type="checkbox" id="useExpectedName" checked />
+              Pakai nama dari filename
+            </label>
+          </div>
         </div>
-        <div>
-          <label class="block" for="ppTier">PP-OCR tier</label>
-          <select id="ppTier">
-            <option value="balanced">balanced</option>
-            <option value="medium" selected>medium</option>
-            <option value="small">small</option>
-            <option value="tiny">tiny</option>
-          </select>
-        </div>
-        <div>
-          <label class="block">&nbsp;</label>
-          <label style="display:flex;align-items:center;gap:0.5rem;font-size:0.9rem;cursor:pointer;">
-            <input type="checkbox" id="useExpectedName" checked />
-            Pakai nama dari filename
+        <p class="hint" id="datasetRootHint">Memuat daftar folder…</p>
+      </section>
+    </div>
+
+    <!-- Kolom kanan: pilih dokumen + hasil -->
+    <div class="col-right">
+      <section class="panel panel-docs">
+        <h2>Pemilihan dokumen</h2>
+        <div class="mode-switch" role="tablist" aria-label="Mode benchmark">
+          <label class="mode-option active" id="modeBatchLabel">
+            <input type="radio" name="testMode" value="batch" checked />
+            <div>
+              <strong>Batch</strong>
+              <span>Centang folder + limit &amp; offset per jenis dokumen</span>
+            </div>
+          </label>
+          <label class="mode-option" id="modeSpecificLabel">
+            <input type="radio" name="testMode" value="specific" />
+            <div>
+              <strong>File spesifik</strong>
+              <span>Tulis nama file satu per baris (debug / spot check)</span>
+            </div>
           </label>
         </div>
-      </div>
-      <div class="controls" style="margin-top:1rem;margin-bottom:0;">
-        <div>
-          <label class="block" for="globalLimit">Limit default per jenis</label>
-          <input type="number" id="globalLimit" value="5" min="0" max="500" style="width:6rem;" />
+
+        <div class="mode-panel" id="modeBatch">
+          <div class="toolbar">
+            <div class="limit-group">
+              <label class="block" for="globalLimit">Limit default</label>
+              <input type="number" id="globalLimit" value="20" min="0" max="500" />
+            </div>
+            <div class="limit-group">
+              <label class="block" for="globalOffset">Offset default</label>
+              <input type="number" id="globalOffset" value="0" min="0" max="10000" />
+            </div>
+            <button type="button" class="secondary" id="btnApplyLimit">Terapkan ke semua</button>
+            <button type="button" class="secondary" id="btnSelectAll">Centang semua</button>
+            <button type="button" class="secondary" id="btnSelectNone">Kosongkan</button>
+          </div>
+          <div class="table-scroll" style="margin-top:0.75rem;">
+            <table>
+              <thead>
+                <tr>
+                  <th style="width:2.25rem;"></th>
+                  <th>Folder</th>
+                  <th style="width:3.5rem;">File</th>
+                  <th class="limit-col">Limit</th>
+                  <th class="offset-col">Offset</th>
+                </tr>
+              </thead>
+              <tbody id="folderTable"></tbody>
+            </table>
+          </div>
         </div>
-        <button type="button" class="secondary" id="btnApplyLimit">Terapkan ke semua</button>
-        <button type="button" class="secondary" id="btnSelectAll">Pilih semua</button>
-        <button type="button" class="secondary" id="btnSelectNone">Kosongkan</button>
-        <button type="button" id="btnRun">Jalankan test</button>
-        <button type="button" class="secondary hidden" id="btnDownload">Unduh JSON</button>
-      </div>
-      <p class="hint" id="datasetRootHint">Memuat daftar folder…</p>
-    </section>
 
-    <section class="panel">
-      <h2>Jenis dokumen</h2>
-      <div style="overflow-x:auto;">
-        <table>
-          <thead>
-            <tr>
-              <th style="width:2.5rem;"></th>
-              <th>Folder dataset</th>
-              <th>API type</th>
-              <th>File</th>
-              <th>Limit</th>
-            </tr>
-          </thead>
-          <tbody id="folderTable"></tbody>
-        </table>
-      </div>
-    </section>
+        <div class="mode-panel hidden" id="modeSpecific">
+          <p class="hint" style="margin-top:0;margin-bottom:0.75rem;">
+            Satu file per baris. Bisa cuma nama file (pakai folder di bawah) atau <code>folder/file.jpg</code>.
+          </p>
+          <div class="config-grid">
+            <div class="full">
+              <label class="block" for="specificFolder">Folder default</label>
+              <select id="specificFolder">
+                <option value="">— pilih folder —</option>
+              </select>
+            </div>
+            <div class="full">
+              <label class="block" for="specificFiles">Daftar file</label>
+              <textarea id="specificFiles" placeholder="npwp_M. CHAIRIL HAMZAH_3213080506990001.jpg&#10;npwp/npwp_MUHAMAD EKA GALIH PERMANA_3215261708010003.jpg"></textarea>
+            </div>
+          </div>
+        </div>
 
-    <section class="panel hidden" id="progressPanel">
-      <h2>Progress</h2>
-      <div class="progress-wrap"><div class="progress-bar" id="progressBar"></div></div>
-      <div class="status" id="progressStatus">Menunggu…</div>
-    </section>
+        <div class="btn-run-wrap">
+          <button type="button" id="btnRun">Jalankan test</button>
+        </div>
+      </section>
 
-    <section class="panel hidden" id="resultsPanel">
-      <h2>Hasil ringkasan</h2>
-      <div class="stats-grid" id="globalStats"></div>
-      <div class="timing-row" id="globalTiming"></div>
-      <h2 style="margin-top:1.5rem;">Per jenis dokumen</h2>
-      <div style="overflow-x:auto;">
-        <table>
-          <thead>
-            <tr>
-              <th>Folder</th>
-              <th>Total</th>
-              <th>Lolos</th>
-              <th>Gagal validasi</th>
-              <th>Error pipeline</th>
-              <th>Rasio sukses</th>
-              <th>Rasio gagal</th>
-              <th>Avg OCR (s)</th>
-              <th>Avg total (s)</th>
-            </tr>
-          </thead>
-          <tbody id="folderStatsTable"></tbody>
-        </table>
+      <div class="empty-state" id="emptyState">
+        <p><strong>Belum ada hasil</strong></p>
+        <p>Pilih mode di atas — <strong>Batch</strong> (limit/offset) atau <strong>File spesifik</strong> — lalu klik <strong>Jalankan test</strong>.</p>
       </div>
-    </section>
-  </main>
+
+      <section class="panel hidden" id="progressPanel">
+        <h2>Progress</h2>
+        <div class="progress-wrap"><div class="progress-bar" id="progressBar"></div></div>
+        <div class="status" id="progressStatus">Menunggu…</div>
+      </section>
+
+      <section class="panel hidden" id="resultsPanel">
+        <div class="panel-head">
+          <h2>Hasil ringkasan</h2>
+          <button type="button" class="secondary hidden" id="btnDownload">Unduh JSON</button>
+        </div>
+        <div class="stats-grid" id="globalStats"></div>
+        <div class="timing-row" id="globalTiming"></div>
+
+        <h2 style="margin-top:1.25rem;">Per jenis dokumen</h2>
+        <div class="results-table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Folder</th>
+                <th>Total</th>
+                <th>Lolos</th>
+                <th>Gagal</th>
+                <th>Error</th>
+                <th>Sukses</th>
+                <th>Gagal %</th>
+                <th>OCR (s)</th>
+                <th>Total (s)</th>
+              </tr>
+            </thead>
+            <tbody id="folderStatsTable"></tbody>
+          </table>
+        </div>
+
+        <div class="failures-panel" id="failuresPanel">
+          <h2>Detail kegagalan</h2>
+          <div id="failuresContent"></div>
+        </div>
+      </section>
+    </div>
+  </div>
 
   <script>
     const folderTable = document.getElementById("folderTable");
     const datasetRootHint = document.getElementById("datasetRootHint");
+    const emptyState = document.getElementById("emptyState");
     const progressPanel = document.getElementById("progressPanel");
     const progressBar = document.getElementById("progressBar");
     const progressStatus = document.getElementById("progressStatus");
@@ -285,11 +745,20 @@
     const globalStats = document.getElementById("globalStats");
     const globalTiming = document.getElementById("globalTiming");
     const folderStatsTable = document.getElementById("folderStatsTable");
+    const failuresContent = document.getElementById("failuresContent");
     const btnRun = document.getElementById("btnRun");
     const btnDownload = document.getElementById("btnDownload");
+    const specificFolder = document.getElementById("specificFolder");
+    const specificFiles = document.getElementById("specificFiles");
+    const modeBatch = document.getElementById("modeBatch");
+    const modeSpecific = document.getElementById("modeSpecific");
+    const modeBatchLabel = document.getElementById("modeBatchLabel");
+    const modeSpecificLabel = document.getElementById("modeSpecificLabel");
+    const testModeInputs = document.querySelectorAll('input[name="testMode"]');
 
     let folderRows = [];
     let lastSummary = null;
+    let lastFailures = [];
 
     function esc(s) {
       return String(s ?? "")
@@ -307,17 +776,58 @@
     function renderFolderTable() {
       folderTable.innerHTML = folderRows.map((row, i) => {
         const cls = row.supported ? "" : "unsupported";
-        const badge = row.supported
-          ? `<span class="badge ok">${esc(row.label)}</span>`
-          : `<span class="badge no">belum didukung</span>`;
-        return `<tr class="${cls}" data-idx="${i}">
-          <td><input type="checkbox" class="row-enable" ${row.supported ? "checked" : ""} ${row.supported ? "" : "disabled"} /></td>
-          <td>${esc(row.folder)}</td>
-          <td>${row.document_type ? esc(row.document_type) : "—"} ${badge}</td>
-          <td>${row.file_count}</td>
-          <td class="limit-cell"><input type="number" class="row-limit" value="5" min="0" max="500" ${row.supported ? "" : "disabled"} /></td>
+        const title = row.document_type
+          ? `${row.document_type} — ${row.label}`
+          : "belum didukung";
+        return `<tr class="${cls}" data-idx="${i}" title="${esc(title)}">
+          <td><input type="checkbox" class="row-enable" ${row.supported ? "" : "disabled"} /></td>
+          <td class="folder-name">${esc(row.folder)}</td>
+          <td class="file-count-cell">${row.file_count}</td>
+          <td class="limit-cell"><input type="number" class="row-limit" value="20" min="0" max="500" ${row.supported ? "" : "disabled"} /></td>
+          <td class="offset-cell"><input type="number" class="row-offset" value="0" min="0" max="10000" ${row.supported ? "" : "disabled"} /></td>
         </tr>`;
       }).join("");
+      renderSpecificFolderOptions();
+    }
+
+    function renderSpecificFolderOptions() {
+      const prev = specificFolder.value;
+      const supported = folderRows.filter((r) => r.supported);
+      specificFolder.innerHTML = [
+        `<option value="">— pilih folder —</option>`,
+        ...supported.map((r) => `<option value="${esc(r.folder)}">${esc(r.folder)} (${r.file_count})</option>`),
+      ].join("");
+      if (prev && supported.some((r) => r.folder === prev)) {
+        specificFolder.value = prev;
+      } else if (supported.length === 1) {
+        specificFolder.value = supported[0].folder;
+      }
+    }
+
+    function parseSpecificFileLines(text) {
+      return String(text || "")
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter((line) => line && !line.startsWith("#"));
+    }
+
+    function getSpecificFileSelection() {
+      const files = parseSpecificFileLines(specificFiles.value);
+      const folder = specificFolder.value.trim();
+      if (!files.length) {
+        return null;
+      }
+      const needsFolder = files.some((f) => !f.includes("/"));
+      if (needsFolder && !folder) {
+        return null;
+      }
+      return {
+        folder: folder || files[0].split("/")[0],
+        enabled: true,
+        limit: 0,
+        offset: 0,
+        files,
+      };
     }
 
     async function loadTypes() {
@@ -325,7 +835,7 @@
       if (!res.ok) throw new Error("Gagal memuat daftar folder: " + res.status);
       const data = await res.json();
       folderRows = data.folders || [];
-      datasetRootHint.textContent = "Dataset root: " + (data.dataset_root || "?");
+      datasetRootHint.textContent = "Dataset: " + (data.dataset_root || "?");
       renderFolderTable();
     }
 
@@ -338,9 +848,24 @@
         if (!row) return;
         const enabled = tr.querySelector(".row-enable").checked;
         const limit = Number(tr.querySelector(".row-limit").value) || 0;
-        out.push({ folder: row.folder, enabled, limit });
+        const offset = Number(tr.querySelector(".row-offset").value) || 0;
+        out.push({ folder: row.folder, enabled, limit, offset });
       });
       return out;
+    }
+
+    function getTestMode() {
+      const checked = document.querySelector('input[name="testMode"]:checked');
+      return checked ? checked.value : "batch";
+    }
+
+    function updateTestModeUI() {
+      const mode = getTestMode();
+      const isBatch = mode === "batch";
+      modeBatch.classList.toggle("hidden", !isBatch);
+      modeSpecific.classList.toggle("hidden", isBatch);
+      modeBatchLabel.classList.toggle("active", isBatch);
+      modeSpecificLabel.classList.toggle("active", !isBatch);
     }
 
     function setRunning(running) {
@@ -348,17 +873,263 @@
       document.getElementById("btnApplyLimit").disabled = running;
       document.getElementById("btnSelectAll").disabled = running;
       document.getElementById("btnSelectNone").disabled = running;
-      folderTable.querySelectorAll("input").forEach((el) => { el.disabled = running || el.classList.contains("row-limit") && el.closest("tr")?.classList.contains("unsupported"); });
+      specificFolder.disabled = running;
+      specificFiles.disabled = running;
+      testModeInputs.forEach((el) => { el.disabled = running; });
+      folderTable.querySelectorAll("input").forEach((el) => {
+        el.disabled = running || ((el.classList.contains("row-limit") || el.classList.contains("row-offset")) && el.closest("tr")?.classList.contains("unsupported"));
+      });
+    }
+
+    function buildBenchmarkBody(selections) {
+      return {
+        selections,
+        ocr_mode: document.getElementById("ocrMode").value,
+        pp_ocr_tier: document.getElementById("ppTier").value,
+        use_expected_name: document.getElementById("useExpectedName").checked,
+        enable_preprocess: document.getElementById("enablePreprocess").checked,
+        skip_passthrough: document.getElementById("skipPassthrough").checked,
+      };
+    }
+
+    async function consumeBenchmarkStream(res) {
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          let ev;
+          try { ev = JSON.parse(line); } catch { continue; }
+
+          if (ev.type === "progress") {
+            const pctDone = ev.total ? (ev.index / ev.total) * 100 : 0;
+            progressBar.style.width = pctDone + "%";
+            progressStatus.textContent = `[${ev.index}/${ev.total}] ${ev.folder} — ${ev.file}`;
+          } else if (ev.type === "summary") {
+            lastSummary = ev;
+            renderSummary(ev.stats);
+            progressStatus.textContent = "Selesai.";
+            progressStatus.className = "status ok";
+            progressBar.style.width = "100%";
+          } else if (ev.type === "error") {
+            progressStatus.textContent = "Error: " + (ev.message || "unknown");
+            progressStatus.className = "status error";
+          }
+        }
+      }
+    }
+
+    async function startBenchmark(selections) {
+      setRunning(true);
+      showRunningState();
+      progressBar.style.width = "0%";
+      progressStatus.textContent = "Memulai…";
+      progressStatus.className = "status";
+      lastSummary = null;
+
+      try {
+        const res = await fetch("/api/v1/dataset/benchmark", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(buildBenchmarkBody(selections)),
+        });
+        if (!res.ok) {
+          const errText = await res.text();
+          throw new Error(errText || "HTTP " + res.status);
+        }
+        await consumeBenchmarkStream(res);
+      } catch (e) {
+        progressStatus.textContent = "Gagal: " + e.message;
+        progressStatus.className = "status error";
+      } finally {
+        setRunning(false);
+      }
+    }
+
+    function showRunningState() {
+      emptyState.classList.add("hidden");
+      progressPanel.classList.remove("hidden");
+      resultsPanel.classList.add("hidden");
+      btnDownload.classList.add("hidden");
+    }
+
+    function failureKindLabel(kind) {
+      if (!kind || kind === "validation_fail") return { text: "Validasi", cls: "validation" };
+      return { text: "Pipeline", cls: "pipeline" };
+    }
+
+    function datasetFileUrl(folder, file) {
+      return `/api/v1/dataset/file?folder=${encodeURIComponent(folder)}&file=${encodeURIComponent(file)}`;
+    }
+
+    function isImageFile(name) {
+      return /\.(jpe?g|png|webp)$/i.test(name || "");
+    }
+
+    function isPreviewOnlyFailure(f) {
+      if (f.document_type === "foto_profile") return true;
+      if (!f.ocr_text && isImageFile(f.file)) return true;
+      return false;
+    }
+
+    function renderFailurePreview(f, large, idx) {
+      const url = datasetFileUrl(f.folder, f.file);
+      const cls = large ? "fail-preview large" : "fail-preview";
+      const copyImgBtn = isImageFile(f.file)
+        ? `<button type="button" class="copy-btn copy-img-btn" data-copy="image" data-idx="${idx}" title="Copy gambar ke clipboard">Copy gambar</button>`
+        : "";
+      if (isImageFile(f.file)) {
+        return `<div class="fail-preview-wrap">${copyImgBtn}<div class="${cls}"><img src="${url}" alt="${esc(f.file)}" loading="lazy" draggable="true" /></div></div>`;
+      }
+      if (/\.pdf$/i.test(f.file || "")) {
+        return `<div class="${cls}"><div class="pdf-label">PDF<br><a href="${url}" target="_blank" rel="noopener">Buka file</a></div></div>`;
+      }
+      return `<div class="${cls}"><a href="${url}" target="_blank" rel="noopener">Buka file</a></div>`;
+    }
+
+    function pipelineResponseText(f) {
+      if (!f.pipeline_response) return "";
+      try {
+        return JSON.stringify(f.pipeline_response, null, 2);
+      } catch {
+        return "";
+      }
+    }
+
+    function flashCopyBtn(btn, label) {
+      if (!btn) return;
+      const orig = btn.textContent;
+      btn.textContent = label || "Tersalin!";
+      btn.classList.add("copied");
+      setTimeout(() => {
+        btn.textContent = orig;
+        btn.classList.remove("copied");
+      }, 1600);
+    }
+
+    async function copyTextToClipboard(text) {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+        return;
+      }
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.position = "fixed";
+      ta.style.left = "-9999px";
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      document.body.removeChild(ta);
+    }
+
+    async function copyImageFromUrl(url) {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error("Gagal memuat gambar (" + res.status + ")");
+      const blob = await res.blob();
+      const type = blob.type || "image/png";
+      if (navigator.clipboard?.write && typeof ClipboardItem !== "undefined") {
+        await navigator.clipboard.write([new ClipboardItem({ [type]: blob })]);
+        return;
+      }
+      throw new Error("Browser tidak mendukung copy gambar ke clipboard.");
+    }
+
+    async function handleFailureCopy(ev) {
+      const btn = ev.target.closest("[data-copy]");
+      if (!btn) return;
+      const idx = Number(btn.dataset.idx);
+      const f = lastFailures[idx];
+      if (!f) return;
+      const kind = btn.dataset.copy;
+      try {
+        if (kind === "image") {
+          await copyImageFromUrl(datasetFileUrl(f.folder, f.file));
+          flashCopyBtn(btn, "Gambar tersalin!");
+        } else if (kind === "ocr") {
+          const text = f.ocr_text || "";
+          if (!text) throw new Error("Tidak ada teks OCR.");
+          await copyTextToClipboard(text);
+          flashCopyBtn(btn, "Teks tersalin!");
+        } else if (kind === "response") {
+          const text = pipelineResponseText(f);
+          if (!text) throw new Error("Tidak ada respons pipeline.");
+          await copyTextToClipboard(text);
+          flashCopyBtn(btn, "JSON tersalin!");
+        }
+      } catch (e) {
+        alert("Gagal copy: " + (e.message || e));
+      }
+    }
+
+    function renderFailures(failures) {
+      const list = failures || [];
+      lastFailures = list;
+      if (!list.length) {
+        failuresContent.innerHTML = '<div class="failures-empty">Semua file lolos — tidak ada kegagalan.</div>';
+        return;
+      }
+      failuresContent.innerHTML = `
+        <div class="fail-cards">
+          ${list.map((f, idx) => {
+            const tag = failureKindLabel(f.failure_kind);
+            const previewOnly = isPreviewOnlyFailure(f);
+            const responseText = pipelineResponseText(f);
+            const ocrBlock = f.ocr_text
+              ? `<div class="fail-ocr">
+                  <div class="fail-section-head">
+                    <label>Raw text OCR</label>
+                    <button type="button" class="copy-btn" data-copy="ocr" data-idx="${idx}">Copy teks</button>
+                  </div>
+                  <pre>${esc(f.ocr_text)}</pre>
+                </div>`
+              : "";
+            const responseBlock = responseText
+              ? `<div class="fail-ocr">
+                  <div class="fail-section-head">
+                    <label>Respons pipeline (diolah)</label>
+                    <button type="button" class="copy-btn" data-copy="response" data-idx="${idx}">Copy JSON</button>
+                  </div>
+                  <pre>${esc(responseText)}</pre>
+                </div>`
+              : "";
+            const expected = f.expected_name
+              ? `<div class="expected">Expected name: <strong>${esc(f.expected_name)}</strong></div>`
+              : "";
+            return `<article class="fail-card${previewOnly ? " preview-only" : ""}">
+              <div class="fail-card-head">
+                ${renderFailurePreview(f, previewOnly, idx)}
+                <div class="fail-card-meta">
+                  <span class="tag ${tag.cls}">${esc(tag.text)}</span>
+                  <span style="margin-left:0.5rem;color:var(--muted);font-size:0.75rem;">${esc(f.folder)}</span>
+                  <div class="fname">${esc(f.file)}</div>
+                  <p class="reason">${esc(f.failure_reason || "—")}</p>
+                  ${expected}
+                </div>
+              </div>
+              ${ocrBlock}
+              ${responseBlock}
+            </article>`;
+          }).join("")}
+        </div>`;
     }
 
     function renderSummary(stats) {
-      lastSummary = stats;
+      emptyState.classList.add("hidden");
+      progressPanel.classList.remove("hidden");
       resultsPanel.classList.remove("hidden");
       btnDownload.classList.remove("hidden");
 
       const cards = [
         { lbl: "Total diuji", val: stats.total, cls: "" },
-        { lbl: "Lolos validasi", val: stats.validation_pass, cls: "ok" },
+        { lbl: "Lolos", val: stats.validation_pass, cls: "ok" },
         { lbl: "Gagal validasi", val: stats.validation_fail, cls: "err" },
         { lbl: "Error pipeline", val: stats.pipeline_error, cls: "warn" },
         { lbl: "Rasio sukses", val: pct(stats.success_ratio), cls: "ok" },
@@ -394,78 +1165,32 @@
           <td>${typeof ta.total === "number" ? ta.total.toFixed(2) : "—"}</td>
         </tr>`;
       }).join("");
+
+      renderFailures(stats.failures);
     }
 
     async function runBenchmark() {
-      const selections = getSelections().filter((s) => s.enabled && s.limit > 0);
-      if (!selections.length) {
-        alert("Pilih minimal satu jenis dokumen dengan limit > 0.");
-        return;
+      const mode = getTestMode();
+      let selections;
+
+      if (mode === "specific") {
+        const selection = getSpecificFileSelection();
+        if (!selection) {
+          alert("Mode file spesifik: isi daftar file (satu per baris) dan pilih folder default kalau filenya tanpa prefix folder.");
+          return;
+        }
+        selections = [selection];
+      } else {
+        selections = getSelections().filter((s) => s.enabled && s.limit > 0);
+        if (!selections.length) {
+          alert("Mode batch: pilih minimal satu jenis dokumen dengan limit > 0.");
+          return;
+        }
       }
 
-      setRunning(true);
-      progressPanel.classList.remove("hidden");
-      progressBar.style.width = "0%";
-      progressStatus.textContent = "Memulai…";
-      progressStatus.className = "status";
-      resultsPanel.classList.add("hidden");
-      lastSummary = null;
+      await startBenchmark(selections);
 
-      const body = {
-        selections,
-        ocr_mode: document.getElementById("ocrMode").value,
-        pp_ocr_tier: document.getElementById("ppTier").value,
-        use_expected_name: document.getElementById("useExpectedName").checked,
-      };
-
-      try {
-        const res = await fetch("/api/v1/dataset/benchmark", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-        });
-        if (!res.ok) {
-          const errText = await res.text();
-          throw new Error(errText || "HTTP " + res.status);
-        }
-
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = "";
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split("\n");
-          buffer = lines.pop() || "";
-
-          for (const line of lines) {
-            if (!line.trim()) continue;
-            let ev;
-            try { ev = JSON.parse(line); } catch { continue; }
-
-            if (ev.type === "progress") {
-              const pctDone = ev.total ? (ev.index / ev.total) * 100 : 0;
-              progressBar.style.width = pctDone + "%";
-              progressStatus.textContent = `[${ev.index}/${ev.total}] ${ev.folder} — ${ev.file}`;
-            } else if (ev.type === "summary") {
-              lastSummary = ev;
-              renderSummary(ev.stats);
-              progressStatus.textContent = "Selesai.";
-              progressStatus.className = "status ok";
-              progressBar.style.width = "100%";
-            } else if (ev.type === "error") {
-              progressStatus.textContent = "Error: " + (ev.message || "unknown");
-              progressStatus.className = "status error";
-            }
-          }
-        }
-      } catch (e) {
-        progressStatus.textContent = "Gagal: " + e.message;
-        progressStatus.className = "status error";
-      } finally {
-        setRunning(false);
+      if (mode === "batch") {
         renderFolderTable();
         folderTable.querySelectorAll("tr[data-idx]").forEach((tr) => {
           const idx = Number(tr.dataset.idx);
@@ -473,6 +1198,7 @@
           if (sel) {
             tr.querySelector(".row-enable").checked = sel.enabled;
             tr.querySelector(".row-limit").value = sel.limit;
+            tr.querySelector(".row-offset").value = sel.offset ?? 0;
           }
         });
       }
@@ -480,7 +1206,9 @@
 
     document.getElementById("btnApplyLimit").addEventListener("click", () => {
       const v = Number(document.getElementById("globalLimit").value) || 0;
+      const o = Number(document.getElementById("globalOffset").value) || 0;
       folderTable.querySelectorAll(".row-limit:not(:disabled)").forEach((el) => { el.value = v; });
+      folderTable.querySelectorAll(".row-offset:not(:disabled)").forEach((el) => { el.value = o; });
     });
 
     document.getElementById("btnSelectAll").addEventListener("click", () => {
@@ -491,7 +1219,24 @@
       folderTable.querySelectorAll(".row-enable").forEach((el) => { el.checked = false; });
     });
 
+    const enablePreprocessEl = document.getElementById("enablePreprocess");
+    const skipPassthroughEl = document.getElementById("skipPassthrough");
+    function syncPreprocessOptions() {
+      if (enablePreprocessEl.checked) {
+        skipPassthroughEl.checked = false;
+        skipPassthroughEl.disabled = true;
+      } else {
+        skipPassthroughEl.disabled = false;
+      }
+    }
+    enablePreprocessEl.addEventListener("change", syncPreprocessOptions);
+    syncPreprocessOptions();
+
     btnRun.addEventListener("click", runBenchmark);
+    testModeInputs.forEach((el) => el.addEventListener("change", updateTestModeUI));
+    updateTestModeUI();
+
+    failuresContent.addEventListener("click", handleFailureCopy);
 
     btnDownload.addEventListener("click", () => {
       if (!lastSummary) return;

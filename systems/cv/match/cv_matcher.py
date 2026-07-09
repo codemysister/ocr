@@ -8,7 +8,7 @@ from typing import Any
 from rapidfuzz import fuzz
 
 from systems.validation.fuzzy_compare import compare_extracted_identity_scores
-from systems.validation.name_extraction import extract_holder_name_candidate
+from systems.validation.name_extraction import _looks_like_cv_name_line, extract_cv_holder_name
 
 PENDIDIKAN_KEYWORDS: tuple[str, ...] = ("pendidikan", "education")
 PENGALAMAN_KEYWORDS: tuple[str, ...] = ("pengalaman", "experience", "pengalaman kerja")
@@ -73,6 +73,26 @@ def _keyword_dimension(
     }
 
 
+def _best_name_line_for_expected(text: str, expected: str) -> tuple[str | None, str]:
+    """Cari baris di teks CV yang paling mirip expected_name (benchmark dataset)."""
+    exp_n = _norm(expected)
+    if not exp_n:
+        return None, ""
+    best_line: str | None = None
+    best_score = 0.0
+    for line in re.split(r"[\n|]+", text or ""):
+        line = re.sub(r"^[-•*|]+\s*", "", (line or "").strip()).strip()
+        if not _looks_like_cv_name_line(line, expected_name=expected):
+            continue
+        sc = float(fuzz.WRatio(_norm(line), exp_n))
+        if sc > best_score:
+            best_score = sc
+            best_line = line
+    if best_line and best_score >= NAME_MIN_SCORE:
+        return best_line, "cv_best_expected_line"
+    return None, ""
+
+
 def _name_dimension(
     chunks: list[dict[str, Any]],
     *,
@@ -91,9 +111,12 @@ def _name_dimension(
         }
 
     nama_text = _chunks_text(chunks, "nama") or full_fallback
-    extracted, method = extract_holder_name_candidate(nama_text, "ktp")
-    if not extracted and full_fallback:
-        extracted, method = extract_holder_name_candidate(full_fallback, "ktp")
+    extracted, method = extract_cv_holder_name(nama_text, expected_name=expected)
+    if not extracted and full_fallback and full_fallback != nama_text:
+        extracted, method = extract_cv_holder_name(full_fallback, expected_name=expected)
+
+    if not extracted:
+        extracted, method = _best_name_line_for_expected(full_fallback, expected)
 
     if not extracted:
         return {
@@ -102,11 +125,22 @@ def _name_dimension(
             "skipped": False,
             "expected": expected,
             "extracted": None,
-            "method": method,
+            "method": method or "failed",
         }
 
     identity = compare_extracted_identity_scores(extracted, expected)
     score = float(identity.get("identity_combined_score") or 0.0)
+
+    if score < NAME_MIN_SCORE:
+        alt, alt_method = _best_name_line_for_expected(full_fallback, expected)
+        if alt:
+            alt_identity = compare_extracted_identity_scores(alt, expected)
+            alt_score = float(alt_identity.get("identity_combined_score") or 0.0)
+            if alt_score > score:
+                extracted, method = alt, alt_method
+                identity = alt_identity
+                score = alt_score
+
     return {
         "percent": round(score, 1),
         "pass": score >= NAME_MIN_SCORE,

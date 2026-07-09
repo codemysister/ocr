@@ -7,7 +7,7 @@ from typing import Literal
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from fastapi.encoders import jsonable_encoder
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.dataset_benchmark import (
@@ -15,6 +15,7 @@ from app.dataset_benchmark import (
     BenchmarkSelection,
     dataset_root,
     list_dataset_folders,
+    resolve_dataset_file,
     run_benchmark,
 )
 from app.pipeline_runner import OcrMode, PipelineResult, run_pipeline_bytes
@@ -69,9 +70,11 @@ def api_info() -> dict:
                     "ocr_mode": "fast (default PP-OCRv6) | mistral | vl",
                     "pp_ocr_tier": "balanced | medium | small | tiny — hanya ocr_mode=fast",
                     "include_preprocessed_image": "true | false (default false)",
+                    "enable_preprocess": "true | false (default false) — crop/rotate sebelum OCR",
+                    "skip_passthrough": "true | false (default false) — raw upload ke OCR, tanpa resize/grayscale",
                     "full_json": "true | false — hanya ocr_mode=vl",
                 },
-                "description": "Preprocess → OCR (pilihan engine) → validasi dokumen dalam satu request. Untuk cv: ingest + opsional search.",
+                "description": "OCR (pilihan engine) → validasi dokumen; preprocessing opsional (enable_preprocess=true).",
                 "ocr_modes": {
                     "fast": "Lokal PP-OCRv6 (default pipeline, pp_ocr_tier)",
                     "mistral": "Cloud Mistral OCR + document_annotation (opsional)",
@@ -131,11 +134,18 @@ def api_info() -> dict:
                 "path": "/api/v1/dataset/types",
                 "description": "Daftar folder dataset + pemetaan document_type.",
             },
+            "dataset_file": {
+                "method": "GET",
+                "path": "/api/v1/dataset/file",
+                "query": {"folder": "string", "file": "string"},
+                "description": "Unduh/preview file dataset (untuk review benchmark).",
+            },
             "dataset_benchmark": {
                 "method": "POST",
                 "path": "/api/v1/dataset/benchmark",
                 "content_type": "application/json",
                 "description": "Benchmark pipeline terhadap file dataset (response NDJSON stream).",
+                "body_note": "Per selection: pakai limit/offset batch, atau isi `files` untuk uji file spesifik.",
             },
         },
         "document_types": list_supported_document_types(),
@@ -192,6 +202,14 @@ async def api_pipeline(
         False,
         description="Sertakan image_base64 hasil preprocess di respons",
     ),
+    enable_preprocess: bool = Query(
+        False,
+        description="Jalankan preprocessing gambar sebelum OCR (crop, rotate, dll.)",
+    ),
+    skip_passthrough: bool = Query(
+        False,
+        description="Lewati passthrough ringan; kirim bytes upload langsung ke OCR (hanya bila enable_preprocess=false)",
+    ),
     full_json: bool = Query(False, description="Untuk ocr_mode=vl: lampirkan result_json lengkap"),
     cv_search_query: str = Query(
         "",
@@ -207,7 +225,7 @@ async def api_pipeline(
     ),
 ) -> JSONResponse:
     """
-    Pipeline lengkap: preprocess gambar → OCR (pilihan model) → validasi dokumen.
+    Pipeline lengkap: OCR (pilihan model) → validasi dokumen. Preprocess opsional (`enable_preprocess=true`).
 
     Cocok dipanggil dari React (Firebase Hosting) dengan satu fetch multipart.
     """
@@ -253,6 +271,8 @@ async def api_pipeline(
         ocr_mode=ocr_mode,
         pp_ocr_tier=pp_ocr_tier if ocr_mode == "fast" else None,
         include_preprocessed_image=include_preprocessed_image,
+        enable_preprocess=enable_preprocess,
+        skip_passthrough=skip_passthrough,
         full_json=full_json,
         cv_education_query=cv_education_query.strip(),
         cv_experience_query=cv_experience_query.strip(),
@@ -282,6 +302,8 @@ async def api_pipeline(
                 "ocr_mode": ocr_mode,
                 "pp_ocr_tier": tier_arg,
                 "include_preprocessed_image": include_preprocessed_image,
+                "enable_preprocess": enable_preprocess,
+                "skip_passthrough": skip_passthrough,
                 "full_json": full_json,
                 "expected_name": (name_ref or cv_search_query).strip() or None,
                 "cv_education_query": cv_education_query or None,
@@ -307,8 +329,13 @@ async def api_pipeline(
 
 class DatasetSelectionBody(BaseModel):
     folder: str
-    enabled: bool = True
-    limit: int = Field(default=10, ge=0, le=500)
+    enabled: bool = False
+    limit: int = Field(default=20, ge=0, le=500)
+    offset: int = Field(default=0, ge=0, le=10000)
+    files: list[str] = Field(
+        default_factory=list,
+        description="Daftar nama file spesifik (abaikan limit/offset bila diisi). Boleh `folder/file.jpg`.",
+    )
 
 
 class DatasetBenchmarkBody(BaseModel):
@@ -316,6 +343,8 @@ class DatasetBenchmarkBody(BaseModel):
     ocr_mode: OcrMode = "fast"
     pp_ocr_tier: PpOcrTier = "medium"
     use_expected_name: bool = True
+    enable_preprocess: bool = False
+    skip_passthrough: bool = False
 
 
 @router.get("/dataset/types")
@@ -337,17 +366,48 @@ def api_dataset_types() -> dict:
     }
 
 
+@router.get("/dataset/file")
+def api_dataset_file(
+    folder: str = Query(..., description="Nama subfolder dataset, mis. ktp"),
+    file: str = Query(..., description="Nama file, mis. ktp_Nama_3216....jpg"),
+) -> FileResponse:
+    """Serve file dataset untuk preview di UI benchmark."""
+    try:
+        path = resolve_dataset_file(folder.strip(), file.strip())
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    media_type = {
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".png": "image/png",
+        ".webp": "image/webp",
+        ".pdf": "application/pdf",
+    }.get(path.suffix.casefold(), "application/octet-stream")
+    return FileResponse(path, media_type=media_type, filename=path.name)
+
+
 @router.post("/dataset/benchmark")
 def api_dataset_benchmark(body: DatasetBenchmarkBody) -> StreamingResponse:
     """Jalankan benchmark dataset; respons stream NDJSON."""
     config = BenchmarkConfig(
         selections=[
-            BenchmarkSelection(folder=s.folder, enabled=s.enabled, limit=s.limit)
+            BenchmarkSelection(
+                folder=s.folder,
+                enabled=s.enabled,
+                limit=s.limit,
+                offset=s.offset,
+                files=list(s.files or []),
+            )
             for s in body.selections
         ],
         ocr_mode=body.ocr_mode,
         pp_ocr_tier=body.pp_ocr_tier,
         use_expected_name=body.use_expected_name,
+        enable_preprocess=body.enable_preprocess,
+        skip_passthrough=body.skip_passthrough,
     )
 
     def stream():

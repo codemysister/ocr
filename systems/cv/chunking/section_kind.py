@@ -23,6 +23,9 @@ _NAMA_MARKERS = (
     "personal data",
     "profil",
     "identitas",
+    "tentang saya",
+    "about me",
+    "ringkasan",
 )
 
 

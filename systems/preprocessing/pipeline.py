@@ -10,6 +10,10 @@ import cv2
 import numpy as np
 
 from systems.preprocessing.auto_image_rotator import maybe_auto_image_rotator_bgr
+from systems.preprocessing.npwp_dual_crop import (
+    maybe_npwp_dual_front_crop_bgr,
+    npwp_landscape_dual_aspect,
+)
 from systems.preprocessing.realesrgan_infer import maybe_apply_realesrgan_bgr
 from systems.validation.document_profiles import skip_physical_preprocess_isolation
 
@@ -105,6 +109,52 @@ def _max_side_limit() -> int:
         return max(256, int(raw))
     except ValueError:
         return MAX_SIDE
+
+
+def _min_side_max_scale(min_side: int) -> float:
+    """Batas upscale: thumbnail sangat kecil butuh faktor lebih besar agar OCR terbaca."""
+    raw = (os.environ.get("PREPROCESS_MIN_SIDE_MAX_SCALE") or "").strip()
+    if raw:
+        try:
+            return max(1.0, float(raw))
+        except ValueError:
+            pass
+    if min_side < 180:
+        return 6.0
+    if min_side < 280:
+        return 4.5
+    if min_side < 400:
+        return 4.0
+    return 3.0
+
+
+def _effective_min_side_target(min_side: int, min_tgt: int) -> int:
+    """
+    Thumbnail kecil (<500px) butuh sisi pendek efektif lebih besar agar PP-OCR andal.
+    PREPROCESS_MIN_SIDE_TARGET tetap jadi dasar; tier ini naikkan floor otomatis.
+    """
+    if min_tgt <= 0:
+        return 0
+    if min_side < 350:
+        return max(min_tgt, min_side * 3)
+    if min_side < 500:
+        return max(min_tgt, 1000)
+    return min_tgt
+
+
+def _snap_upscale_scale(min_side: int, raw_scale: float, cap: float, *, min_tgt: int) -> float:
+    """
+    Thumbnail NPWP kecil sensitif ke faktor resize — zona ~3.3–3.8× sering merusak OCR.
+    Snap ke 3× atau 4× bila memungkinkan.
+    """
+    scale = min(raw_scale, cap)
+    if min_side >= 400 or scale < 2.75:
+        return scale
+    if cap >= 3.0 and min_side * 3.0 >= min_tgt and scale < 3.5:
+        return 3.0
+    if cap >= 4.0 and scale >= 3.5:
+        return 4.0
+    return scale
 
 
 def _skip_warp_cover_ratio() -> float:
@@ -1021,11 +1071,25 @@ def _maybe_resize(bgr: np.ndarray) -> tuple[np.ndarray, dict[str, object]]:
         return out, meta
 
     if min_tgt > 0 and min_side < min_tgt:
-        scale = min_tgt / min_side
-        scale = min(scale, 3.0)
+        effective_tgt = _effective_min_side_target(min_side, min_tgt)
+        raw_scale = effective_tgt / min_side
+        scale = _snap_upscale_scale(
+            min_side,
+            raw_scale,
+            _min_side_max_scale(min_side),
+            min_tgt=min_tgt,
+        )
         if scale > 1.001:
             out = cv2.resize(bgr, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
-            meta.update(resize_applied=True, resize_scale=round(scale, 4), resize_reason="upscale_min_side")
+            meta.update(
+                resize_applied=True,
+                resize_scale=round(scale, 4),
+                resize_reason="upscale_min_side",
+                resize_min_side_target=effective_tgt,
+            )
+            if effective_tgt != min_tgt:
+                meta["resize_min_side_target_config"] = min_tgt
+                meta["resize_min_side_target_boosted"] = True
             return out, meta
 
     return bgr, meta
@@ -1569,17 +1633,89 @@ def _skip_physical_isolation_meta(profile: str) -> tuple[dict[str, object], dict
     )
 
 
+def _npwp_tiny_landscape_thumbnail(npwp_crop_meta: dict[str, object]) -> bool:
+    """Thumbnail NPWP landscape sangat kecil."""
+    layout = str(npwp_crop_meta.get("npwp_dual_crop_layout") or "")
+    if not layout.startswith("landscape_dual"):
+        return False
+    src = npwp_crop_meta.get("npwp_dual_crop_from_hw")
+    if not isinstance(src, dict):
+        return False
+    try:
+        sw = int(src.get("width", 0))
+        sh = int(src.get("height", 0))
+    except (TypeError, ValueError):
+        return False
+    if sw <= 0 or sh <= 0:
+        return False
+    return min(sw, sh) < 280
+
+
+def _npwp_light_preprocess(npwp_crop_meta: dict[str, object], profile: str) -> bool:
+    """Thumbnail kecil atau foto penuh tanpa crop — hindari enhance agresif yang merusak OCR."""
+    if profile not in ("npwp", "pemadanan_npwp"):
+        return False
+    if _npwp_tiny_landscape_thumbnail(npwp_crop_meta):
+        return True
+    if npwp_crop_meta.get("npwp_dual_crop_applied"):
+        return False
+    return True
+
+
+def _npwp_skip_orient_pre(w0: int, h0: int) -> bool:
+    """Kartu NPWP digital/scan landscape sudah tegak — jangan diputar 90°."""
+    aspect = w0 / max(h0, 1)
+    if aspect >= 1.85:
+        return False
+    return aspect >= 1.08
+
+
 def _preprocess_work_bgr(
     bgr: np.ndarray,
     *,
     document_profile_id: str = "",
 ) -> tuple[np.ndarray, bool, dict]:
-    work, resize_meta = _maybe_resize(bgr)
+    profile = (document_profile_id or "").strip().casefold()
+    h0, w0 = bgr.shape[:2]
+    npwp_crop_meta: dict[str, object] = {}
+    work = bgr
+
+    # Thumbnail landscape: crop kartu depan dulu, baru upscale (lebih tajam untuk OCR).
+    if profile in ("npwp", "pemadanan_npwp") and npwp_landscape_dual_aspect(w0, h0):
+        work, npwp_crop_meta = maybe_npwp_dual_front_crop_bgr(
+            work,
+            document_profile_id=document_profile_id,
+        )
+
+    work, resize_meta = _maybe_resize(work)
     work, air_meta = maybe_auto_image_rotator_bgr(work)
+
+    npwp_orient_meta: dict[str, object] = {}
+    if profile in ("npwp", "pemadanan_npwp") and not _npwp_skip_orient_pre(w0, h0):
+        work, npwp_orient_meta = _maybe_auto_rotate_quarters(
+            work,
+            card_warped=False,
+            margin=None,
+            min_delta=None,
+            meta_prefix="npwp_orient_pre",
+        )
+    elif profile in ("npwp", "pemadanan_npwp"):
+        npwp_orient_meta = {
+            "npwp_orient_pre_applied": False,
+            "npwp_orient_pre_90ccw_steps": 0,
+            "npwp_orient_pre_skipped_reason": "landscape_single_card",
+        }
+
+    if not npwp_crop_meta.get("npwp_dual_crop_applied"):
+        work, npwp_crop_meta = maybe_npwp_dual_front_crop_bgr(
+            work,
+            document_profile_id=document_profile_id,
+            source_hw=(w0, h0),
+        )
     work, supplement_meta = _maybe_supplement_quarter_pre_warp_if_off(work)
     mode = _auto_rotate_quarters_mode()
-    profile = (document_profile_id or "").strip().casefold()
     skip_isolation = bool(profile) and skip_physical_preprocess_isolation(profile)
+    light_npwp_thumb = _npwp_light_preprocess(npwp_crop_meta, profile)
     if bool(supplement_meta.get("auto_rotate_supplement_pre_applied")):
         rtl_meta = {
             "right_tilt_90_ccw_applied": False,
@@ -1623,6 +1759,8 @@ def _preprocess_work_bgr(
             )
         merged = {
             **air_meta,
+            **npwp_orient_meta,
+            **npwp_crop_meta,
             **supplement_meta,
             **rtl_meta,
             **fb_meta,
@@ -1635,8 +1773,12 @@ def _preprocess_work_bgr(
             fb_meta, warp_info = _skip_physical_isolation_meta(profile)
             cropped = work
             card_warped = False
-            pre_meta = _empty_auto_rotate_meta(reason=f"profile_{profile}")
-            post_meta = _empty_auto_rotate_meta(reason=f"profile_{profile}")
+            if profile in ("npwp", "pemadanan_npwp") and npwp_orient_meta:
+                pre_meta = npwp_orient_meta
+                post_meta = _empty_auto_rotate_meta(reason="npwp_orient_pre_only")
+            else:
+                pre_meta = _empty_auto_rotate_meta(reason=f"profile_{profile}")
+                post_meta = _empty_auto_rotate_meta(reason=f"profile_{profile}")
         else:
             work, fb_meta = _maybe_full_bleed_axis_straighten(work)
             pre_margin, pre_delta = _pre_rotate_margin_delta(mode)
@@ -1661,6 +1803,8 @@ def _preprocess_work_bgr(
         post_applied = bool(post_meta.get("auto_rotate_post_applied"))
         merged = {
             **air_meta,
+            **npwp_orient_meta,
+            **npwp_crop_meta,
             **supplement_meta,
             **rtl_meta,
             **fb_meta,
@@ -1688,17 +1832,24 @@ def _preprocess_work_bgr(
     gray_probe = cv2.cvtColor(cropped, cv2.COLOR_BGR2GRAY)
     blur_score = _laplacian_blur_score(gray_probe)
     cropped_sr, sr_meta = maybe_apply_realesrgan_bgr(cropped)
-    cropped_enh = _maybe_detail_enhance_bgr(cropped_sr, blur_score=blur_score)
-    gray = cv2.cvtColor(cropped_enh, cv2.COLOR_BGR2GRAY)
-    out = _enhance_grayscale_for_ocr(gray, blur_score_hint=blur_score)
+    if light_npwp_thumb:
+        gray = cv2.cvtColor(cropped_sr, cv2.COLOR_BGR2GRAY)
+        out = gray
+        detail_applied = False
+    else:
+        cropped_enh = _maybe_detail_enhance_bgr(cropped_sr, blur_score=blur_score)
+        gray = cv2.cvtColor(cropped_enh, cv2.COLOR_BGR2GRAY)
+        out = _enhance_grayscale_for_ocr(gray, blur_score_hint=blur_score)
+        detail_applied = blur_score < _DETAIL_ENHANCE_MAX_BLUR_SCORE
     out, post_meta = _maybe_post_enhance_micro_deskew_gray(out)
     meta = {
         **resize_meta,
         "document_profile_id": profile or None,
         "physical_isolation_skipped": skip_isolation,
+        "npwp_tiny_thumbnail_light_preprocess": light_npwp_thumb,
         "blur_score_laplacian": round(blur_score, 2),
-        "heavy_blur_enhance": blur_score < _BLUR_SCORE_HEAVY,
-        "detail_enhance_bgr": blur_score < _DETAIL_ENHANCE_MAX_BLUR_SCORE,
+        "heavy_blur_enhance": False if light_npwp_thumb else blur_score < _BLUR_SCORE_HEAVY,
+        "detail_enhance_bgr": detail_applied,
         **merged,
         **sr_meta,
         **post_meta,
@@ -1719,6 +1870,75 @@ def preprocess_for_ocr(bgr: np.ndarray, *, document_profile_id: str = "") -> np.
 def decode_image_bytes_bgr(data: bytes) -> tuple[np.ndarray, dict]:
     """Decode upload bytes ke BGR + metadata EXIF (tanpa preprocess OCR)."""
     return _decode_image_with_exif(data)
+
+
+def prepare_bgr_for_ocr_passthrough(bgr: np.ndarray) -> tuple[np.ndarray, dict[str, object]]:
+    """
+    Upscale/downscale ringan + grayscale 8-bit — tanpa crop/rotate/CLAHE/detail enhance.
+    Dipakai bila enable_preprocess=false agar thumbnail kecil tetap terbaca OCR.
+    """
+    work, resize_meta = _maybe_resize(bgr)
+    if work.ndim == 3 and work.shape[2] >= 3:
+        work = cv2.cvtColor(work, cv2.COLOR_BGR2GRAY)
+    meta: dict[str, object] = {
+        "skipped": True,
+        "reason": "disabled_by_request",
+        "enable_preprocess": False,
+        "light_upscale_only": True,
+        "grayscale_applied": True,
+        "encoding": "grayscale_8bit_passthrough",
+        **resize_meta,
+        "width": int(work.shape[1]),
+        "height": int(work.shape[0]),
+        "channels": 1,
+    }
+    return work, meta
+
+
+def _sniff_image_mime(data: bytes) -> str:
+    if len(data) >= 8 and data[:8] == b"\x89PNG\r\n\x1a\n":
+        return "image/png"
+    if len(data) >= 2 and data[:2] == b"\xff\xd8":
+        return "image/jpeg"
+    if len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    return "application/octet-stream"
+
+
+def encode_image_bytes_for_ocr_direct(data: bytes) -> tuple[bytes, dict]:
+    """Teruskan bytes upload apa adanya ke OCR — tanpa resize/grayscale/EXIF."""
+    if not data:
+        raise ValueError("File kosong.")
+    buf = np.frombuffer(data, dtype=np.uint8)
+    probe = cv2.imdecode(buf, cv2.IMREAD_COLOR)
+    if probe is None:
+        raise ValueError(
+            "Gagal membaca gambar. Gunakan JPEG, PNG, WebP, atau format umum lainnya."
+        )
+    channels = int(probe.shape[2]) if probe.ndim == 3 else 1
+    meta: dict[str, object] = {
+        "skipped": True,
+        "reason": "direct_upload_bytes",
+        "enable_preprocess": False,
+        "skip_passthrough": True,
+        "encoding": "raw_upload_bytes",
+        "mime": _sniff_image_mime(data),
+        "input_bytes": len(data),
+        "width": int(probe.shape[1]),
+        "height": int(probe.shape[0]),
+        "channels": channels,
+    }
+    return data, meta
+
+
+def encode_image_bytes_for_ocr_passthrough(data: bytes) -> tuple[bytes, dict]:
+    """Decode → upscale/downscale ringan → grayscale PNG untuk OCR tanpa preprocess penuh."""
+    bgr, decode_meta = _decode_image_with_exif(data)
+    bgr, passthrough_meta = prepare_bgr_for_ocr_passthrough(bgr)
+    ok, encoded = cv2.imencode(".png", bgr)
+    if not ok:
+        raise ValueError("Gagal mengenkode gambar untuk OCR.")
+    return encoded.tobytes(), {**decode_meta, **passthrough_meta, "mime": "image/png"}
 
 
 def preprocess_image_bytes(

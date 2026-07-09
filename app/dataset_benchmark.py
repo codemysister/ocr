@@ -46,6 +46,125 @@ def parse_dataset_filename(folder: str, filename: str) -> str | None:
     return name_part or None
 
 
+def resolve_dataset_file(folder: str, filename: str) -> Path:
+    """Path aman ke file di dataset/ (tolak traversal)."""
+    if not folder.strip() or not filename.strip():
+        raise ValueError("folder dan file wajib.")
+    if any(x in folder for x in ("..", "/", "\\")) or any(x in filename for x in ("..", "/", "\\")):
+        raise ValueError("Path tidak valid.")
+    root = dataset_root().resolve()
+    file_path = (root / folder / filename).resolve()
+    if not str(file_path).startswith(str(root)):
+        raise ValueError("Path di luar dataset.")
+    if not file_path.is_file():
+        raise FileNotFoundError(f"File tidak ditemukan: {folder}/{filename}")
+    if file_path.suffix.casefold() not in _DATASET_EXTS:
+        raise ValueError("Ekstensi file tidak didukung.")
+    return file_path
+
+
+def _ocr_text_from_result(result: PipelineResult) -> str | None:
+    """Ambil teks OCR mentah dari hasil pipeline (jika ada)."""
+    if not result.payload:
+        return None
+    ocr = result.payload.get("ocr")
+    if not isinstance(ocr, dict):
+        return None
+    text = ocr.get("text")
+    if isinstance(text, str) and text.strip():
+        return text
+    markdown = ocr.get("markdown")
+    if isinstance(markdown, str) and markdown.strip():
+        return markdown.strip()
+    return None
+
+
+def _pipeline_response_from_result(result: PipelineResult) -> dict[str, Any] | None:
+    """Ringkasan respons pipeline yang sudah diolah (validasi / verdict / OCR meta)."""
+    if not result.payload:
+        return None
+    payload = result.payload
+    out: dict[str, Any] = {}
+    validation = payload.get("validation")
+    verdict = payload.get("verdict")
+    if isinstance(validation, dict):
+        out["validation"] = validation
+    if isinstance(verdict, dict):
+        out["verdict"] = verdict
+    ocr = payload.get("ocr")
+    if isinstance(ocr, dict):
+        ocr_copy = {k: v for k, v in ocr.items() if k != "timing"}
+        if ocr_copy:
+            out["ocr"] = ocr_copy
+    if payload.get("validation_mode"):
+        out["validation_mode"] = payload["validation_mode"]
+    return out or None
+
+
+def _review_fields_from_result(result: PipelineResult) -> dict[str, Any]:
+    """Field tambahan untuk review kegagalan di UI benchmark."""
+    out: dict[str, Any] = {}
+    ocr_text = _ocr_text_from_result(result)
+    if ocr_text:
+        out["ocr_text"] = ocr_text
+    pipeline_response = _pipeline_response_from_result(result)
+    if pipeline_response:
+        out["pipeline_response"] = pipeline_response
+    return out
+
+
+def _failure_detail(result: PipelineResult) -> tuple[str | None, str | None]:
+    """Kembalikan (failure_kind, alasan) bila gagal; (None, None) bila lolos."""
+    if result.ok and result.document_matched:
+        return None, None
+
+    if not result.ok:
+        kind = result.error_kind or "pipeline_error"
+        return kind, result.error or "Pipeline gagal tanpa pesan."
+
+    payload = result.payload or {}
+    if payload.get("validation_mode") == "cv":
+        cv_match = payload.get("cv_match") or {}
+        summary = cv_match.get("summary")
+        parts: list[str] = []
+        if isinstance(summary, str) and summary.strip():
+            parts.append(summary.strip())
+        dims = cv_match.get("dimensions") or {}
+        for dim_name, dim in dims.items():
+            if not isinstance(dim, dict) or dim.get("pass") is not False:
+                continue
+            pct = dim.get("percent")
+            parts.append(f"{dim_name} gagal ({pct}%)" if pct is not None else f"{dim_name} gagal")
+        reason = " — ".join(parts) if parts else "CV match gagal."
+        return "validation_fail", reason
+
+    validation = payload.get("validation") or {}
+    explanation = validation.get("explanation") or {}
+    verdict = validation.get("verdict") or payload.get("verdict") or {}
+
+    parts: list[str] = []
+    summary = explanation.get("summary") if isinstance(explanation, dict) else None
+    if isinstance(summary, str) and summary.strip():
+        parts.append(summary.strip())
+    elif isinstance(verdict, dict):
+        vs = verdict.get("summary")
+        if isinstance(vs, str) and vs.strip():
+            parts.append(vs.strip())
+
+    blockers = explanation.get("primary_blockers") if isinstance(explanation, dict) else None
+    if isinstance(blockers, list) and blockers:
+        parts.append("Blocker: " + ", ".join(str(b) for b in blockers))
+
+    detail_lines = explanation.get("detail_lines") if isinstance(explanation, dict) else None
+    if isinstance(detail_lines, list):
+        for line in detail_lines[:2]:
+            if isinstance(line, str) and line.strip():
+                parts.append(line.strip())
+
+    reason = " — ".join(parts) if parts else "Validasi gagal (document_matched=false)."
+    return "validation_fail", reason
+
+
 @dataclass
 class DatasetFolderInfo:
     folder: str
@@ -94,21 +213,24 @@ def list_dataset_folders(root: Path | None = None) -> list[DatasetFolderInfo]:
     return rows
 
 
-def _list_files_for_folder(folder_path: Path, limit: int) -> list[Path]:
+def _list_files_for_folder(folder_path: Path, limit: int, offset: int = 0) -> list[Path]:
     files = sorted(
         p
         for p in folder_path.iterdir()
         if p.is_file() and p.suffix.casefold() in _DATASET_EXTS
     )
     cap = min(max(limit, 0), _MAX_LIMIT_PER_TYPE)
-    return files[:cap]
+    off = max(offset, 0)
+    return files[off : off + cap]
 
 
 @dataclass
 class BenchmarkSelection:
     folder: str
-    enabled: bool = True
-    limit: int = 10
+    enabled: bool = False
+    limit: int = 20
+    offset: int = 0
+    files: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -117,6 +239,8 @@ class BenchmarkConfig:
     ocr_mode: OcrMode = "fast"
     pp_ocr_tier: str = "medium"
     use_expected_name: bool = True
+    enable_preprocess: bool = False
+    skip_passthrough: bool = False
 
 
 @dataclass
@@ -194,6 +318,77 @@ def _process_result(
     return True, matched
 
 
+def _parse_specific_file_ref(folder: str, ref: str) -> tuple[str, str]:
+    """Parse referensi file: `nama.jpg` atau `folder/nama.jpg`."""
+    ref = ref.strip().replace("\\", "/")
+    if not ref or ref.startswith("#"):
+        raise ValueError("Referensi file kosong.")
+    if "/" in ref:
+        parts = ref.split("/", 1)
+        job_folder, job_file = parts[0].strip(), parts[1].strip()
+        if not job_folder or not job_file:
+            raise ValueError(f"Referensi tidak valid: {ref}")
+        return job_folder, job_file
+    if not folder.strip():
+        raise ValueError(f"Folder wajib untuk file `{ref}` (atau tulis folder/file).")
+    return folder.strip(), ref
+
+
+def _collect_jobs_for_selection(
+    sel: BenchmarkSelection,
+    root: Path,
+    *,
+    use_expected_name: bool,
+) -> tuple[list[tuple[str, Path, str | None]], list[str]]:
+    """
+    Kumpulkan job dari selection (file spesifik atau limit/offset).
+    Return (jobs, error_messages).
+    """
+    jobs: list[tuple[str, Path, str | None]] = []
+    errors: list[str] = []
+
+    if sel.files:
+        seen: set[tuple[str, str]] = set()
+        for ref in sel.files:
+            try:
+                job_folder, job_file = _parse_specific_file_ref(sel.folder, ref)
+            except ValueError as e:
+                errors.append(str(e))
+                continue
+            key = (job_folder.casefold(), job_file.casefold())
+            if key in seen:
+                continue
+            seen.add(key)
+            try:
+                fp = resolve_dataset_file(job_folder, job_file)
+            except FileNotFoundError:
+                errors.append(f"File tidak ditemukan: {job_folder}/{job_file}")
+                continue
+            except ValueError as e:
+                errors.append(str(e))
+                continue
+            expected = None
+            if use_expected_name:
+                expected = parse_dataset_filename(job_folder, fp.name)
+            jobs.append((job_folder, fp, expected))
+        return jobs, errors
+
+    if not sel.enabled or sel.limit <= 0:
+        return [], errors
+
+    folder_path = root / sel.folder
+    if not folder_path.is_dir():
+        errors.append(f"Folder tidak ditemukan: {sel.folder}")
+        return [], errors
+
+    for fp in _list_files_for_folder(folder_path, sel.limit, sel.offset):
+        expected = None
+        if use_expected_name:
+            expected = parse_dataset_filename(sel.folder, fp.name)
+        jobs.append((sel.folder, fp, expected))
+    return jobs, errors
+
+
 def run_benchmark(config: BenchmarkConfig) -> Generator[str, None, None]:
     """Yield baris NDJSON: progress, result, summary."""
     root = dataset_root()
@@ -205,27 +400,26 @@ def run_benchmark(config: BenchmarkConfig) -> Generator[str, None, None]:
     # Kumpulkan job
     jobs: list[tuple[str, Path, str | None]] = []
     for sel in config.selections:
-        if not sel.enabled or sel.limit <= 0:
-            continue
-        folder_path = root / sel.folder
-        if not folder_path.is_dir():
+        batch_jobs, batch_errors = _collect_jobs_for_selection(
+            sel,
+            root,
+            use_expected_name=config.use_expected_name,
+        )
+        for msg in batch_errors:
             yield json.dumps(
                 {
                     "type": "error",
                     "folder": sel.folder,
-                    "message": f"Folder tidak ditemukan: {sel.folder}",
+                    "message": msg,
                 },
                 ensure_ascii=False,
             ) + "\n"
-            continue
-        resolved = resolve_keywords(sel.folder)
-        doc_type = resolved[0] if resolved else None
-        folder_meta[sel.folder] = (doc_type, profile_label(doc_type) if doc_type else None)
-        for fp in _list_files_for_folder(folder_path, sel.limit):
-            expected = None
-            if config.use_expected_name:
-                expected = parse_dataset_filename(sel.folder, fp.name)
-            jobs.append((sel.folder, fp, expected))
+        for folder, fp, expected in batch_jobs:
+            if folder not in folder_meta:
+                resolved = resolve_keywords(folder)
+                doc_type = resolved[0] if resolved else None
+                folder_meta[folder] = (doc_type, profile_label(doc_type) if doc_type else None)
+            jobs.append((folder, fp, expected))
 
     total_jobs = len(jobs)
     for idx, (folder, file_path, expected_name) in enumerate(jobs, start=1):
@@ -251,6 +445,8 @@ def run_benchmark(config: BenchmarkConfig) -> Generator[str, None, None]:
             filename=file_path.name,
             ocr_mode=config.ocr_mode,
             pp_ocr_tier=config.pp_ocr_tier,
+            enable_preprocess=config.enable_preprocess,
+            skip_passthrough=config.skip_passthrough,
         )
 
         bucket = by_folder[folder]
@@ -267,6 +463,11 @@ def run_benchmark(config: BenchmarkConfig) -> Generator[str, None, None]:
             "document_matched": matched,
             "timing": result.timing.as_dict(),
         }
+        fail_kind, fail_reason = _failure_detail(result)
+        if fail_kind:
+            row["failure_kind"] = fail_kind
+            row["failure_reason"] = fail_reason
+            row.update(_review_fields_from_result(result))
         if not result.ok:
             row["error"] = result.error
             row["error_kind"] = result.error_kind
@@ -279,18 +480,37 @@ def run_benchmark(config: BenchmarkConfig) -> Generator[str, None, None]:
         doc_type, _ = folder_meta.get(folder, (None, None))
         by_folder_list.append(bucket.to_dict(folder=folder, document_type=doc_type))
 
+    failures = [
+        {
+            "folder": r["folder"],
+            "file": r["file"],
+            "document_type": r.get("document_type"),
+            "expected_name": r.get("expected_name"),
+            "failure_kind": r.get("failure_kind"),
+            "failure_reason": r.get("failure_reason") or r.get("error"),
+            "ocr_text": r.get("ocr_text"),
+            "pipeline_response": r.get("pipeline_response"),
+        }
+        for r in all_results
+        if r.get("failure_kind")
+    ]
+
     summary = {
         "type": "summary",
         "stats": {
             **global_stats.to_dict(),
             "by_folder": by_folder_list,
+            "failures": failures,
         },
         "results": all_results,
         "config": {
             "ocr_mode": config.ocr_mode,
             "pp_ocr_tier": config.pp_ocr_tier,
             "use_expected_name": config.use_expected_name,
+            "enable_preprocess": config.enable_preprocess,
+            "skip_passthrough": config.skip_passthrough,
             "total_jobs": total_jobs,
+            "specific_files": any(bool(s.files) for s in config.selections),
         },
     }
     yield json.dumps(summary, ensure_ascii=False) + "\n"

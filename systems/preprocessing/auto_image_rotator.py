@@ -11,13 +11,13 @@ Referensi: repo `auto-image-rotator/` di root proyek (rotate.py).
 from __future__ import annotations
 
 import os
-from typing import Callable, Final
+from typing import Callable
 
 import cv2
 import numpy as np
 
-_HAAR: Final[str] = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
-_haar_cascade: cv2.CascadeClassifier | None = None
+from systems.validation.face_detect import count_frontal_faces, face_detection_backend
+
 _dlib_detector: object | None = None
 
 
@@ -30,14 +30,9 @@ def _auto_image_rotator_enabled() -> bool:
 
 def _backend() -> str:
     v = (os.environ.get("PREPROCESS_AUTO_IMAGE_ROTATOR_BACKEND") or "haar").strip().lower()
-    return v if v in ("haar", "dlib") else "haar"
-
-
-def _haar() -> cv2.CascadeClassifier:
-    global _haar_cascade
-    if _haar_cascade is None:
-        _haar_cascade = cv2.CascadeClassifier(_HAAR)
-    return _haar_cascade
+    if v == "dlib":
+        return "dlib"
+    return face_detection_backend() if face_detection_backend() != "none" else "haar"
 
 
 def _dlib_det():
@@ -49,36 +44,14 @@ def _dlib_det():
     return _dlib_detector
 
 
-def _face_count_haar(gray: np.ndarray) -> int:
-    h, w = gray.shape[:2]
-    if h < 8 or w < 8:
-        return 0
-    g = gray
-    if min(h, w) < 360:
-        s = 360.0 / float(min(h, w))
-        g = cv2.resize(
-            gray,
-            (max(1, int(w * s)), max(1, int(h * s))),
-            interpolation=cv2.INTER_LINEAR,
-        )
-    gh, gw = g.shape[:2]
-    min_px = max(16, int(min(gh, gw) * 0.035))
-    casc = _haar()
-    if casc.empty():
-        return 0
-    faces = casc.detectMultiScale(
-        g,
-        scaleFactor=1.08,
-        minNeighbors=4,
-        minSize=(min_px, min_px),
-        flags=cv2.CASCADE_SCALE_IMAGE,
-    )
-    return int(len(faces))
+def _face_count_opencv(bgr: np.ndarray) -> int:
+    return count_frontal_faces(bgr)
 
 
-def _face_count_dlib(gray: np.ndarray) -> int:
-    if gray.size == 0:
+def _face_count_dlib(bgr: np.ndarray) -> int:
+    if bgr.size == 0:
         return 0
+    gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
     return int(len(_dlib_det()(gray, 0)))
 
 
@@ -88,8 +61,9 @@ def _resolve_counter() -> tuple[Callable[[np.ndarray], int], str]:
             _dlib_det()
             return _face_count_dlib, "dlib"
         except Exception:
-            return _face_count_haar, "haar_fallback_from_dlib"
-    return _face_count_haar, "haar"
+            return _face_count_opencv, "yunet_fallback_from_dlib"
+    backend = face_detection_backend()
+    return _face_count_opencv, backend if backend != "none" else "opencv"
 
 
 def maybe_auto_image_rotator_bgr(bgr: np.ndarray) -> tuple[np.ndarray, dict[str, object]]:
@@ -119,9 +93,8 @@ def maybe_auto_image_rotator_bgr(bgr: np.ndarray) -> tuple[np.ndarray, dict[str,
         test = bgr
         for _ in range(k):
             test = cv2.rotate(test, cv2.ROTATE_90_COUNTERCLOCKWISE)
-        gray = cv2.cvtColor(test, cv2.COLOR_BGR2GRAY)
         try:
-            n = int(counter(gray))
+            n = int(counter(test))
         except Exception:
             meta["auto_image_rotator_skipped_reason"] = "detector_error"
             return bgr, meta
