@@ -1,6 +1,6 @@
-# OCR platform — Python 3.12 + PaddlePaddle (PP-OCRv6).
-# Build: docker compose build
-# Run:   docker compose up -d
+# OCR platform — image production (linux/amd64) untuk Docker Hub / server.
+# Build & push: bash scripts/docker_push.sh
+# Server:       docker compose -f deploy/docker-compose.yml up -d
 
 FROM python:3.12-slim-bookworm
 
@@ -12,7 +12,6 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# Runtime libs for PaddlePaddle + OpenCV headless
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         curl \
@@ -21,17 +20,19 @@ RUN apt-get update \
         libgl1 \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt .
+COPY requirements.txt requirements-mistral.txt ./
 RUN pip install --upgrade pip setuptools wheel \
-    && pip install -r requirements.txt
+    && pip install -r requirements.txt -r requirements-mistral.txt
 
-COPY . .
+COPY app ./app
+COPY systems ./systems
+COPY scripts/verify_ocr_deps.py ./scripts/verify_ocr_deps.py
 
 RUN python scripts/verify_ocr_deps.py
 
-# Defaults selaras dengan scripts/dev_server.sh (KTP / dokumen Latin)
 ENV HOST=0.0.0.0 \
     PORT=8001 \
+    OCR_DEVICE=gpu \
     OCR_FAST_LANG=latin \
     OCR_FAST_DOC_UNWARPING=1 \
     PREPROCESS_AUTO_ROTATE_QUARTERS=auto \

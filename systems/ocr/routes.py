@@ -13,7 +13,9 @@ from systems.ocr.runtime_hint import (
     PADDLE_INSTALL_URL,
     PADDLEOCR_VL_DOC_URL,
     ocr_inference_unavailable_detail,
+    paddle_cuda_status,
     paddlepaddle_importable,
+    resolve_paddle_device,
 )
 from systems.ocr.fast_runner import list_pp_ocr_tiers, run_paddleocr_fast
 from systems.ocr.mistral_runner import run_mistral_ocr
@@ -28,6 +30,7 @@ router = APIRouter(prefix="/systems/ocr", tags=["ocr"])
 @router.get("/health")
 def ocr_health() -> dict:
     paddle_ok = paddlepaddle_importable()
+    cuda = paddle_cuda_status()
     return {
         "status": "ok",
         "system": "ocr",
@@ -38,6 +41,8 @@ def ocr_health() -> dict:
         "api_mistral": "/systems/ocr/api/v1/ocr-mistral",
         "paddlepaddle_importable": paddle_ok,
         "inference_ready": paddle_ok,
+        "paddle_device": resolve_paddle_device() if paddle_ok else None,
+        "paddle_cuda": cuda,
         "health_vs_inference": OCR_HEALTH_VS_INFERENCE,
         "ocr_fast": {
             "default_tier": "medium",
@@ -49,6 +54,8 @@ def ocr_health() -> dict:
                 "textline_orientation": True,
             },
             "env": {
+                "OCR_DEVICE": "default gpu — PaddleOCR/PaddleOCR-VL di GPU (gpu:0). Set cpu untuk CPU",
+                "OCR_DEVICE_FALLBACK": "default 1 — jika GPU tidak siap, pakai CPU (0 = gagal)",
                 "OCR_FAST_LANG": "en atau latin (untuk dokumen Latin / KTP; default en)",
                 "OCR_FAST_TIER": "balanced | medium | small | tiny (default medium)",
                 "OCR_FAST_DOC_ORIENTATION": "default 1 — koreksi orientasi halaman (0 matikan)",

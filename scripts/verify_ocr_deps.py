@@ -26,6 +26,14 @@ def main() -> int:
         import paddle
 
         print("PaddlePaddle:", paddle.__version__)
+        compiled = bool(paddle.device.is_compiled_with_cuda())
+        count = int(paddle.device.cuda.device_count()) if compiled else 0
+        print("CUDA compiled:", compiled)
+        print("CUDA devices:", count)
+        if compiled and count > 0:
+            print("OCR device default: gpu:0")
+        else:
+            print("OCR device default: gpu (akan fallback ke CPU — pasang paddlepaddle-gpu)")
     except ImportError:
         print("PaddlePaddle: TIDAK terpasang (wajib untuk PaddleOCR-VL layout + VL native).")
         if sys.version_info >= (3, 14):

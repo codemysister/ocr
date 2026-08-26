@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import logging
+import os
 from typing import Any, Literal
+
+logger = logging.getLogger(__name__)
 
 PADDLE_INSTALL_URL = "https://www.paddlepaddle.org.cn/install/quick"
 PADDLEOCR_VL_DOC_URL = (
@@ -46,6 +50,184 @@ def paddlepaddle_importable() -> bool:
     return True
 
 
+def _env_bool(name: str, *, default: bool) -> bool:
+    raw = (os.environ.get(name) or "").strip().lower()
+    if not raw:
+        return default
+    return raw in ("1", "true", "yes", "on")
+
+
+def paddle_cuda_status() -> dict[str, Any]:
+    """Status kompilasi CUDA Paddle (tanpa memuat model OCR)."""
+    status: dict[str, Any] = {
+        "importable": False,
+        "compiled_with_cuda": False,
+        "cuda_device_count": 0,
+        "gpu_ready": False,
+    }
+    try:
+        import paddle
+    except ImportError:
+        return status
+    status["importable"] = True
+    try:
+        compiled = bool(paddle.device.is_compiled_with_cuda())
+        status["compiled_with_cuda"] = compiled
+        count = int(paddle.device.cuda.device_count()) if compiled else 0
+        status["cuda_device_count"] = count
+        status["gpu_ready"] = compiled and count > 0
+    except Exception as e:
+        status["error"] = str(e)
+    return status
+
+
+def _normalize_ocr_device(raw: str) -> str:
+    device = (raw or "").strip() or "gpu"
+    lowered = device.lower()
+    if lowered in ("gpu", "cuda"):
+        return "gpu:0"
+    return device
+
+
+def nvidia_gpu_status() -> dict[str, Any]:
+    """Deteksi GPU NVIDIA di host (nvidia-smi), terpisah dari wheel Paddle."""
+    import shutil
+    import subprocess
+
+    smi = shutil.which("nvidia-smi")
+    if not smi:
+        return {"detected": False, "gpus": [], "error": "nvidia-smi tidak ada di PATH"}
+    try:
+        proc = subprocess.run(
+            [smi, "-L"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except Exception as e:
+        return {"detected": False, "gpus": [], "error": str(e)}
+    lines = [ln.strip() for ln in (proc.stdout or "").splitlines() if ln.strip()]
+    if proc.returncode != 0 or not lines:
+        err = (proc.stderr or proc.stdout or f"exit {proc.returncode}").strip()
+        return {"detected": False, "gpus": [], "error": err[:400]}
+    return {"detected": True, "gpus": lines}
+
+
+def paddle_gpu_healthcheck() -> dict[str, Any]:
+    """Ringkasan: GPU terdeteksi vs device yang dipakai PaddleOCR."""
+    cuda = paddle_cuda_status()
+    nvidia = nvidia_gpu_status()
+    requested = _normalize_ocr_device(os.environ.get("OCR_DEVICE") or "gpu")
+    paddle_ok = bool(cuda.get("importable"))
+    active = resolve_paddle_device() if paddle_ok else None
+    using_gpu = bool(active and str(active).lower().startswith("gpu"))
+    gpu_detected = bool(nvidia.get("detected") or cuda.get("gpu_ready"))
+    fallback = bool(
+        requested.lower().startswith("gpu") and active and not using_gpu
+    )
+
+    version = None
+    current_place = None
+    gpu_names: list[str] = []
+    if paddle_ok:
+        try:
+            import paddle
+
+            version = getattr(paddle, "__version__", None)
+            try:
+                current_place = str(paddle.device.get_device())
+            except Exception:
+                current_place = None
+            n = int(cuda.get("cuda_device_count") or 0)
+            if cuda.get("compiled_with_cuda") and n > 0:
+                for i in range(n):
+                    try:
+                        gpu_names.append(str(paddle.device.cuda.get_device_name(i)))
+                    except Exception:
+                        gpu_names.append(f"gpu:{i}")
+        except Exception:
+            pass
+
+    if using_gpu:
+        summary = "OCR memakai GPU."
+    elif gpu_detected and not using_gpu:
+        summary = (
+            "GPU terdeteksi, tetapi PaddleOCR berjalan di CPU "
+            "(wheel CPU atau OCR_DEVICE=cpu)."
+        )
+    elif not gpu_detected:
+        summary = "GPU tidak terdeteksi. OCR memakai CPU."
+    else:
+        summary = "Status GPU tidak lengkap."
+
+    return {
+        "gpu_detected": gpu_detected,
+        "using_gpu": using_gpu,
+        "fallback_to_cpu": fallback,
+        "requested_device": requested,
+        "active_device": active,
+        "summary": summary,
+        "nvidia_smi": nvidia,
+        "paddle": {
+            **cuda,
+            "version": version,
+            "current_place": current_place,
+            "gpu_names": gpu_names,
+        },
+        "env": {
+            "OCR_DEVICE": (os.environ.get("OCR_DEVICE") or "").strip() or "gpu (default)",
+            "OCR_DEVICE_FALLBACK": (os.environ.get("OCR_DEVICE_FALLBACK") or "").strip()
+            or "1 (default)",
+        },
+    }
+
+
+_resolved_paddle_device: str | None = None
+
+
+def resolve_paddle_device() -> str:
+    """Device PaddleOCR: default GPU (`OCR_DEVICE=gpu`). Fallback CPU jika CUDA tidak siap.
+
+    Set `OCR_DEVICE=cpu` untuk memaksa CPU. Set `OCR_DEVICE_FALLBACK=0` agar gagal
+    jika GPU diminta tetapi tidak tersedia.
+    """
+    global _resolved_paddle_device
+    if _resolved_paddle_device is not None:
+        return _resolved_paddle_device
+
+    requested = _normalize_ocr_device(os.environ.get("OCR_DEVICE") or "gpu")
+    wants_gpu = requested.lower().startswith("gpu")
+    if not wants_gpu:
+        _resolved_paddle_device = requested
+        logger.info("PaddleOCR device=%s (OCR_DEVICE)", requested)
+        return requested
+
+    cuda = paddle_cuda_status()
+    if cuda["gpu_ready"]:
+        _resolved_paddle_device = requested
+        logger.info("PaddleOCR device=%s (GPU)", requested)
+        return requested
+
+    if not _env_bool("OCR_DEVICE_FALLBACK", default=True):
+        raise RuntimeError(
+            "OCR_DEVICE meminta GPU tetapi PaddlePaddle tidak dikompilasi CUDA "
+            "atau tidak ada GPU. Pasang paddlepaddle-gpu (lihat "
+            + PADDLE_INSTALL_URL
+            + ") atau set OCR_DEVICE=cpu."
+        )
+
+    _resolved_paddle_device = "cpu"
+    logger.warning(
+        "OCR_DEVICE default GPU, tetapi CUDA tidak siap "
+        "(compiled_with_cuda=%s, cuda_device_count=%s). Fallback ke CPU. "
+        "Pasang paddlepaddle-gpu + NVIDIA driver, atau set OCR_DEVICE=cpu.",
+        cuda.get("compiled_with_cuda"),
+        cuda.get("cuda_device_count"),
+    )
+    return _resolved_paddle_device
+
+
 def ocr_fast_unavailable_detail(*, exc: BaseException | None = None) -> dict[str, Any]:
     """Payload 503 untuk PP-OCRv6 (ocr-fast / pipeline ocr_mode=fast)."""
     detail: dict[str, Any] = {
@@ -55,6 +237,8 @@ def ocr_fast_unavailable_detail(*, exc: BaseException | None = None) -> dict[str
         "links": {"paddle_install": PADDLE_INSTALL_URL},
         "install": "pip install -r requirements.txt",
         "env": [
+            "OCR_DEVICE",
+            "OCR_DEVICE_FALLBACK",
             "OCR_FAST_LANG",
             "OCR_FAST_TIER",
             "OCR_FAST_DOC_ORIENTATION",

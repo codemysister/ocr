@@ -13,9 +13,6 @@ from systems.cv.chunking.structure_chunker import (
     sections_from_cv_text,
     sections_from_docling_document,
 )
-from systems.cv.embedding.embedder import embed_texts
-from systems.cv.index.indexer import index_chunks
-from systems.cv.index.opensearch_client import delete_by_doc_id, ensure_index
 from systems.cv.ingest.docling_parser import parse_with_docling
 from systems.cv.ingest.ocr_fallback import ocr_image_with_fast, ocr_pdf_with_fast
 from systems.cv.ingest.pdf_text import extract_pdf_text
@@ -31,6 +28,65 @@ _PDF_SUFFIX = ".pdf"
 
 def _doc_title_from_filename(filename: str) -> str:
     return Path(filename).stem.replace("_", " ").replace("-", " ").strip() or filename
+
+
+def _index_chunks_optional(
+    chunks: list[dict[str, Any]],
+    *,
+    doc_id: str,
+    replace_existing: bool,
+) -> tuple[dict[str, Any], float, float]:
+    """Embed + OpenSearch. Dilewati jika deps/OpenSearch tidak ada (pipeline match tetap jalan)."""
+    try:
+        from systems.cv.embedding.embedder import embed_texts
+        from systems.cv.index.indexer import index_chunks
+        from systems.cv.index.opensearch_client import (
+            delete_by_doc_id,
+            ensure_index,
+        )
+    except ImportError as e:
+        logger.warning("CV embed/index dilewati (dependensi tidak terpasang): %s", e)
+        return (
+            {
+                "indexed": 0,
+                "skipped": True,
+                "reason": "cv_index_deps_missing",
+                "error": str(e),
+            },
+            0.0,
+            0.0,
+        )
+
+    try:
+        if replace_existing:
+            ensure_index()
+            delete_by_doc_id(doc_id)
+        t_embed = time.perf_counter()
+        vectors = embed_texts([c["content"] for c in chunks])
+        embed_s = time.perf_counter() - t_embed
+        t_index = time.perf_counter()
+        index_result = index_chunks(chunks, vectors=vectors)
+        index_s = time.perf_counter() - t_index
+        return index_result, embed_s, index_s
+    except Exception as e:
+        from systems.cv.index.opensearch_client import (
+            OpenSearchUnavailableError,
+            is_opensearch_connection_error,
+        )
+
+        if isinstance(e, OpenSearchUnavailableError) or is_opensearch_connection_error(e):
+            logger.warning("CV index dilewati (OpenSearch): %s", e)
+            return (
+                {
+                    "indexed": 0,
+                    "skipped": True,
+                    "reason": "opensearch_unavailable",
+                    "error": str(e),
+                },
+                0.0,
+                0.0,
+            )
+        raise
 
 
 def ingest_cv_bytes(
@@ -123,17 +179,13 @@ def ingest_cv_bytes(
 
     timing["chunk_s"] = round(time.perf_counter() - t_chunk, 3)
 
-    if replace_existing:
-        ensure_index()
-        delete_by_doc_id(doc_id)
-
-    t_embed = time.perf_counter()
-    vectors = embed_texts([c["content"] for c in chunks])
-    timing["embed_s"] = round(time.perf_counter() - t_embed, 3)
-
-    t_index = time.perf_counter()
-    index_result = index_chunks(chunks, vectors=vectors)
-    timing["index_s"] = round(time.perf_counter() - t_index, 3)
+    index_result, embed_s, index_s = _index_chunks_optional(
+        chunks,
+        doc_id=doc_id,
+        replace_existing=replace_existing,
+    )
+    timing["embed_s"] = round(embed_s, 3)
+    timing["index_s"] = round(index_s, 3)
     timing["total_s"] = round(time.perf_counter() - t0, 3)
 
     cv_match = match_cv_chunks(

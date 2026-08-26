@@ -4,6 +4,7 @@ ENV/
 env/
 .git/
 .github/
+.cursor/
 __pycache__/
 *.py[cod]
 *.egg-info/
@@ -19,5 +20,10 @@ temp/
 .env.*
 !.env.example
 models/realesrgan/*.pth
+dataset/
+dataset old/
+docs/
 *.md
-!docs/
+agent-transcripts/
+terminals/
+*.canvas.tsx

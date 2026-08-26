@@ -8,8 +8,7 @@
 #
 # Penting: jangan menjalankan `python3.12 -m venv .venv` di atas folder .venv lama (mis. yang
 # dibuat dengan Python 3.14) — symlink `python` bisa tetap menunjuk ke 3.14 sementara pip
-# memasang paket ke 3.12 → `import paddle` gagal. Hapus dulu: rm -rf .venv
-# Lalu venv baru, atau jalankan: bash scripts/recreate_venv_312.sh
+# memasang paket ke 3.12 → `import paddle` gagal. Hapus dulu: rm -rf .venv lalu buat venv 3.12.
 
 fastapi>=0.115.0
 rapidfuzz>=3.10.0
@@ -18,9 +17,13 @@ python-multipart>=0.0.9
 opencv-python-headless>=4.10.0,<5.0
 numpy>=2.0.0,<2.4
 Pillow>=10.0.0
+pymupdf>=1.24.0
 paddleocr[doc-parser]>=3.6.0
-# PaddlePaddle: wajib untuk PaddleOCR-VL-1.6 (layout + VL native). Baris di bawah
-# diabaikan pip pada Python >=3.14 (belum ada wheel). Untuk OCR jalan, pakai Python 3.11–3.12 lalu pip install -r requirements.txt
+# PaddlePaddle: default inferensi GPU (`OCR_DEVICE=gpu`). Butuh wheel CUDA, bukan paket CPU.
+# Uninstall CPU lalu pasang GPU (sesuaikan CUDA, contoh cu126):
+#   pip uninstall -y paddlepaddle
+#   python -m pip install paddlepaddle-gpu==3.2.0 -i https://www.paddlepaddle.org.cn/packages/stable/cu126/
+# Baris di bawah = wheel CPU (Mac / tanpa NVIDIA). Diabaikan pip pada Python >=3.14.
 paddlepaddle>=3.0.0; python_version < "3.14"
 #
 # Real-ESRGAN (super-res HD, opsional): pip install -r requirements-realesrgan.txt
@@ -40,7 +43,8 @@ paddlepaddle>=3.0.0; python_version < "3.14"
 #   PREPROCESS_FULL_BLEED_STRAIGHTEN=1   Axis-crop dokumen dari kontur LAB / full-bleed.
 #   PREPROCESS_CARD_WARP=1             Isolasi kartu dari latar foto (KTP di kain/meja).
 #
-# OCR cepat (PP-OCRv6): POST /systems/ocr/api/v1/ocr-fast — env: OCR_FAST_LANG, OCR_FAST_TIER,
+# OCR cepat (PP-OCRv6): POST /systems/ocr/api/v1/ocr-fast — env: OCR_DEVICE (default gpu),
+# OCR_DEVICE_FALLBACK, OCR_FAST_LANG, OCR_FAST_TIER,
 # OCR_FAST_DOC_ORIENTATION, OCR_FAST_TEXTLINE_ORIENTATION, OCR_FAST_DOC_UNWARPING,
 # OCR_FAST_DET_MODEL, OCR_FAST_REC_MODEL, OCR_FAST_DET_LIMIT_SIDE_LEN.
 #

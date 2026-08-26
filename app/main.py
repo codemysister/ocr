@@ -26,6 +26,7 @@ except ImportError:
 HUB_PATH = Path(__file__).resolve().parent / "static" / "hub.html"
 PIPELINE_PATH = Path(__file__).resolve().parent / "static" / "pipeline.html"
 DATASET_TEST_PATH = Path(__file__).resolve().parent / "static" / "dataset_test.html"
+HEALTHCHECK_PATH = Path(__file__).resolve().parent / "static" / "healthcheck.html"
 
 
 def _cors_origins() -> list[str]:
@@ -120,6 +121,16 @@ def dataset_test_page() -> FileResponse:
         raise HTTPException(404, "dataset_test.html tidak ditemukan.")
     return FileResponse(
         DATASET_TEST_PATH,
+        headers={"Cache-Control": "no-store, max-age=0"},
+    )
+
+
+@app.get("/healthcheck")
+def healthcheck_page() -> FileResponse:
+    if not HEALTHCHECK_PATH.is_file():
+        raise HTTPException(404, "healthcheck.html tidak ditemukan.")
+    return FileResponse(
+        HEALTHCHECK_PATH,
         headers={"Cache-Control": "no-store, max-age=0"},
     )
 

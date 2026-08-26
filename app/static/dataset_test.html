@@ -217,6 +217,11 @@
       text-align: right;
       color: var(--muted);
     }
+    td.empty-row {
+      color: var(--muted);
+      font-size: 0.85rem;
+      padding: 0.85rem 0.5rem;
+    }
     .badge {
       display: inline-block;
       font-size: 0.65rem;
@@ -564,6 +569,7 @@
     <div class="nav-top">
       <a href="/">← Beranda</a>
       <a href="/pipeline">Pipeline manual</a>
+      <a href="/healthcheck">Healthcheck GPU</a>
     </div>
   </header>
 
@@ -774,6 +780,11 @@
     }
 
     function renderFolderTable() {
+      if (!folderRows.length) {
+        folderTable.innerHTML = `<tr><td colspan="5" class="empty-row">Tidak ada folder di dataset. Di Docker, mount folder <code>dataset/</code> ke <code>/app/dataset</code> lalu restart container.</td></tr>`;
+        renderSpecificFolderOptions();
+        return;
+      }
       folderTable.innerHTML = folderRows.map((row, i) => {
         const cls = row.supported ? "" : "unsupported";
         const title = row.document_type
@@ -835,7 +846,14 @@
       if (!res.ok) throw new Error("Gagal memuat daftar folder: " + res.status);
       const data = await res.json();
       folderRows = data.folders || [];
-      datasetRootHint.textContent = "Dataset: " + (data.dataset_root || "?");
+      const root = data.dataset_root || "?";
+      if (!folderRows.length) {
+        datasetRootHint.textContent = data.exists
+          ? "Dataset: " + root + " (tidak ada subfolder)"
+          : "Dataset: " + root + " — folder tidak ada di container. Mount ./dataset ke /app/dataset.";
+      } else {
+        datasetRootHint.textContent = "Dataset: " + root;
+      }
       renderFolderTable();
     }
 

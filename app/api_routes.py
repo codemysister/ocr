@@ -20,7 +20,7 @@ from app.dataset_benchmark import (
 )
 from app.pipeline_runner import OcrMode, PipelineResult, run_pipeline_bytes
 from systems.ocr.fast_runner import list_pp_ocr_tiers
-from systems.ocr.runtime_hint import ocr_inference_unavailable_detail
+from systems.ocr.runtime_hint import ocr_inference_unavailable_detail, paddle_gpu_healthcheck
 from systems.observability.last_tuning_log import (
     log_safe_failure,
     summarize_text_fields,
@@ -50,6 +50,11 @@ def api_info() -> dict:
         "cors": _cors_note(),
         "endpoints": {
             "health": {"method": "GET", "path": "/health"},
+            "healthcheck": {
+                "method": "GET",
+                "path": "/api/v1/healthcheck",
+                "description": "Status GPU terdeteksi vs device PaddleOCR (gpu/cpu).",
+            },
             "preprocess": {
                 "method": "POST",
                 "path": "/api/v1/preprocess",
@@ -151,6 +156,12 @@ def api_info() -> dict:
         "document_types": list_supported_document_types(),
         "docs": "/docs",
     }
+
+
+@router.get("/healthcheck")
+def api_healthcheck() -> dict:
+    """Status GPU (nvidia-smi / Paddle CUDA) dan device yang dipakai OCR."""
+    return paddle_gpu_healthcheck()
 
 
 def _pipeline_http_error(result: PipelineResult) -> HTTPException:
@@ -351,8 +362,10 @@ class DatasetBenchmarkBody(BaseModel):
 def api_dataset_types() -> dict:
     """Daftar subfolder dataset beserta pemetaan document_type."""
     folders = list_dataset_folders()
+    root = dataset_root()
     return {
-        "dataset_root": str(dataset_root()),
+        "dataset_root": str(root),
+        "exists": root.is_dir(),
         "folders": [
             {
                 "folder": f.folder,

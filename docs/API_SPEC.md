@@ -1418,7 +1418,8 @@ Untuk `foto_profile`, `is_own_document` selalu `null` (identitas dari gambar bel
 
 | Env | Default | Fungsi |
 |-----|---------|--------|
-| — | — | Engine default saat `ocr_mode=fast` (query pipeline boleh dihilangkan) |
+| `OCR_DEVICE` | `gpu` | Device PaddleOCR: `gpu` / `gpu:0` / `cpu`. Default GPU; fallback CPU jika CUDA tidak siap |
+| `OCR_DEVICE_FALLBACK` | `1` | `0` = gagal jika GPU diminta tetapi tidak tersedia |
 | `pp_ocr_tier` (query) | `medium` | `balanced` \| `medium` \| `small` \| `tiny` |
 
 ### Mistral OCR (opsional, `ocr_mode=mistral`)

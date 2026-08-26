@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Healthcheck GPU — OCR Platform</title>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;600&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #0f1419;
+      --surface: #1a222d;
+      --border: #2d3a4d;
+      --text: #e8eef5;
+      --muted: #8b9cb3;
+      --accent: #3d9cf5;
+      --ok: #6ee7b7;
+      --err: #f87171;
+      --warn: #fbbf24;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "DM Sans", system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }
+    header {
+      padding: 1.25rem clamp(1rem, 4vw, 2rem);
+      border-bottom: 1px solid var(--border);
+    }
+    header h1 { margin: 0; font-size: 1.35rem; font-weight: 600; }
+    header p { margin: 0.35rem 0 0; color: var(--muted); font-size: 0.85rem; }
+    .nav-top { margin-top: 0.6rem; }
+    .nav-top a { color: var(--accent); font-size: 0.875rem; margin-right: 1rem; }
+    main {
+      padding: 1.25rem clamp(1rem, 4vw, 2rem);
+      max-width: 52rem;
+    }
+    .cards {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+    }
+    @media (max-width: 640px) { .cards { grid-template-columns: 1fr; } }
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.1rem 1.2rem;
+    }
+    .card h2 {
+      margin: 0 0 0.35rem;
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .value {
+      font-size: 1.45rem;
+      font-weight: 600;
+    }
+    .value.ok { color: var(--ok); }
+    .value.no { color: var(--err); }
+    .value.warn { color: var(--warn); }
+    .summary {
+      margin: 1rem 0;
+      padding: 0.9rem 1.1rem;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+    }
+    .panel {
+      margin-top: 1rem;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.1rem 1.2rem;
+    }
+    .panel h2 { margin: 0 0 0.75rem; font-size: 0.95rem; }
+    dl { margin: 0; display: grid; grid-template-columns: 11rem 1fr; gap: 0.4rem 0.75rem; font-size: 0.875rem; }
+    dt { color: var(--muted); }
+    dd { margin: 0; word-break: break-word; }
+    ul { margin: 0.25rem 0 0; padding-left: 1.1rem; color: var(--muted); font-size: 0.85rem; }
+    button {
+      margin-top: 1rem;
+      background: var(--accent);
+      color: #061018;
+      border: 0;
+      border-radius: 8px;
+      padding: 0.55rem 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      font-family: inherit;
+    }
+    button:hover { filter: brightness(1.08); }
+    .err { color: var(--err); }
+    code { font-size: 0.85em; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Healthcheck GPU</h1>
+    <p>Deteksi GPU di mesin vs device yang dipakai PaddleOCR</p>
+    <div class="nav-top">
+      <a href="/">← Beranda</a>
+      <a href="/pipeline">Pipeline</a>
+      <a href="/dataset-test">Dataset benchmark</a>
+    </div>
+  </header>
+  <main>
+    <p id="loadMsg" class="err" hidden></p>
+    <div class="cards">
+      <div class="card">
+        <h2>GPU terdeteksi</h2>
+        <div class="value" id="gpuDetected">…</div>
+      </div>
+      <div class="card">
+        <h2>OCR memakai GPU</h2>
+        <div class="value" id="usingGpu">…</div>
+      </div>
+    </div>
+    <div class="summary" id="summary">Memuat…</div>
+    <section class="panel">
+      <h2>Detail Paddle</h2>
+      <dl>
+        <dt>Device diminta</dt><dd id="requested">—</dd>
+        <dt>Device aktif</dt><dd id="active">—</dd>
+        <dt>Fallback ke CPU</dt><dd id="fallback">—</dd>
+        <dt>Paddle version</dt><dd id="pver">—</dd>
+        <dt>Compiled CUDA</dt><dd id="compiled">—</dd>
+        <dt>Jumlah CUDA device</dt><dd id="count">—</dd>
+        <dt>paddle.device</dt><dd id="place">—</dd>
+        <dt>Nama GPU (Paddle)</dt><dd id="pnames">—</dd>
+        <dt>OCR_DEVICE</dt><dd id="envDev">—</dd>
+      </dl>
+    </section>
+    <section class="panel">
+      <h2>nvidia-smi</h2>
+      <p id="smiStatus" style="margin:0 0 0.5rem;color:var(--muted);font-size:0.875rem;">—</p>
+      <ul id="smiList"></ul>
+    </section>
+    <button type="button" id="btnRefresh">Refresh</button>
+  </main>
+  <script>
+    const yn = (v) => v ? "Ya" : "Tidak";
+    const cls = (el, v) => {
+      el.classList.remove("ok", "no", "warn");
+      el.classList.add(v ? "ok" : "no");
+    };
+
+    async function load() {
+      const loadMsg = document.getElementById("loadMsg");
+      loadMsg.hidden = true;
+      try {
+        const res = await fetch("/api/v1/healthcheck");
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        const d = await res.json();
+        const det = document.getElementById("gpuDetected");
+        const use = document.getElementById("usingGpu");
+        det.textContent = yn(d.gpu_detected);
+        use.textContent = yn(d.using_gpu);
+        cls(det, d.gpu_detected);
+        cls(use, d.using_gpu);
+        if (d.gpu_detected && !d.using_gpu) {
+          use.classList.remove("no");
+          use.classList.add("warn");
+        }
+        document.getElementById("summary").textContent = d.summary || "";
+        document.getElementById("requested").textContent = d.requested_device || "—";
+        document.getElementById("active").textContent = d.active_device || "—";
+        document.getElementById("fallback").textContent = yn(!!d.fallback_to_cpu);
+        const p = d.paddle || {};
+        document.getElementById("pver").textContent = p.version || "—";
+        document.getElementById("compiled").textContent = yn(!!p.compiled_with_cuda);
+        document.getElementById("count").textContent = String(p.cuda_device_count ?? "—");
+        document.getElementById("place").textContent = p.current_place || "—";
+        document.getElementById("pnames").textContent = (p.gpu_names && p.gpu_names.length)
+          ? p.gpu_names.join(", ")
+          : "—";
+        document.getElementById("envDev").textContent = (d.env && d.env.OCR_DEVICE) || "—";
+        const smi = d.nvidia_smi || {};
+        const smiStatus = document.getElementById("smiStatus");
+        const smiList = document.getElementById("smiList");
+        smiList.innerHTML = "";
+        if (smi.detected) {
+          smiStatus.textContent = "GPU NVIDIA terdeteksi.";
+          (smi.gpus || []).forEach((g) => {
+            const li = document.createElement("li");
+            li.textContent = g;
+            smiList.appendChild(li);
+          });
+        } else {
+          smiStatus.textContent = smi.error || "Tidak terdeteksi.";
+        }
+      } catch (e) {
+        loadMsg.hidden = false;
+        loadMsg.textContent = "Gagal memuat healthcheck: " + e.message;
+      }
+    }
+
+    document.getElementById("btnRefresh").addEventListener("click", load);
+    load();
+  </script>
+</body>
+</html>

@@ -16,6 +16,8 @@ from typing import Any
 import cv2
 import numpy as np
 
+from systems.ocr.runtime_hint import resolve_paddle_device
+
 logger = logging.getLogger(__name__)
 
 PP_OCR_V6_SMALL_DET = "PP-OCRv6_small_det"
@@ -102,11 +104,12 @@ def _get_paddle_ocr(*, pp_ocr_tier: str | None = None) -> Any:
     mod_flags = paddle_fast_module_flags()
     lim = (os.environ.get("OCR_FAST_DET_LIMIT_SIDE_LEN") or "").strip()
     mkldnn = paddle_mkldnn_enabled()
+    device = resolve_paddle_device()
     cache_key = (
         f"{lang}|{det}|{rec}|ori={int(mod_flags['use_doc_orientation_classify'])}"
         f"|unwarp={int(mod_flags['use_doc_unwarping'])}"
         f"|tline={int(mod_flags['use_textline_orientation'])}|lim={lim or '-'}"
-        f"|mkldnn={int(mkldnn)}"
+        f"|mkldnn={int(mkldnn)}|dev={device}"
     )
     cached = _ocr_cache.get(cache_key)
     if cached is not None:
@@ -136,6 +139,7 @@ def _get_paddle_ocr(*, pp_ocr_tier: str | None = None) -> Any:
             "text_detection_model_name": det,
             "text_recognition_model_name": rec,
             "enable_mkldnn": mkldnn,
+            "device": device,
         }
 
         if lim.isdigit():
@@ -207,6 +211,7 @@ def run_paddleocr_fast(
     ocr = _get_paddle_ocr(pp_ocr_tier=pp_ocr_tier)
     timing["get_engine_s"] = round(time.perf_counter() - t_get, 3)
     timing["pp_ocr_tier"] = tier_id
+    timing["paddle_device"] = resolve_paddle_device()
     timing["paddle_modules"] = paddle_fast_module_flags()
 
     with _infer_lock:
@@ -246,6 +251,7 @@ def run_paddleocr_fast(
         "mode": "paddleocr_fast",
         "model": model_str,
         "pp_ocr_tier": tier_id,
+        "paddle_device": resolve_paddle_device(),
         "paddle_modules": paddle_fast_module_flags(),
         "markdown": markdown,
         "text": plain,

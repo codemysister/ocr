@@ -1,1 +1,0 @@
-{"system": "chatbot_hr", "provider": "gemini", "model": "gemini-2.5-flash", "input_tokens": 20, "output_tokens": 832, "total_tokens": 2107, "input_cost_usd": 6e-06, "output_cost_usd": 0.00208, "total_cost_usd": 0.002086, "total_cost_idr": 35.462, "response_characters": 3349, "created_at": "2026-05-25T03:02:21.071514"}

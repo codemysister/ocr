@@ -11,6 +11,8 @@ from typing import Any
 import cv2
 import numpy as np
 
+from systems.ocr.runtime_hint import resolve_paddle_device
+
 logger = logging.getLogger(__name__)
 
 _pipeline: Any = None
@@ -121,6 +123,7 @@ def get_vl_pipeline():
             "use_queues": False,
             # oneDNN rusak di PaddlePaddle 3.x + PIR (lihat fast_runner). Diteruskan ke sub-predictor.
             "enable_mkldnn": paddle_mkldnn_enabled(),
+            "device": resolve_paddle_device(),
         }
         if backend:
             kw["vl_rec_backend"] = backend
@@ -153,6 +156,7 @@ def run_paddleocr_vl(image_bytes: bytes, *, include_full_json: bool = False) -> 
     timing["vl_input_hw"] = {"height": ih, "width": iw}
     orig = resize_meta.get("input_hw") or {"height": ih, "width": iw}
     timing["input_hw"] = orig
+    timing["paddle_device"] = resolve_paddle_device()
 
     t1 = time.perf_counter()
     pipe = get_vl_pipeline()
@@ -204,6 +208,7 @@ def run_paddleocr_vl(image_bytes: bytes, *, include_full_json: bool = False) -> 
         "markdown": markdown_text,
         "text": plain,
         "timing": timing,
+        "paddle_device": resolve_paddle_device(),
     }
     if include_full_json:
         payload["result_json"] = page.json
