@@ -1,37 +1,33 @@
 # OCR Platform
 
-API preprocessing + OCR (PP-OCRv6) + validasi dokumen. **Cara utama: Docker image** (Docker Hub), tanpa Python/venv di server.
+API preprocessing + OCR (PP-OCRv6) + validasi dokumen. **Cara utama: build di server** (linux/amd64 native). Jangan push image bergiga dari Mac ke Docker Hub.
 
-## Push ke Docker Hub
+## Install di server NVIDIA
+
+```bash
+git clone <repo> && cd ocr
+# pertama kali (Paddle + dataset, sekali):
+bash scripts/server_build.sh
+docker compose -f deploy/docker-compose.yml up -d
+```
+
+Update kode (tidak download Paddle/dataset ulang):
+
+```bash
+git pull
+bash scripts/server_build.sh
+docker compose -f deploy/docker-compose.yml up -d
+```
+
+RTX 50: `PADDLE_GPU_INDEX=cu129 REBUILD_BASE=1 bash scripts/server_build.sh`. Ganti `requirements.txt` / dataset: `REBUILD_BASE=1 bash scripts/server_build.sh`.
+
+## Opsional: Docker Hub (dari server, bukan dari Mac)
 
 ```bash
 docker login
-export DOCKERHUB_USER=akunanda          # ganti dengan akun Hub Anda
-bash scripts/docker_push.sh             # image: akunanda/ocr:latest (linux/amd64)
-```
-
-Tag lain: `TAG=v1.0.0 bash scripts/docker_push.sh`
-
-## Install di server
-
-Tidak perlu clone repo. Setelah image ada di Hub:
-
-```bash
-docker pull akunanda/ocr:latest
-docker run -d \
-  --name checkinpro-ocr \
-  -p 8001:8001 \
-  --restart unless-stopped \
-  -v paddle-models:/root/.paddlex \
-  akunanda/ocr:latest
-```
-
-Atau salin `deploy/docker-compose.yml` ke server:
-
-```bash
-export OCR_IMAGE=akunanda/ocr:latest
-docker compose -f docker-compose.yml pull
-docker compose -f docker-compose.yml up -d
+export DOCKERHUB_USER=codemysister
+REBUILD_BASE=1 VARIANT=gpu bash scripts/docker_push.sh   # sekali
+VARIANT=gpu bash scripts/docker_push.sh                    # harian
 ```
 
 UI/API: `http://SERVER:8001/pipeline` — docs: `http://SERVER:8001/docs`
@@ -48,7 +44,9 @@ Set `OCR_IMAGE=akunanda/ocr:latest` di `.env` jika ingin pull, bukan build.
 
 ## Catatan
 
-- Image default **CPU PaddlePaddle**. `OCR_DEVICE=gpu` akan fallback ke CPU jika CUDA tidak ada di container.
-- Benchmark `/dataset-test` butuh folder `dataset/` di host; `docker compose` mem-mount-nya ke `/app/dataset`.
+- Tag `:latest` = **CPU**. Tag `:gpu` = **Paddle CUDA** (tidak perlu pip ulang di server).
+- Dua tag: `:gpu-base` (Paddle + dataset, jarang) dan `:gpu` (kode, harian). Server cukup `docker pull …:gpu`; layer base tidak diunduh ulang.
+- `REBUILD_BASE=1` hanya jika `requirements.txt`, wheel Paddle, atau `dataset/` berubah.
+- Benchmark `/dataset-test` memakai `dataset/` di dalam image. Jangan mount volume kosong ke `/app/dataset`.
 - Key opsional (Mistral, dll.): file `.env` di samping compose.
 - CV search butuh OpenSearch: `docker compose -f docker-compose.cv.yml up -d` (dari repo).

@@ -1,9 +1,19 @@
 #!/usr/bin/env python3
-"""Cek dependensi untuk preprocessing + PaddleOCR-VL. Keluar 0 jika Paddle terdeteksi; 1 jika OCR VL tidak siap."""
+"""Cek dependensi untuk preprocessing + PaddleOCR. Keluar 0 jika stack siap.
+
+OCR_VERIFY_ALLOW_NO_CUDA=1: image GPU boleh gagal import paddle saat build
+(python:slim tidak punya libcuda; import berhasil di server dengan --gpus all).
+"""
 
 from __future__ import annotations
 
+import os
 import sys
+from pathlib import Path
+
+
+def _env_flag(name: str) -> bool:
+    return (os.environ.get(name) or "").strip().lower() in ("1", "true", "yes", "on")
 
 
 def main() -> int:
@@ -33,19 +43,19 @@ def main() -> int:
         if compiled and count > 0:
             print("OCR device default: gpu:0")
         else:
-            print("OCR device default: gpu (akan fallback ke CPU — pasang paddlepaddle-gpu)")
-    except ImportError:
-        print("PaddlePaddle: TIDAK terpasang (wajib untuk PaddleOCR-VL layout + VL native).")
-        if sys.version_info >= (3, 14):
+            print("OCR device default: gpu (akan fallback ke CPU bila tidak ada CUDA)")
+    except Exception as e:
+        allow = _env_flag("OCR_VERIFY_ALLOW_NO_CUDA")
+        so_path = Path(sys.prefix) / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}" / "site-packages" / "paddle" / "base" / "libpaddle.so"
+        print(f"Import paddle gagal: {e}")
+        if allow and so_path.is_file():
             print(
-                "Python 3.14+ umumnya belum punya wheel resmi paddlepaddle. "
-                "Buat venv dengan Python 3.11 atau 3.12, lalu: pip install -r requirements.txt"
+                "OCR_VERIFY_ALLOW_NO_CUDA=1 — wheel Paddle ada, import dilewati "
+                "(normal saat build image GPU tanpa libcuda)."
             )
-        else:
-            print(
-                "Pasang mengikuti: https://www.paddlepaddle.org.cn/install/quick "
-                "(CPU/GPU sesuai OS). Lalu: pip install paddlepaddle"
-            )
+            print("Semua cek dasar OK (paddleocr + stack app; paddle diuji di server).")
+            return 0
+        print("PaddlePaddle: TIDAK terpasang atau tidak bisa di-load.")
         return 1
 
     print("Semua cek dasar OK (Paddle + paddleocr + stack app).")

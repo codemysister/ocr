@@ -1,18 +1,21 @@
-# Jalankan di server: cukup file ini + (opsional) .env
-# Tidak perlu clone repo atau Python.
+# Di server (setelah git clone + scripts/server_build.sh):
 #
-#   export OCR_IMAGE=akunanda/ocr:latest
-#   docker compose -f docker-compose.yml pull
-#   docker compose -f docker-compose.yml up -d
+#   bash scripts/server_build.sh
+#   docker compose -f deploy/docker-compose.yml up -d
 #
-# Atau one-liner:
-#   docker run -d --name checkinpro-ocr -p 8001:8001 --restart unless-stopped akunanda/ocr:latest
+# Update kode: git pull && bash scripts/server_build.sh && docker compose -f deploy/docker-compose.yml up -d
 
 services:
   ocr:
-    image: ${OCR_IMAGE:-checkinpro/ocr:latest}
-    pull_policy: always
+    image: ${OCR_IMAGE:-ocr:gpu}
+    pull_policy: never
+    build:
+      context: ..
+      dockerfile: Dockerfile.gpu
+      args:
+        BASE_IMAGE: ${OCR_BASE_IMAGE:-ocr:gpu-base}
     container_name: checkinpro-ocr
+    gpus: all
     ports:
       - "${PORT:-8001}:8001"
     env_file:
@@ -24,6 +27,7 @@ services:
       CORS_ORIGINS: ${CORS_ORIGINS:-*}
       OCR_DEVICE: ${OCR_DEVICE:-gpu}
       OCR_FAST_LANG: ${OCR_FAST_LANG:-latin}
+      DATASET_ROOT: /app/dataset
     volumes:
       - paddle-models:/root/.paddlex
       - ocr-logs:/app/logs

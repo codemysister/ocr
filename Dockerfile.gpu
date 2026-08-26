@@ -1,0 +1,12 @@
+# Image GPU harian: hanya kode. Base (Paddle + dataset) sudah di Hub.
+# Push cepat: VARIANT=gpu bash scripts/docker_push.sh
+# Rebuild Paddle/dataset: REBUILD_BASE=1 VARIANT=gpu bash scripts/docker_push.sh
+
+ARG BASE_IMAGE=codemysister/ocr:gpu-base
+FROM ${BASE_IMAGE}
+
+COPY app ./app
+COPY systems ./systems
+COPY scripts/verify_ocr_deps.py ./scripts/verify_ocr_deps.py
+
+CMD ["sh", "-c", "exec uvicorn app.main:app --host ${HOST} --port ${PORT}"]

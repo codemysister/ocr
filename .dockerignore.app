@@ -20,6 +20,7 @@ temp/
 .env.*
 !.env.example
 models/realesrgan/*.pth
+dataset/
 dataset old/
 docs/
 *.md

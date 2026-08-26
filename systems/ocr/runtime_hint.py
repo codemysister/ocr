@@ -120,12 +120,14 @@ def paddle_gpu_healthcheck() -> dict[str, Any]:
     nvidia = nvidia_gpu_status()
     requested = _normalize_ocr_device(os.environ.get("OCR_DEVICE") or "gpu")
     paddle_ok = bool(cuda.get("importable"))
-    active = resolve_paddle_device() if paddle_ok else None
-    using_gpu = bool(active and str(active).lower().startswith("gpu"))
+    wants_gpu = requested.lower().startswith("gpu")
+    using_gpu = bool(wants_gpu and cuda.get("gpu_ready"))
+    if paddle_ok:
+        active = requested if using_gpu else resolve_paddle_device()
+    else:
+        active = None
     gpu_detected = bool(nvidia.get("detected") or cuda.get("gpu_ready"))
-    fallback = bool(
-        requested.lower().startswith("gpu") and active and not using_gpu
-    )
+    fallback = bool(wants_gpu and active and not using_gpu)
 
     version = None
     current_place = None
@@ -193,10 +195,14 @@ def resolve_paddle_device() -> str:
     jika GPU diminta tetapi tidak tersedia.
     """
     global _resolved_paddle_device
-    if _resolved_paddle_device is not None:
-        return _resolved_paddle_device
-
     requested = _normalize_ocr_device(os.environ.get("OCR_DEVICE") or "gpu")
+    if _resolved_paddle_device is not None:
+        cached = _resolved_paddle_device
+        if str(cached).lower().startswith("gpu") or not requested.lower().startswith("gpu"):
+            return cached
+        if not paddle_cuda_status().get("gpu_ready"):
+            return cached
+        _resolved_paddle_device = None
     wants_gpu = requested.lower().startswith("gpu")
     if not wants_gpu:
         _resolved_paddle_device = requested
