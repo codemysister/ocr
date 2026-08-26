@@ -8,7 +8,7 @@
 #   git pull && bash scripts/server_build.sh
 #   docker compose -f deploy/docker-compose.yml up -d
 #
-# RTX 50: PADDLE_GPU_INDEX=cu129 REBUILD_BASE=1 bash scripts/server_build.sh
+# RTX 50 (sm_120): PADDLE_GPU_INDEX=cu129 PADDLE_VERSION=3.3.1 REBUILD_BASE=1 bash scripts/server_build.sh
 
 set -euo pipefail
 
@@ -17,6 +17,7 @@ cd "$ROOT"
 
 VARIANT="${VARIANT:-gpu}"
 PADDLE_GPU_INDEX="${PADDLE_GPU_INDEX:-cu126}"
+PADDLE_VERSION="${PADDLE_VERSION:-3.2.0}"
 REBUILD_BASE="${REBUILD_BASE:-0}"
 APP_IMAGE="${OCR_IMAGE:-ocr:gpu}"
 BASE_IMAGE="${OCR_BASE_IMAGE:-ocr:gpu-base}"
@@ -30,7 +31,10 @@ if [[ "$VARIANT" != "gpu" ]]; then
 else
   BASE_DOCKERFILE="Dockerfile.gpu.base"
   APP_DOCKERFILE="Dockerfile.gpu"
-  BUILD_ARGS=(--build-arg "PADDLE_GPU_INDEX=${PADDLE_GPU_INDEX}")
+  BUILD_ARGS=(
+    --build-arg "PADDLE_GPU_INDEX=${PADDLE_GPU_INDEX}"
+    --build-arg "PADDLE_VERSION=${PADDLE_VERSION}"
+  )
 fi
 
 need_base=0

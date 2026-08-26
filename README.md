@@ -19,7 +19,7 @@ bash scripts/server_build.sh
 docker compose -f deploy/docker-compose.yml up -d
 ```
 
-RTX 50: `PADDLE_GPU_INDEX=cu129 REBUILD_BASE=1 bash scripts/server_build.sh`. Ganti `requirements.txt` / dataset: `REBUILD_BASE=1 bash scripts/server_build.sh`.
+RTX 50 (sm_120): `PADDLE_GPU_INDEX=cu129 PADDLE_VERSION=3.3.1 REBUILD_BASE=1 bash scripts/server_build.sh` — Paddle 3.2.x tidak mendukung arsitektur 120.
 
 ## Opsional: Docker Hub (dari server, bukan dari Mac)
 

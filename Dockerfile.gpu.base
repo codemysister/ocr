@@ -1,9 +1,11 @@
 # Runtime GPU: apt + pip Paddle + dataset. Jarang di-build (REBUILD_BASE=1).
-# ARG PADDLE_GPU_INDEX: cu126 (RTX 20/30/40) | cu129 (RTX 50)
+# ARG PADDLE_GPU_INDEX: cu126 (RTX 20/30/40) | cu129/cu130 (RTX 50, sm_120)
+# RTX 50 butuh paddlepaddle-gpu >= 3.3.1 (3.2.x tidak punya kernel sm_120).
 
 FROM python:3.12-slim-bookworm
 
 ARG PADDLE_GPU_INDEX=cu126
+ARG PADDLE_VERSION=3.2.0
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -26,7 +28,7 @@ COPY requirements.txt requirements-mistral.txt ./
 RUN grep -vE '^paddlepaddle' requirements.txt > /tmp/requirements-no-paddle.txt \
     && pip install --upgrade pip setuptools wheel \
     && pip install -r /tmp/requirements-no-paddle.txt -r requirements-mistral.txt \
-    && python -m pip install paddlepaddle-gpu==3.2.0 \
+    && python -m pip install "paddlepaddle-gpu==${PADDLE_VERSION}" \
          -i "https://www.paddlepaddle.org.cn/packages/stable/${PADDLE_GPU_INDEX}/"
 
 COPY dataset ./dataset
