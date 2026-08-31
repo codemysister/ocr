@@ -58,6 +58,7 @@ PENGALAMAN_STRUCTURE_MARKERS: tuple[str, ...] = (
 
 NAME_MIN_SCORE = 65.0
 KEYWORD_MIN_SCORE = 70.0
+PENGALAMAN_MIN_SCORE = 50.0
 
 
 def _norm(s: str) -> str:
@@ -118,6 +119,7 @@ def _keyword_dimension(
     base_keywords: tuple[str, ...],
     extra_query: str = "",
     structural_markers: tuple[str, ...] = (),
+    min_score: float = KEYWORD_MIN_SCORE,
 ) -> dict[str, Any]:
     keywords = list(base_keywords)
     q = (extra_query or "").strip()
@@ -142,12 +144,12 @@ def _keyword_dimension(
         sc = float(fuzz.partial_ratio(kn, text_n))
         if sc > best:
             best = sc
-        if sc >= KEYWORD_MIN_SCORE:
+        if sc >= min_score:
             hit.append(kw)
     structure_pass = _structure_keyword_pass(text, structural_markers)
-    passed = best >= KEYWORD_MIN_SCORE or structure_pass
-    if structure_pass and best < KEYWORD_MIN_SCORE:
-        best = max(best, KEYWORD_MIN_SCORE)
+    passed = best >= min_score or structure_pass
+    if structure_pass and best < min_score:
+        best = max(best, min_score)
     return {
         "percent": round(best, 1),
         "pass": passed,
@@ -155,6 +157,7 @@ def _keyword_dimension(
         "keywords_hit": hit,
         "snippet": text.strip()[:280],
         "structure_pass": structure_pass,
+        "min_score": min_score,
     }
 
 
@@ -291,13 +294,14 @@ def match_cv_chunks(
         base_keywords=PENGALAMAN_KEYWORDS,
         extra_query=experience_query,
         structural_markers=PENGALAMAN_STRUCTURE_MARKERS,
+        min_score=PENGALAMAN_MIN_SCORE,
     )
     if not pengalaman["pass"] and _experience_optional_pass(doc_text):
         pengalaman = {
             **pengalaman,
             "pass": True,
             "optional_pass": True,
-            "percent": max(float(pengalaman["percent"]), KEYWORD_MIN_SCORE),
+            "percent": max(float(pengalaman["percent"]), PENGALAMAN_MIN_SCORE),
         }
 
     percents: list[float] = [pendidikan["percent"], pengalaman["percent"]]
