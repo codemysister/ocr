@@ -101,6 +101,25 @@ def _pipeline_response_from_result(result: PipelineResult) -> dict[str, Any] | N
     return out or None
 
 
+def _llm_fallback_from_result(result: PipelineResult) -> dict[str, Any] | None:
+    """Ringkasan fallback AI lokal dari hasil validasi (jika dipanggil)."""
+    if not result.payload:
+        return None
+    validation = result.payload.get("validation")
+    if not isinstance(validation, dict):
+        return None
+    fb = validation.get("llm_fallback")
+    if not isinstance(fb, dict) or not fb.get("attempted"):
+        return None
+    out: dict[str, Any] = {"llm_fallback": fb}
+    ann = validation.get("llm_annotation")
+    if isinstance(ann, dict):
+        out["llm_annotation"] = ann
+    elif isinstance(fb.get("annotation"), dict):
+        out["llm_annotation"] = fb["annotation"]
+    return out
+
+
 def _review_fields_from_result(result: PipelineResult) -> dict[str, Any]:
     """Field tambahan untuk review kegagalan di UI benchmark."""
     out: dict[str, Any] = {}
@@ -110,6 +129,9 @@ def _review_fields_from_result(result: PipelineResult) -> dict[str, Any]:
     pipeline_response = _pipeline_response_from_result(result)
     if pipeline_response:
         out["pipeline_response"] = pipeline_response
+    llm_fb = _llm_fallback_from_result(result)
+    if llm_fb:
+        out.update(llm_fb)
     return out
 
 
@@ -463,10 +485,15 @@ def run_benchmark(config: BenchmarkConfig) -> Generator[str, None, None]:
             "document_matched": matched,
             "timing": result.timing.as_dict(),
         }
+        llm_fb = _llm_fallback_from_result(result)
+        if llm_fb:
+            row.update(llm_fb)
         fail_kind, fail_reason = _failure_detail(result)
         if fail_kind:
             row["failure_kind"] = fail_kind
             row["failure_reason"] = fail_reason
+            row.update(_review_fields_from_result(result))
+        elif llm_fb:
             row.update(_review_fields_from_result(result))
         if not result.ok:
             row["error"] = result.error
@@ -490,10 +517,32 @@ def run_benchmark(config: BenchmarkConfig) -> Generator[str, None, None]:
             "failure_reason": r.get("failure_reason") or r.get("error"),
             "ocr_text": r.get("ocr_text"),
             "pipeline_response": r.get("pipeline_response"),
+            "llm_fallback": r.get("llm_fallback"),
+            "llm_annotation": r.get("llm_annotation"),
+            "document_matched": r.get("document_matched"),
         }
         for r in all_results
         if r.get("failure_kind")
     ]
+
+    llm_fallback_runs = [
+        {
+            "folder": r["folder"],
+            "file": r["file"],
+            "document_type": r.get("document_type"),
+            "expected_name": r.get("expected_name"),
+            "document_matched": r.get("document_matched"),
+            "llm_fallback": r.get("llm_fallback"),
+            "llm_annotation": r.get("llm_annotation"),
+            "ocr_text": r.get("ocr_text"),
+            "pipeline_response": r.get("pipeline_response"),
+        }
+        for r in all_results
+        if isinstance(r.get("llm_fallback"), dict) and r["llm_fallback"].get("attempted")
+    ]
+    llm_rescued = sum(
+        1 for r in llm_fallback_runs if r.get("document_matched") is True
+    )
 
     summary = {
         "type": "summary",
@@ -501,6 +550,12 @@ def run_benchmark(config: BenchmarkConfig) -> Generator[str, None, None]:
             **global_stats.to_dict(),
             "by_folder": by_folder_list,
             "failures": failures,
+            "llm_fallback_runs": llm_fallback_runs,
+            "llm_fallback_attempted": len(llm_fallback_runs),
+            "llm_fallback_success": sum(
+                1 for r in llm_fallback_runs if r.get("llm_fallback", {}).get("success")
+            ),
+            "llm_fallback_rescued": llm_rescued,
         },
         "results": all_results,
         "config": {

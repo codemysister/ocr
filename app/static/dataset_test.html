@@ -557,6 +557,44 @@
     }
     .tag.pipeline { background: rgba(251, 191, 36, 0.15); color: var(--warn); }
     .tag.validation { background: rgba(248, 113, 113, 0.15); color: var(--err); }
+    .tag.llm { background: rgba(61, 156, 245, 0.15); color: var(--accent); }
+    .tag.llm-ok { background: rgba(110, 231, 183, 0.15); color: var(--ok); }
+    .tag.llm-fail { background: rgba(248, 113, 113, 0.15); color: var(--err); }
+    .fail-llm {
+      padding: 0.85rem 1rem;
+      border-top: 1px solid var(--border);
+      background: rgba(61, 156, 245, 0.04);
+    }
+    .fail-llm-grid {
+      display: grid;
+      gap: 0.5rem 1rem;
+      grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+      font-size: 0.8rem;
+      margin-bottom: 0.65rem;
+    }
+    .fail-llm-grid dt {
+      margin: 0;
+      font-size: 0.68rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--muted);
+    }
+    .fail-llm-grid dd {
+      margin: 0.15rem 0 0;
+      color: var(--text);
+      word-break: break-word;
+    }
+    .llm-panel { margin-top: 1.25rem; }
+    .llm-panel h2 { margin-bottom: 0.75rem; }
+    .llm-empty {
+      font-size: 0.85rem;
+      color: var(--muted);
+      padding: 0.75rem;
+      background: #0a0e14;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+    }
     .hidden { display: none !important; }
     code { font-size: 0.75rem; background: #0a0e14; padding: 0.1rem 0.3rem; border-radius: 4px; }
   </style>
@@ -736,6 +774,11 @@
           <h2>Detail kegagalan</h2>
           <div id="failuresContent"></div>
         </div>
+
+        <div class="llm-panel hidden" id="llmPanel">
+          <h2>AI fallback (LLM lokal)</h2>
+          <div id="llmContent"></div>
+        </div>
       </section>
     </div>
   </div>
@@ -752,6 +795,8 @@
     const globalTiming = document.getElementById("globalTiming");
     const folderStatsTable = document.getElementById("folderStatsTable");
     const failuresContent = document.getElementById("failuresContent");
+    const llmPanel = document.getElementById("llmPanel");
+    const llmContent = document.getElementById("llmContent");
     const btnRun = document.getElementById("btnRun");
     const btnDownload = document.getElementById("btnDownload");
     const specificFolder = document.getElementById("specificFolder");
@@ -765,6 +810,99 @@
     let folderRows = [];
     let lastSummary = null;
     let lastFailures = [];
+    let lastLlmRuns = [];
+
+    function llmDataFromRow(row) {
+      if (!row) return null;
+      const fb = row.llm_fallback || row.pipeline_response?.validation?.llm_fallback;
+      if (!fb?.attempted) return null;
+      const ann = row.llm_annotation
+        || row.pipeline_response?.validation?.llm_annotation
+        || fb.annotation
+        || null;
+      return { fb, ann };
+    }
+
+    function llmStatusTag(fb, matched) {
+      if (!fb?.attempted) return { text: "—", cls: "llm" };
+      if (fb.success && matched === true) return { text: "Rescue OK", cls: "llm-ok" };
+      if (fb.success) return { text: "Ekstraksi OK", cls: "llm" };
+      return { text: "Gagal", cls: "llm-fail" };
+    }
+
+    function renderLlmBlock(data, idx, { showCopy = true } = {}) {
+      if (!data) return "";
+      const { fb, ann } = data;
+      const tag = llmStatusTag(fb);
+      const annJson = ann ? JSON.stringify(ann, null, 2) : "";
+      const err = fb.error ? `<dd style="color:var(--err)">${esc(fb.error)}</dd>` : "";
+      const raw = fb.raw_content
+        ? `<div class="fail-ocr" style="padding:0;margin-top:0.65rem;">
+            <label>Raw respons AI</label>
+            <pre>${esc(fb.raw_content)}</pre>
+          </div>`
+        : "";
+      const copyAnnBtn = showCopy && annJson
+        ? `<button type="button" class="copy-btn" data-copy="llm-ann" data-idx="${idx}">Copy JSON</button>`
+        : "";
+      return `<div class="fail-llm">
+        <div class="fail-section-head">
+          <label>AI fallback (Qwen lokal)</label>
+          <span class="tag ${tag.cls}">${esc(tag.text)}</span>
+          ${copyAnnBtn}
+        </div>
+        <dl class="fail-llm-grid">
+          <div><dt>Model</dt><dd>${esc(fb.model || "—")}</dd></div>
+          <div><dt>Latency</dt><dd>${typeof fb.latency_s === "number" ? fb.latency_s.toFixed(2) + "s" : "—"}</dd></div>
+          <div><dt>Base URL</dt><dd style="font-size:0.72rem;">${esc(fb.base_url || "—")}</dd></div>
+          <div><dt>Sukses ekstraksi</dt><dd>${fb.success ? "Ya" : "Tidak"}</dd></div>
+          ${fb.error ? `<div class="full" style="grid-column:1/-1;"><dt>Error</dt>${err}</div>` : ""}
+          ${ann ? `
+            <div><dt>Jenis dokumen</dt><dd>${esc(ann.document_type_label || "—")}</dd></div>
+            <div><dt>Nama</dt><dd>${esc(ann.holder_name || "—")}</dd></div>
+            <div><dt>NIK/NPWP</dt><dd>${esc(ann.identity_number || "—")}</dd></div>
+          ` : ""}
+        </dl>
+        ${annJson ? `<div class="fail-ocr" style="padding:0;">
+          <label>Annotation JSON</label>
+          <pre>${esc(annJson)}</pre>
+        </div>` : ""}
+        ${raw}
+      </div>`;
+    }
+
+    function renderLlmRuns(runs) {
+      const list = runs || [];
+      lastLlmRuns = list;
+      if (!list.length) {
+        llmPanel.classList.add("hidden");
+        llmContent.innerHTML = "";
+        return;
+      }
+      llmPanel.classList.remove("hidden");
+      llmContent.innerHTML = `
+        <div class="fail-cards">
+          ${list.map((r, idx) => {
+            const data = llmDataFromRow(r);
+            const tag = llmStatusTag(data?.fb, r.document_matched);
+            const outcome = r.document_matched === true
+              ? '<span style="color:var(--ok);font-size:0.75rem;">Lolos setelah fallback</span>'
+              : '<span style="color:var(--err);font-size:0.75rem;">Tetap gagal</span>';
+            return `<article class="fail-card">
+              <div class="fail-card-head">
+                <div class="fail-card-meta">
+                  <span class="tag ${tag.cls}">${esc(tag.text)}</span>
+                  <span style="margin-left:0.5rem;color:var(--muted);font-size:0.75rem;">${esc(r.folder)}</span>
+                  ${outcome}
+                  <div class="fname">${esc(r.file)}</div>
+                  ${r.expected_name ? `<div class="expected">Expected: <strong>${esc(r.expected_name)}</strong></div>` : ""}
+                </div>
+              </div>
+              ${renderLlmBlock(data, idx)}
+            </article>`;
+          }).join("")}
+        </div>`;
+    }
 
     function esc(s) {
       return String(s ?? "")
@@ -976,6 +1114,7 @@
       emptyState.classList.add("hidden");
       progressPanel.classList.remove("hidden");
       resultsPanel.classList.add("hidden");
+      llmPanel.classList.add("hidden");
       btnDownload.classList.add("hidden");
     }
 
@@ -1081,6 +1220,11 @@
           if (!text) throw new Error("Tidak ada respons pipeline.");
           await copyTextToClipboard(text);
           flashCopyBtn(btn, "JSON tersalin!");
+        } else if (kind === "llm-ann") {
+          const data = llmDataFromRow(f || lastLlmRuns[idx]);
+          if (!data?.ann) throw new Error("Tidak ada annotation AI.");
+          await copyTextToClipboard(JSON.stringify(data.ann, null, 2));
+          flashCopyBtn(btn, "JSON tersalin!");
         }
       } catch (e) {
         alert("Gagal copy: " + (e.message || e));
@@ -1118,6 +1262,7 @@
                   <pre>${esc(responseText)}</pre>
                 </div>`
               : "";
+            const llmBlock = renderLlmBlock(llmDataFromRow(f), idx);
             const expected = f.expected_name
               ? `<div class="expected">Expected name: <strong>${esc(f.expected_name)}</strong></div>`
               : "";
@@ -1133,6 +1278,7 @@
                 </div>
               </div>
               ${ocrBlock}
+              ${llmBlock}
               ${responseBlock}
             </article>`;
           }).join("")}
@@ -1150,6 +1296,8 @@
         { lbl: "Lolos", val: stats.validation_pass, cls: "ok" },
         { lbl: "Gagal validasi", val: stats.validation_fail, cls: "err" },
         { lbl: "Error pipeline", val: stats.pipeline_error, cls: "warn" },
+        { lbl: "AI fallback", val: stats.llm_fallback_attempted ?? 0, cls: stats.llm_fallback_attempted ? "" : "" },
+        { lbl: "Rescue AI", val: stats.llm_fallback_rescued ?? 0, cls: stats.llm_fallback_rescued ? "ok" : "" },
         { lbl: "Rasio sukses", val: pct(stats.success_ratio), cls: "ok" },
         { lbl: "Rasio gagal", val: pct(stats.failure_ratio), cls: "err" },
         { lbl: "Rasio error", val: pct(stats.error_ratio), cls: "warn" },
@@ -1185,6 +1333,7 @@
       }).join("");
 
       renderFailures(stats.failures);
+      renderLlmRuns(stats.llm_fallback_runs);
     }
 
     async function runBenchmark() {
@@ -1255,6 +1404,7 @@
     updateTestModeUI();
 
     failuresContent.addEventListener("click", handleFailureCopy);
+    llmContent.addEventListener("click", handleFailureCopy);
 
     btnDownload.addEventListener("click", () => {
       if (!lastSummary) return;
