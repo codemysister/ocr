@@ -474,6 +474,7 @@ def run_benchmark(config: BenchmarkConfig) -> Generator[str, None, None]:
             pp_ocr_tier=config.pp_ocr_tier,
             enable_preprocess=config.enable_preprocess,
             skip_passthrough=config.skip_passthrough,
+            log_source="dataset_benchmark",
         )
 
         bucket = by_folder[folder]

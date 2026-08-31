@@ -50,8 +50,8 @@ def _scale_for_detection(bgr: np.ndarray) -> tuple[np.ndarray, float]:
     if h < 8 or w < 8:
         return bgr, 1.0
     scale = 1.0
-    if min(h, w) < 360:
-        scale = 360.0 / float(min(h, w))
+    if min(h, w) < 480:
+        scale = 480.0 / float(min(h, w))
         bgr = cv2.resize(
             bgr,
             (max(1, int(w * scale)), max(1, int(h * scale))),
@@ -85,17 +85,17 @@ def _haar() -> object:
     return _haar_cascade
 
 
-def _detect_haar(work_bgr: np.ndarray) -> list[tuple[int, int, int, int]]:
+def _detect_haar(work_bgr: np.ndarray, *, permissive: bool = False) -> list[tuple[int, int, int, int]]:
     gray = cv2.cvtColor(work_bgr, cv2.COLOR_BGR2GRAY)
     wh, ww = gray.shape[:2]
-    min_px = max(16, int(min(wh, ww) * 0.03))
+    min_px = max(16, int(min(wh, ww) * (0.025 if permissive else 0.03)))
     casc = _haar()
     if casc.empty():
         return []
     found = casc.detectMultiScale(
         gray,
-        scaleFactor=1.08,
-        minNeighbors=4,
+        scaleFactor=1.05 if permissive else 1.08,
+        minNeighbors=3 if permissive else 4,
         minSize=(min_px, min_px),
         flags=cv2.CASCADE_SCALE_IMAGE,
     )
@@ -137,6 +137,8 @@ def detect_frontal_faces(bgr: np.ndarray) -> list[tuple[int, int, int, int]]:
     backend = face_detection_backend()
     if backend == "haar":
         faces = _detect_haar(work_bgr)
+        if not faces:
+            faces = _detect_haar(work_bgr, permissive=True)
     else:
         faces = _detect_yunet(work_bgr)
     return _map_faces_to_original(faces, scale=scale)

@@ -27,6 +27,12 @@ from systems.observability.last_tuning_log import (
     summarize_validation_result,
     write_last_tuning_log,
 )
+from systems.observability.llm_fallback_log import (
+    clear_llm_fallback_logs,
+    count_llm_fallback_logs,
+    log_stats,
+    read_llm_fallback_logs,
+)
 from systems.validation.document_profiles import list_supported_document_types, resolve_keywords
 
 router = APIRouter(prefix="/api/v1", tags=["api"])
@@ -431,3 +437,34 @@ def api_dataset_benchmark(body: DatasetBenchmarkBody) -> StreamingResponse:
         media_type="application/x-ndjson",
         headers={"Cache-Control": "no-store"},
     )
+
+
+@router.get("/llm-fallback-logs")
+def api_llm_fallback_logs(
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    rescued_only: bool = Query(False),
+    failed_only: bool = Query(False),
+) -> dict:
+    """Daftar log kegagalan Paddle yang memicu fallback AI vision."""
+    entries = read_llm_fallback_logs(limit=limit, offset=offset)
+    if rescued_only:
+        entries = [e for e in entries if e.get("rescued")]
+    elif failed_only:
+        entries = [e for e in entries if not e.get("final_matched")]
+    stats = log_stats()
+    return {
+        "entries": entries,
+        "stats": stats,
+        "limit": limit,
+        "offset": offset,
+        "total": stats["total"],
+        "filtered_count": len(entries),
+    }
+
+
+@router.delete("/llm-fallback-logs")
+def api_clear_llm_fallback_logs() -> dict:
+    """Hapus semua entri log fallback AI."""
+    cleared = clear_llm_fallback_logs()
+    return {"cleared": cleared, "total": count_llm_fallback_logs()}

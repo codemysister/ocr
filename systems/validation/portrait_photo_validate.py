@@ -13,13 +13,13 @@ from systems.validation.document_profiles import profile_label
 from systems.validation.face_detect import FaceDetectionUnavailable, detect_frontal_faces, face_detection_backend
 from systems.validation.fuzzy_compare import build_document_verdict
 
-# HSV biru pas foto (sedikit longgar untuk foto HP / pencahayaan ruangan).
-_BLUE_HSV_LOWER = np.array([95, 35, 35], dtype=np.uint8)
-_BLUE_HSV_UPPER = np.array([135, 255, 255], dtype=np.uint8)
-# Merah / pink / oranye dominan — gagal walau ada sedikit biru di kompresi JPEG.
-_RED_HSV_LOWER_A = np.array([0, 45, 45], dtype=np.uint8)
-_RED_HSV_UPPER_A = np.array([14, 255, 255], dtype=np.uint8)
-_RED_HSV_LOWER_B = np.array([165, 45, 45], dtype=np.uint8)
+# HSV biru pas foto — rentang lebar (cyan–navy, foto HP / flash).
+_BLUE_HSV_LOWER = np.array([82, 22, 28], dtype=np.uint8)
+_BLUE_HSV_UPPER = np.array([140, 255, 255], dtype=np.uint8)
+# Merah dominan (bukan kulit tipis di sampel biru).
+_RED_HSV_LOWER_A = np.array([0, 70, 50], dtype=np.uint8)
+_RED_HSV_UPPER_A = np.array([12, 255, 255], dtype=np.uint8)
+_RED_HSV_LOWER_B = np.array([168, 70, 50], dtype=np.uint8)
 _RED_HSV_UPPER_B = np.array([180, 255, 255], dtype=np.uint8)
 
 
@@ -34,19 +34,23 @@ def _env_float(name: str, default: float) -> float:
 
 
 def _min_blue_ratio() -> float:
-    return max(0.0, min(1.0, _env_float("FOTO_PROFILE_MIN_BLUE_RATIO", 0.40)))
+    return max(0.0, min(1.0, _env_float("FOTO_PROFILE_MIN_BLUE_RATIO", 0.32)))
 
 
 def _max_red_ratio() -> float:
-    return max(0.0, min(1.0, _env_float("FOTO_PROFILE_MAX_RED_RATIO", 0.12)))
+    return max(0.0, min(1.0, _env_float("FOTO_PROFILE_MAX_RED_RATIO", 0.22)))
+
+
+def _min_blue_card_ratio() -> float:
+    return max(0.0, min(1.0, _env_float("FOTO_PROFILE_MIN_BLUE_CARD_RATIO", 0.38)))
 
 
 def _min_blue_portrait_crop_ratio() -> float:
-    return max(0.05, min(0.5, _env_float("FOTO_PROFILE_MIN_BLUE_CROP_RATIO", 0.18)))
+    return max(0.05, min(0.5, _env_float("FOTO_PROFILE_MIN_BLUE_CROP_RATIO", 0.10)))
 
 
 def _face_min_area_ratio() -> float:
-    return max(0.01, min(0.5, _env_float("FOTO_PROFILE_FACE_MIN_AREA_RATIO", 0.03)))
+    return max(0.005, min(0.5, _env_float("FOTO_PROFILE_FACE_MIN_AREA_RATIO", 0.012)))
 
 
 def _face_max_area_ratio() -> float:
@@ -77,6 +81,20 @@ def _filter_dominant_faces(
 
 def _blue_mask(hsv: np.ndarray) -> np.ndarray:
     return cv2.inRange(hsv, _BLUE_HSV_LOWER, _BLUE_HSV_UPPER)
+
+
+def _blue_mask_bgr(bgr: np.ndarray) -> np.ndarray:
+    """Biru dominan di BGR — menangkap cyan/navy yang HSV kadang lewatkan."""
+    b, g, r = cv2.split(bgr)
+    b_i = b.astype(np.int16)
+    g_i = g.astype(np.int16)
+    r_i = r.astype(np.int16)
+    dom = (b_i >= r_i + 6) & (b_i >= g_i + 4) & (b_i >= 55)
+    return dom.astype(np.uint8) * 255
+
+
+def _combined_blue_mask(hsv: np.ndarray, bgr: np.ndarray) -> np.ndarray:
+    return cv2.bitwise_or(_blue_mask(hsv), _blue_mask_bgr(bgr))
 
 
 def _red_mask(hsv: np.ndarray) -> np.ndarray:
@@ -136,7 +154,7 @@ def _extract_blue_portrait_crop(
     height, width = bgr.shape[:2]
     img_area = float(max(1, height * width))
     hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
-    blue = _blue_mask(hsv)
+    blue = _combined_blue_mask(hsv, bgr)
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (15, 15))
     closed = cv2.morphologyEx(blue, cv2.MORPH_CLOSE, kernel)
     contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -159,7 +177,7 @@ def _extract_blue_portrait_crop(
     roi[y : y + fh, x : x + fw] = 255
     blue_density = _color_ratio(bgr, roi, blue)
     meta["blue_region_density"] = round(blue_density, 6)
-    if blue_density < 0.45:
+    if blue_density < 0.30:
         return None, meta
     pad = max(4, int(0.02 * max(fw, fh)))
     x1 = max(0, x - pad)
@@ -190,15 +208,31 @@ def _card_background_color_ratios(
     """
     height, width = bgr.shape[:2]
     hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
-    blue = _blue_mask(hsv)
+    blue = _combined_blue_mask(hsv, bgr)
     red = _red_mask(hsv)
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (9, 9))
     card_mask = cv2.morphologyEx(blue, cv2.MORPH_CLOSE, kernel)
     card_fill = float(np.count_nonzero(card_mask)) / float(max(1, card_mask.size))
 
+    if card_fill >= 0.28 and faces:
+        sample = _background_sample_excluding_faces(
+            height, width, faces, roi_mask=None, border_frac=0.08, face_expand=0.14
+        )
+        blue_ratio = _color_ratio(bgr, sample, blue)
+        red_ratio = _color_ratio(bgr, sample, red)
+        border_sample = _background_sample_excluding_faces(
+            height, width, faces, roi_mask=None, border_frac=0.12, face_expand=0.22
+        )
+        blue_border = _color_ratio(bgr, border_sample, blue)
+        red_border = _color_ratio(bgr, border_sample, red)
+        if blue_border >= 0.45:
+            blue_ratio = max(blue_ratio, blue_border)
+            red_ratio = min(red_ratio, red_border)
+        return blue_ratio, red_ratio, "full_frame_excluding_face"
+
     roi_mask: np.ndarray | None = None
     method = "border_band"
-    if card_fill >= 0.12 and faces:
+    if card_fill >= 0.10 and faces:
         contours, _ = cv2.findContours(card_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         if contours:
             largest = max(contours, key=cv2.contourArea)
@@ -210,6 +244,21 @@ def _card_background_color_ratios(
     sample = _background_sample_excluding_faces(height, width, faces, roi_mask=roi_mask)
     blue_ratio = _color_ratio(bgr, sample, blue)
     red_ratio = _color_ratio(bgr, sample, red)
+
+    border_sample = _background_sample_excluding_faces(
+        height,
+        width,
+        faces,
+        roi_mask=None,
+        border_frac=0.12,
+        face_expand=0.22,
+    )
+    blue_border = _color_ratio(bgr, border_sample, blue)
+    red_border = _color_ratio(bgr, border_sample, red)
+    if blue_border >= 0.45:
+        blue_ratio = max(blue_ratio, blue_border)
+        red_ratio = min(red_ratio, red_border)
+
     return blue_ratio, red_ratio, method
 
 
@@ -246,7 +295,7 @@ def _background_sample_mask(
 
 def _blue_ratio(bgr: np.ndarray, sample_mask: np.ndarray) -> float:
     hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
-    return _color_ratio(bgr, sample_mask, _blue_mask(hsv))
+    return _color_ratio(bgr, sample_mask, _combined_blue_mask(hsv, bgr))
 
 
 def _background_passes(
@@ -257,12 +306,24 @@ def _background_passes(
     min_blue: float,
     max_red: float,
 ) -> bool:
-    blue_min = min_blue if method == "border_band" else max(min_blue, 0.55)
+    if method == "border_band":
+        blue_min = min_blue
+    elif method == "full_frame_excluding_face":
+        blue_min = max(min_blue - 0.04, 0.28)
+    else:
+        blue_min = max(min_blue, _min_blue_card_ratio())
+
     if blue_ratio < blue_min:
         return False
-    if red_ratio > max_red:
+
+    # Biru kuat → lolos meski ada sedikit noise merah/kulit di sampel.
+    if blue_ratio >= 0.52 and red_ratio <= max(0.38, max_red + 0.12):
+        return True
+
+    # Gagal merah hanya bila dominan nyata atas biru (bukan sekadar kulit di pinggir wajah).
+    if red_ratio > max(blue_ratio * 0.62, max_red + 0.08):
         return False
-    if red_ratio >= blue_ratio * 0.35:
+    if red_ratio > max_red and blue_ratio < 0.40:
         return False
     return True
 

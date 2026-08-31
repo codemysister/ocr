@@ -27,6 +27,7 @@ HUB_PATH = Path(__file__).resolve().parent / "static" / "hub.html"
 PIPELINE_PATH = Path(__file__).resolve().parent / "static" / "pipeline.html"
 DATASET_TEST_PATH = Path(__file__).resolve().parent / "static" / "dataset_test.html"
 HEALTHCHECK_PATH = Path(__file__).resolve().parent / "static" / "healthcheck.html"
+LLM_FALLBACK_LOG_PATH = Path(__file__).resolve().parent / "static" / "llm_fallback_log.html"
 
 
 def _cors_origins() -> list[str]:
@@ -131,6 +132,16 @@ def healthcheck_page() -> FileResponse:
         raise HTTPException(404, "healthcheck.html tidak ditemukan.")
     return FileResponse(
         HEALTHCHECK_PATH,
+        headers={"Cache-Control": "no-store, max-age=0"},
+    )
+
+
+@app.get("/llm-fallback-log")
+def llm_fallback_log_page() -> FileResponse:
+    if not LLM_FALLBACK_LOG_PATH.is_file():
+        raise HTTPException(404, "llm_fallback_log.html tidak ditemukan.")
+    return FileResponse(
+        LLM_FALLBACK_LOG_PATH,
         headers={"Cache-Control": "no-store, max-age=0"},
     )
 

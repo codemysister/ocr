@@ -30,6 +30,7 @@ from systems.validation.llm_fallback import (
     merge_llm_vision_into_validation,
     validate_document_via_llm_vision,
 )
+from systems.observability.llm_fallback_log import record_pipeline_llm_fallback
 from systems.validation.portrait_photo_validate import validate_foto_profile
 
 OcrMode = Literal["mistral", "fast", "vl"]
@@ -188,6 +189,7 @@ def run_pipeline_bytes(
     full_json: bool = False,
     cv_education_query: str = "",
     cv_experience_query: str = "",
+    log_source: str = "pipeline",
 ) -> PipelineResult:
     """Jalankan pipeline lengkap; tidak raise HTTPException."""
     t_total0 = time.perf_counter()
@@ -434,6 +436,7 @@ def run_pipeline_bytes(
         )
 
     matched = bool(validation_detail.get("document_matched"))
+    paddle_detail = validation_detail
     if not matched:
         validation_detail, matched = _try_llm_vision_fallback(
             validation_detail,
@@ -442,6 +445,18 @@ def run_pipeline_bytes(
             canonical_id=canonical_id,
             name_ref=name_ref,
             expected_nik=expected_nik,
+        )
+        record_pipeline_llm_fallback(
+            paddle_detail=paddle_detail,
+            final_detail=validation_detail,
+            filename=filename,
+            document_type=doc_type,
+            document_profile_id=canonical_id,
+            expected_name=name_ref,
+            expected_nik=expected_nik,
+            ocr_mode=ocr_mode,
+            ocr_text=ocr_text,
+            source=log_source,
         )
     timing.validation_s = time.perf_counter() - t_val0
 
