@@ -1036,7 +1036,6 @@ def validate_document_ocr(
     aggregate_min_pass_ratio: float = 0.7,
     identity_min_score: float = 65.0,
     mistral_annotation: dict[str, Any] | None = None,
-    _llm_fallback_depth: int = 0,
 ) -> dict[str, Any]:
     """
     - Tipe dokumen: rata-rata skor keyword vs OCR penuh >= aggregate_min_pass_ratio.
@@ -1361,33 +1360,6 @@ def validate_document_ocr(
                 4,
             )
 
-        if (
-            not document_type_pass
-            and not exclusion_violated
-            and mistral_annotation
-            and _llm_fallback_depth > 0
-            and identity_pass is True
-            and document_type_profile_from_annotation is not None
-            and document_type_profile_from_annotation(mistral_annotation) == profile
-        ):
-            ann_nik = re.sub(r"\D", "", str(mistral_annotation.get("identity_number") or ""))
-            nik_ok = (
-                not exp_nik
-                or len(exp_nik) != 16
-                or ann_nik == exp_nik
-                or exp_nik in extract_nik16_from_ocr(ocr_text)
-            )
-            if nik_ok:
-                document_type_pass = True
-                document_type_aggregate_pass_ratio = max(
-                    document_type_aggregate_pass_ratio,
-                    ratio_req,
-                )
-                document_type_boosts["llm_document_type_anchor"] = round(
-                    max(0.0, ratio_req - keyword_aggregate_raw),
-                    4,
-                )
-
         document_matched = bool(document_type_pass and identity_pass)
     elif skip_identity:
         document_matched = bool(document_type_pass)
@@ -1449,39 +1421,6 @@ def validate_document_ocr(
         ownership_checked=bool(expected_name.strip()) and not skip_identity,
     )
 
-    llm_fallback: dict[str, Any] | None = None
-    if (
-        not document_matched
-        and _llm_fallback_depth == 0
-        and mistral_annotation is None
-    ):
-        from systems.validation.llm_fallback import is_llm_fallback_enabled, extract_document_annotation_via_llm
-
-        if is_llm_fallback_enabled():
-            ann, fb_meta = extract_document_annotation_via_llm(
-                ocr_text,
-                document_profile_id=profile,
-                expected_name=expected_name,
-                expected_nik=expected_nik,
-            )
-            llm_fallback = fb_meta
-            if ann:
-                nested = validate_document_ocr(
-                    ocr_text,
-                    document_type=document_type,
-                    document_profile_id=document_profile_id,
-                    keywords=keywords,
-                    expected_name=expected_name,
-                    expected_nik=expected_nik,
-                    aggregate_min_pass_ratio=aggregate_min_pass_ratio,
-                    identity_min_score=identity_min_score,
-                    mistral_annotation=ann,
-                    _llm_fallback_depth=1,
-                )
-                nested["llm_fallback"] = fb_meta
-                nested["llm_annotation"] = ann
-                return nested
-
     return {
         "document_type": (document_type or "").strip(),
         "document_profile_id": profile,
@@ -1511,5 +1450,4 @@ def validate_document_ocr(
         "is_own_document": verdict["is_own_document"],
         "document_type_current": verdict["document_type_current"],
         "document_type_current_label": verdict["document_type_current_label"],
-        "llm_fallback": llm_fallback,
     }

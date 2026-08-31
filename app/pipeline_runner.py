@@ -25,6 +25,11 @@ from systems.validation.document_profiles import (
     resolve_keywords,
 )
 from systems.validation.fuzzy_compare import validate_document_ocr, parse_nik16_from_filename
+from systems.validation.llm_fallback import (
+    is_llm_fallback_enabled,
+    merge_llm_vision_into_validation,
+    validate_document_via_llm_vision,
+)
 from systems.validation.portrait_photo_validate import validate_foto_profile
 
 OcrMode = Literal["mistral", "fast", "vl"]
@@ -105,6 +110,68 @@ def _ocr_timing_s(ocr_payload: dict | None, fallback: float) -> float:
         if isinstance(wall, (int, float)):
             return float(wall)
     return fallback
+
+
+def _empty_paddle_validation(
+    *,
+    canonical_id: str,
+    keywords: list[str],
+    doc_type: str,
+    reason: str,
+) -> dict[str, Any]:
+    return {
+        "document_type": doc_type,
+        "document_profile_id": canonical_id,
+        "document_type_pass": False,
+        "identity_pass": False,
+        "document_matched": False,
+        "explanation": {
+            "summary": reason,
+            "primary_blockers": ["DOCUMENT_TYPE"],
+            "detail_lines": [reason],
+        },
+        "keywords": [],
+        "keywords_from_profile": keywords,
+    }
+
+
+def _try_llm_vision_fallback(
+    validation_detail: dict[str, Any],
+    *,
+    image_bytes: bytes,
+    image_mime: str,
+    canonical_id: str,
+    name_ref: str,
+    expected_nik: str,
+) -> tuple[dict[str, Any], bool]:
+    if not is_llm_fallback_enabled():
+        return validation_detail, bool(validation_detail.get("document_matched"))
+
+    llm_result, fb_meta = validate_document_via_llm_vision(
+        image_bytes,
+        image_mime=image_mime,
+        document_profile_id=canonical_id,
+        expected_name=name_ref,
+        expected_nik=expected_nik,
+    )
+
+    if llm_result and fb_meta.get("success"):
+        merged = merge_llm_vision_into_validation(
+            validation_detail,
+            llm_result,
+            fb_meta,
+            expected_name=name_ref,
+        )
+        return merged, bool(merged.get("document_matched"))
+
+    if fb_meta.get("attempted"):
+        out = dict(validation_detail)
+        out["llm_fallback"] = fb_meta
+        if llm_result:
+            out["llm_validation"] = llm_result
+        return out, bool(validation_detail.get("document_matched"))
+
+    return validation_detail, bool(validation_detail.get("document_matched"))
 
 
 def run_pipeline_bytes(
@@ -338,14 +405,8 @@ def run_pipeline_bytes(
 
     timing.ocr_s = _ocr_timing_s(ocr_payload, time.perf_counter() - t_ocr0)
     ocr_text = _ocr_text_from_payload(ocr_payload)
-    if not ocr_text:
-        timing.total_s = time.perf_counter() - t_total0
-        return PipelineResult(
-            ok=False,
-            error="OCR tidak menghasilkan teks.",
-            error_kind="empty_ocr",
-            timing=timing,
-        )
+    image_mime = pre_meta.get("mime") if isinstance(pre_meta.get("mime"), str) else "image/png"
+    expected_nik = parse_nik16_from_filename(filename) or ""
 
     mistral_ann: dict | None = None
     if ocr_mode == "mistral":
@@ -354,17 +415,45 @@ def run_pipeline_bytes(
             mistral_ann = parse_document_annotation(ocr_payload.get("document_annotation"))
 
     t_val0 = time.perf_counter()
-    validation_detail = validate_document_ocr(
-        ocr_text,
-        document_type=doc_type,
-        document_profile_id=canonical_id,
-        keywords=keywords,
-        expected_name=name_ref,
-        expected_nik=parse_nik16_from_filename(filename) or "",
-        mistral_annotation=mistral_ann,
-    )
-    timing.validation_s = time.perf_counter() - t_val0
+    if ocr_text:
+        validation_detail = validate_document_ocr(
+            ocr_text,
+            document_type=doc_type,
+            document_profile_id=canonical_id,
+            keywords=keywords,
+            expected_name=name_ref,
+            expected_nik=expected_nik,
+            mistral_annotation=mistral_ann,
+        )
+    else:
+        validation_detail = _empty_paddle_validation(
+            canonical_id=canonical_id,
+            keywords=keywords,
+            doc_type=doc_type,
+            reason="OCR Paddle tidak menghasilkan teks — mencoba validasi AI vision.",
+        )
+
     matched = bool(validation_detail.get("document_matched"))
+    if not matched:
+        validation_detail, matched = _try_llm_vision_fallback(
+            validation_detail,
+            image_bytes=png_bytes,
+            image_mime=image_mime,
+            canonical_id=canonical_id,
+            name_ref=name_ref,
+            expected_nik=expected_nik,
+        )
+    timing.validation_s = time.perf_counter() - t_val0
+
+    if not ocr_text and not matched and not validation_detail.get("llm_fallback", {}).get("attempted"):
+        timing.total_s = time.perf_counter() - t_total0
+        return PipelineResult(
+            ok=False,
+            error="OCR tidak menghasilkan teks.",
+            error_kind="empty_ocr",
+            timing=timing,
+        )
+
     timing.total_s = time.perf_counter() - t_total0
 
     payload = {

@@ -776,7 +776,7 @@
         </div>
 
         <div class="llm-panel hidden" id="llmPanel">
-          <h2>AI fallback (LLM lokal)</h2>
+          <h2>AI fallback vision (gambar → Qwen)</h2>
           <div id="llmContent"></div>
         </div>
       </section>
@@ -820,7 +820,8 @@
         || row.pipeline_response?.validation?.llm_annotation
         || fb.annotation
         || null;
-      return { fb, ann };
+      const val = row.llm_validation || row.pipeline_response?.validation?.llm_validation || null;
+      return { fb, ann, val };
     }
 
     function llmStatusTag(fb, matched) {
@@ -832,8 +833,8 @@
 
     function renderLlmBlock(data, idx, { showCopy = true } = {}) {
       if (!data) return "";
-      const { fb, ann } = data;
-      const tag = llmStatusTag(fb);
+      const { fb, ann, val } = data;
+      const tag = llmStatusTag(fb, val?.document_matched);
       const annJson = ann ? JSON.stringify(ann, null, 2) : "";
       const err = fb.error ? `<dd style="color:var(--err)">${esc(fb.error)}</dd>` : "";
       const raw = fb.raw_content
@@ -845,24 +846,29 @@
       const copyAnnBtn = showCopy && annJson
         ? `<button type="button" class="copy-btn" data-copy="llm-ann" data-idx="${idx}">Copy JSON</button>`
         : "";
+      const modeLabel = fb.mode === "vision" ? "Vision (gambar)" : (fb.mode || "—");
       return `<div class="fail-llm">
         <div class="fail-section-head">
-          <label>AI fallback (Qwen lokal)</label>
+          <label>AI fallback — ${esc(modeLabel)}</label>
           <span class="tag ${tag.cls}">${esc(tag.text)}</span>
           ${copyAnnBtn}
         </div>
         <dl class="fail-llm-grid">
           <div><dt>Model</dt><dd>${esc(fb.model || "—")}</dd></div>
           <div><dt>Latency</dt><dd>${typeof fb.latency_s === "number" ? fb.latency_s.toFixed(2) + "s" : "—"}</dd></div>
-          <div><dt>Base URL</dt><dd style="font-size:0.72rem;">${esc(fb.base_url || "—")}</dd></div>
-          <div><dt>Sukses ekstraksi</dt><dd>${fb.success ? "Ya" : "Tidak"}</dd></div>
+          <div><dt>Mode</dt><dd>${esc(modeLabel)}</dd></div>
+          <div><dt>Sukses</dt><dd>${fb.success ? "Ya" : "Tidak"}</dd></div>
+          ${val && typeof val.confidence === "number" ? `<div><dt>Confidence</dt><dd>${val.confidence.toFixed(0)}%</dd></div>` : ""}
+          ${val ? `<div><dt>Jenis dokumen (AI)</dt><dd>${val.document_type_matches_expected ? "✓ cocok" : "✗ tidak"}</dd></div>` : ""}
+          ${val && val.identity_pass !== undefined && val.identity_pass !== null ? `<div><dt>Identitas (AI)</dt><dd>${val.identity_matches_reference ? "✓ cocok" : "✗ tidak"}</dd></div>` : ""}
           ${fb.error ? `<div class="full" style="grid-column:1/-1;"><dt>Error</dt>${err}</div>` : ""}
           ${ann ? `
-            <div><dt>Jenis dokumen</dt><dd>${esc(ann.document_type_label || "—")}</dd></div>
+            <div><dt>Label dokumen</dt><dd>${esc(ann.document_type_label || "—")}</dd></div>
             <div><dt>Nama</dt><dd>${esc(ann.holder_name || "—")}</dd></div>
             <div><dt>NIK/NPWP</dt><dd>${esc(ann.identity_number || "—")}</dd></div>
           ` : ""}
         </dl>
+        ${val?.notes ? `<p style="margin:0 0 0.65rem;font-size:0.8rem;color:var(--muted);">${esc(val.notes)}</p>` : ""}
         ${annJson ? `<div class="fail-ocr" style="padding:0;">
           <label>Annotation JSON</label>
           <pre>${esc(annJson)}</pre>

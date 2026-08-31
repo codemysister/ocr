@@ -117,6 +117,11 @@ def _llm_fallback_from_result(result: PipelineResult) -> dict[str, Any] | None:
         out["llm_annotation"] = ann
     elif isinstance(fb.get("annotation"), dict):
         out["llm_annotation"] = fb["annotation"]
+    llm_val = validation.get("llm_validation")
+    if isinstance(llm_val, dict):
+        out["llm_validation"] = llm_val
+    elif isinstance(fb.get("validation"), dict):
+        out["llm_validation"] = fb["validation"]
     return out
 
 
@@ -519,6 +524,7 @@ def run_benchmark(config: BenchmarkConfig) -> Generator[str, None, None]:
             "pipeline_response": r.get("pipeline_response"),
             "llm_fallback": r.get("llm_fallback"),
             "llm_annotation": r.get("llm_annotation"),
+            "llm_validation": r.get("llm_validation"),
             "document_matched": r.get("document_matched"),
         }
         for r in all_results
@@ -534,6 +540,7 @@ def run_benchmark(config: BenchmarkConfig) -> Generator[str, None, None]:
             "document_matched": r.get("document_matched"),
             "llm_fallback": r.get("llm_fallback"),
             "llm_annotation": r.get("llm_annotation"),
+            "llm_validation": r.get("llm_validation"),
             "ocr_text": r.get("ocr_text"),
             "pipeline_response": r.get("pipeline_response"),
         }
