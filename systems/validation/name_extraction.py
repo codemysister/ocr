@@ -24,6 +24,36 @@ _KK_MEMBER_ROW_RE = re.compile(
     r"\|\s*\d+\s*\|\s*([^|]+?)\s*\|\s*(\d{16})\s*\|",
     re.IGNORECASE,
 )
+_KK_FAMILY_NO_RE = re.compile(r"no\.?\s*(\d{16})", re.I)
+_KK_PLAIN_NAME_LINE_RE = re.compile(r"^[A-Z][A-Z\s'.-]{3,}$")
+_KK_PLAIN_NAME_SKIP = frozenset(
+    {
+        "kartu keluarga",
+        "kepala keluarga",
+        "status hubungan",
+        "nama lengkap",
+        "dikeluarkan tanggal",
+        "tanda taigan",
+        "cap jempol",
+        "daiam keluarga",
+        "no paspor",
+        "dekumen imigrasi",
+        "jenis pekerjasn",
+        "mengurus rumah tangga",
+        "pelajar mahasiswa",
+        "pelaiarmahasiswa",
+        "slta sederajat",
+        "sltp sederajat",
+        "desa kelurahan",
+        "kabupaten kota",
+        "kecamatan",
+        "provinsi",
+        "kode pos",
+        "alamat",
+        "rt rw",
+        "lembar",
+    }
+)
 
 
 _LABEL_ONE_WORD = frozenset(
@@ -150,16 +180,110 @@ def _looks_like_person_name(seg: str) -> bool:
     return len(s) >= 8
 
 
+def extract_kk_family_card_number(ocr_text: str) -> str | None:
+    """Nomor KK 16 digit (bukan NIK anggota)."""
+    m = _KK_FAMILY_NO_RE.search(ocr_text or "")
+    return m.group(1) if m else None
+
+
+def extract_kk_member_niks_ordered(ocr_text: str) -> list[str]:
+    """NIK anggota KK berurutan; nomor kartu keluarga dikecualikan."""
+    family_no = extract_kk_family_card_number(ocr_text)
+    seen: set[str] = set()
+    out: list[str] = []
+    for line in (ocr_text or "").splitlines():
+        digits = re.sub(r"\D", "", line)
+        if len(digits) != 16:
+            continue
+        if digits == family_no or digits in seen:
+            continue
+        seen.add(digits)
+        out.append(digits)
+    if out:
+        return out
+    for m in re.finditer(r"(?<!\d)(\d{16})(?!\d)", ocr_text or ""):
+        digits = m.group(1)
+        if digits == family_no or digits in seen:
+            continue
+        seen.add(digits)
+        out.append(digits)
+    return out
+
+
+def extract_kk_member_name_nik_pairs(ocr_text: str) -> list[tuple[str, str]]:
+    """Pasangan (nama, nik) dari tabel KK — markdown atau urutan kolom OCR."""
+    pairs: list[tuple[str, str]] = []
+    for m in _KK_MEMBER_ROW_RE.finditer(ocr_text or ""):
+        raw = m.group(1).strip()
+        nik = m.group(2)
+        if not raw or raw in {"-", "—"} or not _looks_like_person_name(raw):
+            continue
+        pairs.append((raw, nik))
+    if pairs:
+        return pairs
+
+    niks = extract_kk_member_niks_ordered(ocr_text)
+    names = _extract_kk_member_names_ordered_plain(ocr_text)
+    if niks and names and len(niks) == len(names):
+        return list(zip(names, niks))
+    return []
+
+
+def _extract_kk_member_names_ordered_plain(ocr_text: str) -> list[str]:
+    """Nama anggota berurutan dari OCR Paddle (tanpa pipe markdown)."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for line in (ocr_text or "").splitlines():
+        s = line.strip()
+        if not s or not _KK_PLAIN_NAME_LINE_RE.match(s):
+            continue
+        low = _normalize(s)
+        if low in _KK_PLAIN_NAME_SKIP:
+            continue
+        if any(skip in low for skip in _KK_PLAIN_NAME_SKIP):
+            continue
+        if not _looks_like_person_name(s):
+            continue
+        if low in seen:
+            continue
+        seen.add(low)
+        out.append(s)
+    return out
+
+
+def extract_kk_name_by_nik(ocr_text: str, nik: str) -> str | None:
+    """Nama anggota KK yang NIK-nya cocok (jika pasangan nama–NIK terbaca)."""
+    digits = re.sub(r"\D", "", nik or "")
+    if len(digits) != 16:
+        return None
+    for name, row_nik in extract_kk_member_name_nik_pairs(ocr_text):
+        if row_nik == digits:
+            return name
+    return None
+
+
 def extract_kk_member_names(ocr_text: str) -> list[str]:
     """Nama dari tabel anggota Kartu Keluarga (kolom nama lengkap + NIK 16 digit)."""
     seen: set[str] = set()
     out: list[str] = []
+    for name, _ in extract_kk_member_name_nik_pairs(ocr_text):
+        key = _normalize(name)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(name)
     for m in _KK_MEMBER_ROW_RE.finditer(ocr_text or ""):
         raw = m.group(1).strip()
         if not raw or raw in {"-", "—"}:
             continue
         if not _looks_like_person_name(raw):
             continue
+        key = _normalize(raw)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(raw)
+    for raw in _extract_kk_member_names_ordered_plain(ocr_text):
         key = _normalize(raw)
         if key in seen:
             continue

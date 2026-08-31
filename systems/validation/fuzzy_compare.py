@@ -20,6 +20,8 @@ from systems.validation.name_extraction import (
     extract_iuran_participant_names,
     extract_jkn_participant_names,
     extract_kk_member_names,
+    extract_kk_member_niks_ordered,
+    extract_kk_name_by_nik,
     extract_npwp_holder_names,
     extract_vaksinasi_1_names,
     iuran_modal_only_state,
@@ -1175,6 +1177,16 @@ def validate_document_ocr(
             )
             scored.append((scv, struct_cand, struct_method))
         if profile == "kk" and not ann_name:
+            exp_nik_kk = re.sub(r"\D", "", expected_nik or "")
+            if len(exp_nik_kk) == 16:
+                nik_name = extract_kk_name_by_nik(ocr_text, exp_nik_kk)
+                if nik_name:
+                    scv = float(
+                        compare_extracted_identity_scores(nik_name, expected_name)[
+                            "identity_combined_score"
+                        ]
+                    )
+                    scored.append((scv, nik_name, "kk_nik_row"))
             for name in extract_kk_member_names(ocr_text):
                 scv = float(
                     compare_extracted_identity_scores(name, expected_name)[
@@ -1311,11 +1323,14 @@ def validate_document_ocr(
         exp_nik = re.sub(r"\D", "", expected_nik or "")
         if (
             not identity_pass
-            and profile in {"npwp", "pemadanan_npwp", "ktp"}
+            and profile in {"npwp", "pemadanan_npwp", "ktp", "kk"}
             and document_type_pass
             and len(exp_nik) == 16
         ):
-            ocr_niks = extract_nik16_from_ocr(ocr_text)
+            if profile == "kk":
+                ocr_niks = extract_kk_member_niks_ordered(ocr_text)
+            else:
+                ocr_niks = extract_nik16_from_ocr(ocr_text)
             ann_nik = ""
             if mistral_annotation:
                 ann_nik = re.sub(r"\D", "", str(mistral_annotation.get("identity_number") or ""))
@@ -1326,6 +1341,9 @@ def validate_document_ocr(
                 matched_nik = exp_nik
             if matched_nik:
                 identity_pass = True
+                nik_name = (
+                    extract_kk_name_by_nik(ocr_text, exp_nik) if profile == "kk" else None
+                )
                 identity = {
                     **(identity or {}),
                     "expected_normalized": _normalize(expected_name),
@@ -1337,10 +1355,16 @@ def validate_document_ocr(
                         "cocok dengan referensi — identitas dianggap lolos."
                     ),
                 }
+                if nik_name:
+                    identity["extracted_normalized"] = _normalize(nik_name)
+                    identity["ocr_name_by_nik"] = nik_name
                 if not name_extraction.get("candidate_raw"):
-                    name_extraction["method"] = (
-                        "ktp_nik_fallback" if profile == "ktp" else "npwp_nik_fallback"
-                    )
+                    if profile == "ktp":
+                        name_extraction["method"] = "ktp_nik_fallback"
+                    elif profile == "kk":
+                        name_extraction["method"] = "kk_nik_fallback"
+                    else:
+                        name_extraction["method"] = "npwp_nik_fallback"
 
         if (
             profile == "ktp"
