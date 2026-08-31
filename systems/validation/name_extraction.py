@@ -938,6 +938,7 @@ _CV_LINE_NOISE = frozenset(
 )
 
 _CV_JUNK_CHARS_RE = re.compile(r"[★☆⭐◇◆●○◎✓✗☑☒]")
+_CV_PAGE_HEADER_RE = re.compile(r"^#+\s*(?:halaman\s*)?\d*\s*$", re.I)
 
 _CV_SECTION_HEADER_RE = re.compile(
     r"^(pendidikan|keahlian|pengalaman|organisasi|bahasa|hobi|media\s+sosial|"
@@ -950,6 +951,12 @@ _CV_JOB_NOISE_RE = re.compile(
     r"\b(fresh\s+grad\w*|lulusan\s+baru|mahasiswa|student|internship|magang|undergraduate)\b",
     re.I,
 )
+_CV_PROSE_RE = re.compile(
+    r"\b(mampu|dapat|memiliki|berpengalaman|mengoperasikan|bertanggung|berkomitmen|"
+    r"semangat|kepada|perusahaan|windows|microsoft|troubleshooting)\b",
+    re.I,
+)
+_CV_COMPANY_RE = re.compile(r"\b(pt\.?|cv\.?|ud\.?|tbk\.?|persero)\b", re.I)
 
 _CV_NAME_LABELS = frozenset({"nama", "name", "nama lengkap", "full name"})
 
@@ -969,6 +976,8 @@ def _looks_like_cv_name_line(seg: str, *, expected_name: str = "") -> bool:
         return False
     if _CV_JUNK_CHARS_RE.search(s):
         return False
+    if _CV_PAGE_HEADER_RE.match(s.strip()):
+        return False
     if not _cv_line_has_latin_name(s):
         return False
     low = _normalize(s)
@@ -979,6 +988,12 @@ def _looks_like_cv_name_line(seg: str, *, expected_name: str = "") -> bool:
     if low in {"status", "email", "telepon", "phone", "alamat", "address", "kontak", "contact"}:
         return False
     if _CV_JOB_NOISE_RE.search(s):
+        return False
+    if _CV_PROSE_RE.search(s):
+        return False
+    if _CV_COMPANY_RE.search(s):
+        return False
+    if len(s) > 55 and (s.endswith(".") or "," in s):
         return False
     if "@" in s or re.search(r"\d{5,}", s):
         return False
@@ -998,6 +1013,27 @@ def _looks_like_cv_name_line(seg: str, *, expected_name: str = "") -> bool:
     if not _looks_like_person_name(s):
         return False
     return True
+
+
+def _cv_deletterspace(line: str) -> str:
+    """Gabungkan huruf tunggal berspasi: «M U H A M M A D  Z I DA N» → «MUHAMMAD ZIDAN»."""
+    out: list[str] = []
+    buf: list[str] = []
+    for tok in (line or "").split():
+        if tok.isalpha() and len(tok) <= 2:
+            buf.append(tok)
+            continue
+        if buf:
+            out.append("".join(buf))
+            buf = []
+        out.append(tok)
+    if buf:
+        out.append("".join(buf))
+    return " ".join(out).strip()
+
+
+def _cv_normalize_spaced_text(text: str) -> str:
+    return "\n".join(_cv_deletterspace(line) for line in (text or "").splitlines())
 
 
 def extract_cv_holder_name(
@@ -1028,6 +1064,46 @@ def extract_cv_holder_name(
     exp_n = _normalize(expected_name)
     candidates: list[tuple[float, str, str]] = []
 
+    header_lines = [
+        re.sub(r"^[-•*|]+\s*", "", (line or "").strip()).strip()
+        for line in re.split(r"[\n|]+", _cv_normalize_spaced_text(ocr_text or ""))[:16]
+    ]
+    for idx, line in enumerate(header_lines):
+        merged = line
+        if idx + 1 < len(header_lines):
+            nxt = header_lines[idx + 1]
+            if (
+                _looks_like_cv_name_line(line, expected_name=expected_name)
+                and _looks_like_cv_name_line(nxt, expected_name=expected_name)
+                and len(line.split()) <= 3
+                and len(nxt.split()) <= 3
+            ):
+                combined = f"{line} {nxt}".strip()
+                if exp_n and float(fuzz.WRatio(_normalize(combined), exp_n)) >= float(
+                    fuzz.WRatio(_normalize(line), exp_n)
+                ):
+                    merged = combined
+        line = merged
+        if not line or not _looks_like_cv_name_line(line, expected_name=expected_name):
+            continue
+        score = 24.0 - min(idx, 12)
+        line_n = _normalize(line)
+        if exp_n:
+            wr = float(fuzz.WRatio(line_n, exp_n))
+            score += wr * 2.0
+            if wr >= 90.0:
+                score += 30.0
+        if line.upper() == line and re.search(r"[A-Z]{2,}", line):
+            score += 10.0
+        words = line.split()
+        if 2 <= len(words) <= 5:
+            score += 6.0
+        if len(words) == 1 and 4 <= len(line) <= 30:
+            score += 8.0
+        if not any(line == c[1] for c in candidates):
+            candidates.append((score, line, "cv_header_line"))
+
+    seen_lines = {c[1] for c in candidates}
     for line in re.split(r"[\n|]+", ocr_text or ""):
         line = re.sub(r"^[-•*|]+\s*", "", (line or "").strip()).strip()
         if not _looks_like_cv_name_line(line, expected_name=expected_name):
@@ -1046,6 +1122,9 @@ def extract_cv_holder_name(
             score += 6.0
         if len(words) == 1 and 4 <= len(line) <= 30:
             score += 5.0
+        if line in seen_lines:
+            continue
+        seen_lines.add(line)
         candidates.append((score, line, "cv_name_line"))
 
     for seg in person_like_segments(ocr_text):

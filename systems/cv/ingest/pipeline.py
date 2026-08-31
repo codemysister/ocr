@@ -193,6 +193,7 @@ def ingest_cv_bytes(
         expected_name=expected_name,
         education_query=education_query,
         experience_query=experience_query,
+        document_text=markdown,
     )
 
     return {

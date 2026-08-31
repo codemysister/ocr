@@ -229,6 +229,8 @@ def build_chunks(
         body_parts = _split_long_text(sec.content, max_chars)
         if not body_parts and sec.title:
             body_parts = [sec.title]
+        elif sec.title and body_parts and sec.title.casefold() not in body_parts[0].casefold():
+            body_parts[0] = f"{sec.title}\n{body_parts[0]}".strip()
 
         for part in body_parts:
             stripped = part.strip()
