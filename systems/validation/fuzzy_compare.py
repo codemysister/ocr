@@ -83,6 +83,75 @@ def _normalize_keyword(s: str) -> str:
     return re.sub(r"\s+", " ", s)
 
 
+# Alias OCR KTP: label panjang sering rusak, singkatan/frasa pendek masih muncul.
+_KTP_KEYWORD_ALIASES: dict[str, tuple[str, ...]] = {
+    "kewarganegaraan": ("wni", "wna", "seumur hidup", "seumurhidup"),
+    "status perkawinan": (
+        "belum kawin",
+        "belumkawin",
+        "belumka",
+        "belum ka",
+        "belum menikah",
+        "kawin",
+        "cerai",
+    ),
+    "agama": ("islam", "kristen", "katolik", "hindu", "buddha", "konghucu"),
+    "nama": ("lahir",),
+}
+
+
+def _ktp_keyword_alias_scores(keyword: str, ocr_normalized: str) -> dict[str, float]:
+    """Naikkan skor keyword bila alias KTP umum terbaca di OCR."""
+    kw = _normalize_keyword(keyword)
+    aliases = _KTP_KEYWORD_ALIASES.get(kw)
+    if not aliases:
+        return {}
+    compact = re.sub(r"\s+", "", ocr_normalized)
+    for alias in aliases:
+        alias_n = _normalize_keyword(alias)
+        alias_compact = alias_n.replace(" ", "")
+        if alias_compact and alias_compact in compact:
+            return {
+                "partial_ratio": 100.0,
+                "token_sort_ratio": 100.0,
+                "token_set_ratio": 100.0,
+                "wratio": 100.0,
+            }
+        if alias_n and re.search(rf"\b{re.escape(alias_n)}\b", ocr_normalized):
+            return {
+                "partial_ratio": 100.0,
+                "token_sort_ratio": 100.0,
+                "token_set_ratio": 100.0,
+                "wratio": 100.0,
+            }
+    return {}
+
+
+def _ktp_nik_in_ocr(ocr_n: str) -> bool:
+    return bool(re.search(r"\b\d{16}\b", ocr_n or ""))
+
+
+def _ktp_field_signal_count(ocr_n: str) -> int:
+    """Penanda sekunder KTP (bukan keyword panjang) — tahan OCR buruk."""
+    compact = re.sub(r"\s+", "", ocr_n or "")
+    signals = 0
+    if "wni" in compact or "wna" in compact:
+        signals += 1
+    if "seumurhidup" in compact or re.search(r"\bseumur\s+hidup\b", ocr_n or ""):
+        signals += 1
+    if re.search(r"\blahir\b", ocr_n or ""):
+        signals += 1
+    if re.search(r"\b(?:ke)?camatan\b", ocr_n or "") or "ecamatan" in compact:
+        signals += 1
+    if re.search(r"\b(?:kel|desa)\b", ocr_n or "") or "el/desa" in ocr_n or "keldesa" in compact:
+        signals += 1
+    if re.search(r"\b(?:rt|rw)\b", ocr_n or ""):
+        signals += 1
+    if "belumka" in compact or "belumkawin" in compact or re.search(r"\bbelum\s+kawin\b", ocr_n or ""):
+        signals += 1
+    return signals
+
+
 @dataclass(frozen=True)
 class NameFuzzyResult:
     ocr_normalized: str
@@ -283,6 +352,10 @@ def fuzzy_keyword_against_ocr(keyword: str, ocr_normalized: str) -> dict[str, An
     }
     for corpus in corpora:
         for metric, value in _fuzzy_scores_for_pair(kw, corpus).items():
+            merged[metric] = max(merged[metric], value)
+
+    for alias_scores in (_ktp_keyword_alias_scores(kw, ocr_normalized),):
+        for metric, value in alias_scores.items():
             merged[metric] = max(merged[metric], value)
 
     # Label pendek (nik, npwp): cek juga kecocokan substring pada teks padat.
@@ -636,11 +709,13 @@ def _profile_structural_boost(profile_id: str, ocr_n: str) -> float:
     compact = re.sub(r"\s+", "", ocr_n)
     if pid == "ktp":
         bonus = 0.0
-        if re.search(r"\b\d{16}\b", ocr_n):
+        if _ktp_nik_in_ocr(ocr_n):
             bonus += 0.06
         if re.search(r"\bnik\b", ocr_n) or "nik" in compact:
             bonus += 0.04
-        return min(0.10, bonus)
+        if _ktp_field_signal_count(ocr_n) >= 2:
+            bonus += 0.04
+        return min(0.12, bonus)
     if pid == "npwp":
         bonus = 0.0
         compact_np = re.sub(r"[^a-z0-9]", "", ocr_n)
@@ -961,6 +1036,7 @@ def validate_document_ocr(
     aggregate_min_pass_ratio: float = 0.7,
     identity_min_score: float = 65.0,
     mistral_annotation: dict[str, Any] | None = None,
+    _llm_fallback_depth: int = 0,
 ) -> dict[str, Any]:
     """
     - Tipe dokumen: rata-rata skor keyword vs OCR penuh >= aggregate_min_pass_ratio.
@@ -1236,26 +1312,81 @@ def validate_document_ocr(
         exp_nik = re.sub(r"\D", "", expected_nik or "")
         if (
             not identity_pass
-            and profile in {"npwp", "pemadanan_npwp"}
+            and profile in {"npwp", "pemadanan_npwp", "ktp"}
             and document_type_pass
             and len(exp_nik) == 16
         ):
             ocr_niks = extract_nik16_from_ocr(ocr_text)
+            ann_nik = ""
+            if mistral_annotation:
+                ann_nik = re.sub(r"\D", "", str(mistral_annotation.get("identity_number") or ""))
+            matched_nik = ""
             if exp_nik in ocr_niks:
+                matched_nik = exp_nik
+            elif ann_nik == exp_nik:
+                matched_nik = exp_nik
+            if matched_nik:
                 identity_pass = True
                 identity = {
                     **(identity or {}),
                     "expected_normalized": _normalize(expected_name),
                     "nik_match_fallback": True,
                     "expected_nik": exp_nik,
-                    "ocr_nik_matched": exp_nik,
+                    "ocr_nik_matched": matched_nik,
                     "note": (
                         "Nama OCR tidak cukup mirip, tetapi NIK 16 digit di dokumen "
                         "cocok dengan referensi — identitas dianggap lolos."
                     ),
                 }
                 if not name_extraction.get("candidate_raw"):
-                    name_extraction["method"] = "npwp_nik_fallback"
+                    name_extraction["method"] = (
+                        "ktp_nik_fallback" if profile == "ktp" else "npwp_nik_fallback"
+                    )
+
+        if (
+            profile == "ktp"
+            and not exclusion_violated
+            and not document_type_pass
+            and _ktp_nik_in_ocr(ocr_n)
+            and _ktp_field_signal_count(ocr_n) >= 2
+            and (identity_pass is True or _ktp_field_signal_count(ocr_n) >= 3)
+        ):
+            document_type_pass = True
+            document_type_aggregate_pass_ratio = max(
+                document_type_aggregate_pass_ratio,
+                ratio_req,
+            )
+            document_type_boosts["ktp_nik_anchor"] = round(
+                max(0.0, ratio_req - keyword_aggregate_raw),
+                4,
+            )
+
+        if (
+            not document_type_pass
+            and not exclusion_violated
+            and mistral_annotation
+            and _llm_fallback_depth > 0
+            and identity_pass is True
+            and document_type_profile_from_annotation is not None
+            and document_type_profile_from_annotation(mistral_annotation) == profile
+        ):
+            ann_nik = re.sub(r"\D", "", str(mistral_annotation.get("identity_number") or ""))
+            nik_ok = (
+                not exp_nik
+                or len(exp_nik) != 16
+                or ann_nik == exp_nik
+                or exp_nik in extract_nik16_from_ocr(ocr_text)
+            )
+            if nik_ok:
+                document_type_pass = True
+                document_type_aggregate_pass_ratio = max(
+                    document_type_aggregate_pass_ratio,
+                    ratio_req,
+                )
+                document_type_boosts["llm_document_type_anchor"] = round(
+                    max(0.0, ratio_req - keyword_aggregate_raw),
+                    4,
+                )
 
         document_matched = bool(document_type_pass and identity_pass)
     elif skip_identity:
@@ -1318,6 +1449,39 @@ def validate_document_ocr(
         ownership_checked=bool(expected_name.strip()) and not skip_identity,
     )
 
+    llm_fallback: dict[str, Any] | None = None
+    if (
+        not document_matched
+        and _llm_fallback_depth == 0
+        and mistral_annotation is None
+    ):
+        from systems.validation.llm_fallback import is_llm_fallback_enabled, extract_document_annotation_via_llm
+
+        if is_llm_fallback_enabled():
+            ann, fb_meta = extract_document_annotation_via_llm(
+                ocr_text,
+                document_profile_id=profile,
+                expected_name=expected_name,
+                expected_nik=expected_nik,
+            )
+            llm_fallback = fb_meta
+            if ann:
+                nested = validate_document_ocr(
+                    ocr_text,
+                    document_type=document_type,
+                    document_profile_id=document_profile_id,
+                    keywords=keywords,
+                    expected_name=expected_name,
+                    expected_nik=expected_nik,
+                    aggregate_min_pass_ratio=aggregate_min_pass_ratio,
+                    identity_min_score=identity_min_score,
+                    mistral_annotation=ann,
+                    _llm_fallback_depth=1,
+                )
+                nested["llm_fallback"] = fb_meta
+                nested["llm_annotation"] = ann
+                return nested
+
     return {
         "document_type": (document_type or "").strip(),
         "document_profile_id": profile,
@@ -1347,4 +1511,5 @@ def validate_document_ocr(
         "is_own_document": verdict["is_own_document"],
         "document_type_current": verdict["document_type_current"],
         "document_type_current_label": verdict["document_type_current_label"],
+        "llm_fallback": llm_fallback,
     }

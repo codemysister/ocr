@@ -39,6 +39,56 @@ _LABEL_ONE_WORD = frozenset(
     }
 )
 
+# Kata/frasa label KTP — bukan nama orang (mis. «Kewarganegaraan WNI»).
+_NON_NAME_FIELD_WORDS = frozenset(
+    {
+        "kewarganegaraan",
+        "wni",
+        "wna",
+        "perkawinan",
+        "kawin",
+        "bekerja",
+        "tidak",
+        "islam",
+        "kristen",
+        "katolik",
+        "hindu",
+        "buddha",
+        "konghucu",
+        "perempuan",
+        "laki",
+        "lakilaki",
+        "seumur",
+        "hidup",
+        "berlaku",
+        "hingga",
+        "tempat",
+        "lahir",
+        "agama",
+        "status",
+        "pekerjaan",
+        "alamat",
+        "kecamatan",
+        "kelurahan",
+        "desa",
+        "provinsi",
+        "kabupaten",
+        "belum",
+        "cerai",
+        "meninggal",
+        "dusun",
+        "gol",
+        "darah",
+    }
+)
+
+
+def _contains_field_label_word(seg: str) -> bool:
+    for w in _normalize(seg).split():
+        if w in _NON_NAME_FIELD_WORDS:
+            return True
+    return False
+
 
 def _is_probably_field_label(seg: str) -> bool:
     s = _normalize(seg)
@@ -73,6 +123,8 @@ def _looks_like_person_name(seg: str) -> bool:
     s = (seg or "").strip()
     if len(s) < 4:
         return False
+    if _contains_field_label_word(s):
+        return False
     if _is_likely_tempat_tgl_ocr_noise(s):
         return False
     if _PLACE_PREFIX.search(s):
@@ -89,6 +141,12 @@ def _looks_like_person_name(seg: str) -> bool:
     words = s.split()
     if len(words) >= 2:
         return True
+    # KTP: nama satu kata kapital (ANNISA, BUDI) sering 4–7 huruf — jangan paksa ≥8.
+    w = words[0]
+    letter_chars = sum(1 for c in w if c.isalpha())
+    if letter_chars >= 4 and letter_chars >= len(w) * 0.85:
+        if w.upper() == w and 4 <= len(w) <= 40:
+            return True
     return len(s) >= 8
 
 
@@ -984,7 +1042,14 @@ def extract_holder_name_candidate(ocr_text: str, document_profile_id: str) -> tu
                 return after, "nama_inline_colon"
         if low in {"nama", "nana", "name"} and i + 1 < len(segments):
             nxt = segments[i + 1].strip()
-            if not _is_probably_field_label(nxt) and _looks_like_person_name(nxt):
+            if not _is_probably_field_label(nxt) and (
+                _looks_like_person_name(nxt)
+                or (
+                    nxt.upper() == nxt
+                    and 4 <= len(nxt) <= 40
+                    and nxt.replace(" ", "").isalpha()
+                )
+            ):
                 return nxt, "after_nama_segment"
 
     # Blob huruf kecil: pola memakai \b agar "nama" tidak cocok di dalam kata (mis. kewarganegaraan).
