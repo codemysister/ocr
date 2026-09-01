@@ -1557,6 +1557,26 @@ Untuk `foto_profile`, `is_own_document` selalu `null` (identitas dari gambar bel
 | `PORT` | `8001` | Port HTTP |
 | `CORS_ORIGINS` | `*` | Origin diizinkan (pisah koma) |
 
+### LLM fallback (validasi AI lokal, multimodal)
+
+Dipanggil otomatis bila validasi Paddle gagal. Server OpenAI-compatible (llama.cpp / LM Studio) di `172.21.15.218:8081`.
+
+| Env | Default | Fungsi |
+|-----|---------|--------|
+| `LLM_FALLBACK_ENABLED` | `1` | `0` = matikan fallback AI |
+| `LLM_FALLBACK_BASE_URL` | `http://172.21.15.218:8081/v1` | Base URL API (tanpa trailing slash) |
+| `LLM_FALLBACK_MODEL` | `/models/Ornith-1.5-9B-AD-Q5_K-Q4_K.gguf` | ID model — samakan dengan `GET /v1/models` |
+| `LLM_FALLBACK_TIMEOUT_S` | `90` | Timeout request (detik) |
+| `LLM_FALLBACK_MIN_CONFIDENCE` | `60` | Ambang confidence (0–100) |
+
+**Cek koneksi dari mesin yang menjalankan OCR:**
+
+```bash
+curl -s http://172.21.15.218:8081/v1/models | jq '.data[].id'
+```
+
+`Connection refused` biasanya karena: (1) `.env` server masih port lama `8080`, (2) LLM server hanya listen `127.0.0.1` — ubah ke `0.0.0.0:8081`, atau (3) firewall memblokir dari host OCR ke `172.21.15.218`.
+
 ### PP-OCRv6 (default pipeline)
 
 | Env | Default | Fungsi |

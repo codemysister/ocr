@@ -20,6 +20,7 @@ from systems.ocr.mistral_annotation import (
 logger = logging.getLogger(__name__)
 
 _DEFAULT_BASE_URL = "http://172.21.15.218:8081/v1"
+_DEFAULT_MODEL = "/models/Ornith-1.5-9B-AD-Q5_K-Q4_K.gguf"
 
 _SYSTEM_PROMPT = """You validate Indonesian identity document images (KTP, NPWP, KK, BPJS, etc.).
 Read the document visually from the image and return ONLY a JSON object with keys:
@@ -52,7 +53,7 @@ def _base_url() -> str:
 
 
 def _model() -> str:
-    return (os.environ.get("LLM_FALLBACK_MODEL") or "qwen").strip()
+    return (os.environ.get("LLM_FALLBACK_MODEL") or _DEFAULT_MODEL).strip()
 
 
 def _timeout_s() -> float:
