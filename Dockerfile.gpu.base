@@ -24,17 +24,20 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt requirements-mistral.txt requirements-cv.txt ./
-# Jangan pasang paddlepaddle CPU dulu — sisa libpaddle.so membuat import GPU gagal.
+# Urutan penting: OCR+Paddle dulu, CV deps terakhir (torch/docling bisa mengganggu paddleocr).
 RUN grep -vE '^paddlepaddle' requirements.txt > /tmp/requirements-no-paddle.txt \
     && pip install --upgrade pip setuptools wheel \
-    && pip install -r /tmp/requirements-no-paddle.txt -r requirements-mistral.txt -r requirements-cv.txt \
+    && pip install -r /tmp/requirements-no-paddle.txt -r requirements-mistral.txt \
     && python -m pip install "paddlepaddle-gpu==${PADDLE_VERSION}" \
-         -i "https://www.paddlepaddle.org.cn/packages/stable/${PADDLE_GPU_INDEX}/"
+         -i "https://www.paddlepaddle.org.cn/packages/stable/${PADDLE_GPU_INDEX}/" \
+    && pip install -r requirements-cv.txt \
+    && pip install 'paddleocr[doc-parser]>=3.6.0'
 
 COPY dataset ./dataset
 COPY scripts/verify_ocr_deps.py ./scripts/verify_ocr_deps.py
 
-ENV OCR_VERIFY_ALLOW_NO_CUDA=1
+ENV OCR_VERIFY_ALLOW_NO_CUDA=1 \
+    OCR_VERIFY_CV=1
 RUN python scripts/verify_ocr_deps.py
 
 ENV HOST=0.0.0.0 \

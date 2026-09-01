@@ -27,6 +27,13 @@ def main() -> int:
         except ImportError:
             missing.append(mod)
 
+    if _env_flag("OCR_VERIFY_CV"):
+        for mod, label in (("opensearchpy", "opensearch-py"),):
+            try:
+                __import__(mod)
+            except ImportError:
+                missing.append(label)
+
     if missing:
         print("Tidak terpasang:", ", ".join(missing))
         print("Jalankan: pip install -r requirements.txt")
