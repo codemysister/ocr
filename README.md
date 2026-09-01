@@ -62,7 +62,7 @@ Set `OCR_IMAGE=akunanda/ocr:latest` di `.env` jika ingin pull, bukan build.
 | Lingkungan | Base URL |
 |------------|----------|
 | **Produksi** | `https://checkinpro-ocr.web.id` |
-| Lokal (dev) | `http://127.0.0.1:8081` (env `PORT`) |
+| Lokal (dev) | `http://127.0.0.1:8001` (env `PORT`) |
 
 Dokumentasi interaktif (Swagger): [https://checkinpro-ocr.web.id/docs](https://checkinpro-ocr.web.id/docs)
 
@@ -1554,7 +1554,7 @@ Untuk `foto_profile`, `is_own_document` selalu `null` (identitas dari gambar bel
 
 | Env | Default | Fungsi |
 |-----|---------|--------|
-| `PORT` | `8081` | Port HTTP |
+| `PORT` | `8001` | Port HTTP |
 | `CORS_ORIGINS` | `*` | Origin diizinkan (pisah koma) |
 
 ### PP-OCRv6 (default pipeline)

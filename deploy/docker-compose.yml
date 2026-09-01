@@ -17,18 +17,18 @@ services:
     container_name: checkinpro-ocr
     gpus: all
     ports:
-      - "${PORT:-8081}:8081"
+      - "${PORT:-8001}:8001"
     env_file:
       - path: .env
         required: false
     environment:
       HOST: 0.0.0.0
-      PORT: "8081"
+      PORT: "8001"
       CORS_ORIGINS: ${CORS_ORIGINS:-*}
       OCR_DEVICE: ${OCR_DEVICE:-gpu}
       OCR_FAST_LANG: ${OCR_FAST_LANG:-latin}
       LLM_FALLBACK_ENABLED: ${LLM_FALLBACK_ENABLED:-1}
-      LLM_FALLBACK_BASE_URL: ${LLM_FALLBACK_BASE_URL:-http://172.21.15.218:8080/v1}
+      LLM_FALLBACK_BASE_URL: ${LLM_FALLBACK_BASE_URL:-http://172.21.15.218:8081/v1}
       LLM_FALLBACK_MODEL: ${LLM_FALLBACK_MODEL:-qwen}
       DATASET_ROOT: /app/dataset
     volumes:

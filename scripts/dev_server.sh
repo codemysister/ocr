@@ -11,7 +11,7 @@
 #   -h, --help       Bantuan singkat.
 #
 # Lingkungan:
-#   PORT=8081              Port HTTP.
+#   PORT=8001              Port HTTP.
 #   HOST=0.0.0.0           Bind host.
 #   CORS_ORIGINS=*         Origin CORS (dev). Production: https://app.web.app,https://app.firebaseapp.com
 #   PYTHON=python3.12      Untuk membuat .venv jika belum ada.
@@ -42,7 +42,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-PORT="${PORT:-8081}"
+PORT="${PORT:-8001}"
 HOST="${HOST:-0.0.0.0}"
 NO_INSTALL=0
 INSTALL_ONLY=0

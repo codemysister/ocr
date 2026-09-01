@@ -92,9 +92,9 @@ echo
 if [[ "$VARIANT" == "gpu" ]]; then
   echo "Server (NVIDIA):"
   echo "  docker pull ${APP_IMAGE}"
-  echo "  docker run -d --name checkinpro-ocr --gpus all -p 8081:8081 --restart unless-stopped ${APP_IMAGE}"
+  echo "  docker run -d --name checkinpro-ocr --gpus all -p 8001:8001 --restart unless-stopped ${APP_IMAGE}"
 else
   echo "Server (CPU):"
   echo "  docker pull ${APP_IMAGE}"
-  echo "  docker run -d --name checkinpro-ocr -p 8081:8081 --restart unless-stopped ${APP_IMAGE}"
+  echo "  docker run -d --name checkinpro-ocr -p 8001:8001 --restart unless-stopped ${APP_IMAGE}"
 fi

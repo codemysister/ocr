@@ -19,7 +19,7 @@ from systems.ocr.mistral_annotation import (
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_BASE_URL = "http://172.21.15.218:8080/v1"
+_DEFAULT_BASE_URL = "http://172.21.15.218:8081/v1"
 
 _SYSTEM_PROMPT = """You validate Indonesian identity document images (KTP, NPWP, KK, BPJS, etc.).
 Read the document visually from the image and return ONLY a JSON object with keys:
