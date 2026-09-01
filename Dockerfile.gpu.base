@@ -23,11 +23,11 @@ RUN apt-get update \
         libgl1 \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt requirements-mistral.txt ./
+COPY requirements.txt requirements-mistral.txt requirements-cv.txt ./
 # Jangan pasang paddlepaddle CPU dulu — sisa libpaddle.so membuat import GPU gagal.
 RUN grep -vE '^paddlepaddle' requirements.txt > /tmp/requirements-no-paddle.txt \
     && pip install --upgrade pip setuptools wheel \
-    && pip install -r /tmp/requirements-no-paddle.txt -r requirements-mistral.txt \
+    && pip install -r /tmp/requirements-no-paddle.txt -r requirements-mistral.txt -r requirements-cv.txt \
     && python -m pip install "paddlepaddle-gpu==${PADDLE_VERSION}" \
          -i "https://www.paddlepaddle.org.cn/packages/stable/${PADDLE_GPU_INDEX}/"
 

@@ -6,8 +6,8 @@ API preprocessing + OCR (PP-OCRv6) + validasi dokumen. **Cara utama: build di se
 
 ```bash
 git clone <repo> && cd ocr
-# pertama kali (Paddle + dataset, sekali):
-bash scripts/server_build.sh
+# pertama kali (Paddle + dataset + CV deps, sekali):
+REBUILD_BASE=1 bash scripts/server_build.sh
 docker compose -f deploy/docker-compose.yml up -d
 ```
 
@@ -48,10 +48,10 @@ Set `OCR_IMAGE=akunanda/ocr:latest` di `.env` jika ingin pull, bukan build.
 
 - Tag `:latest` = **CPU**. Tag `:gpu` = **Paddle CUDA** (tidak perlu pip ulang di server).
 - Dua tag: `:gpu-base` (Paddle + dataset, jarang) dan `:gpu` (kode, harian). Server cukup `docker pull …:gpu`; layer base tidak diunduh ulang.
-- `REBUILD_BASE=1` hanya jika `requirements.txt`, wheel Paddle, atau `dataset/` berubah.
+- `REBUILD_BASE=1` jika `requirements.txt`, `requirements-cv.txt`, wheel Paddle, atau `dataset/` berubah.
 - Benchmark `/dataset-test` memakai `dataset/` di dalam image. Jangan mount volume kosong ke `/app/dataset`.
 - Key opsional (Mistral, dll.): file `.env` di samping compose.
-- CV search butuh OpenSearch: `docker compose -f docker-compose.cv.yml up -d` (dari repo).
+- **CV upload:** subsistem CV (`requirements-cv.txt`) sudah termasuk di image base. `deploy/docker-compose.yml` juga menjalankan OpenSearch. Cek: `GET /health` → `cv_search: true`.
 
 ---
 

@@ -18,9 +18,9 @@ RUN apt-get update \
         libgl1 \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt requirements-mistral.txt ./
+COPY requirements.txt requirements-mistral.txt requirements-cv.txt ./
 RUN pip install --upgrade pip setuptools wheel \
-    && pip install -r requirements.txt -r requirements-mistral.txt
+    && pip install -r requirements.txt -r requirements-mistral.txt -r requirements-cv.txt
 
 COPY dataset ./dataset
 COPY scripts/verify_ocr_deps.py ./scripts/verify_ocr_deps.py

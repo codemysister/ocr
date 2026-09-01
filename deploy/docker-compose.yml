@@ -4,8 +4,35 @@
 #   docker compose -f deploy/docker-compose.yml up -d
 #
 # Update kode: git pull && bash scripts/server_build.sh && docker compose -f deploy/docker-compose.yml up -d
+#
+# Pertama kali / setelah ubah requirements-cv.txt:
+#   REBUILD_BASE=1 bash scripts/server_build.sh
 
 services:
+  opensearch:
+    image: opensearchproject/opensearch:2.13.0
+    container_name: ocr-cv-opensearch
+    environment:
+      - discovery.type=single-node
+      - DISABLE_SECURITY_PLUGIN=true
+      - DISABLE_INSTALL_DEMO_CONFIG=true
+      - OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m
+      - bootstrap.memory_lock=false
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    ports:
+      - "9200:9200"
+    volumes:
+      - opensearch-data:/usr/share/opensearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
   ocr:
     image: ${OCR_IMAGE:-ocr:gpu}
     pull_policy: never
@@ -16,6 +43,8 @@ services:
         BASE_IMAGE: ${OCR_BASE_IMAGE:-ocr:gpu-base}
     container_name: checkinpro-ocr
     gpus: all
+    depends_on:
+      - opensearch
     ports:
       - "${PORT:-8001}:8001"
     env_file:
@@ -30,6 +59,7 @@ services:
       LLM_FALLBACK_ENABLED: ${LLM_FALLBACK_ENABLED:-1}
       LLM_FALLBACK_BASE_URL: ${LLM_FALLBACK_BASE_URL:-http://172.21.15.218:8081/v1}
       LLM_FALLBACK_MODEL: ${LLM_FALLBACK_MODEL:-/models/Ornith-1.5-9B-AD-Q5_K-Q4_K.gguf}
+      OPENSEARCH_URL: ${OPENSEARCH_URL:-http://opensearch:9200}
       DATASET_ROOT: /app/dataset
     volumes:
       - paddle-models:/root/.paddlex
@@ -39,3 +69,4 @@ services:
 volumes:
   paddle-models:
   ocr-logs:
+  opensearch-data:
