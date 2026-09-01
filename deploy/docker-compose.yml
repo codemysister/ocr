@@ -17,13 +17,13 @@ services:
     container_name: checkinpro-ocr
     gpus: all
     ports:
-      - "${PORT:-8001}:8001"
+      - "${PORT:-8081}:8081"
     env_file:
       - path: .env
         required: false
     environment:
       HOST: 0.0.0.0
-      PORT: "8001"
+      PORT: "8081"
       CORS_ORIGINS: ${CORS_ORIGINS:-*}
       OCR_DEVICE: ${OCR_DEVICE:-gpu}
       OCR_FAST_LANG: ${OCR_FAST_LANG:-latin}

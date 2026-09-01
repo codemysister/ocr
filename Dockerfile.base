@@ -28,7 +28,7 @@ COPY scripts/verify_ocr_deps.py ./scripts/verify_ocr_deps.py
 RUN python scripts/verify_ocr_deps.py
 
 ENV HOST=0.0.0.0 \
-    PORT=8001 \
+    PORT=8081 \
     OCR_DEVICE=gpu \
     OCR_FAST_LANG=latin \
     DATASET_ROOT=/app/dataset \
@@ -39,7 +39,7 @@ ENV HOST=0.0.0.0 \
     PREPROCESS_CARD_WARP=1 \
     PREPROCESS_MIN_SIDE_TARGET=900
 
-EXPOSE 8001
+EXPOSE 8081
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
     CMD curl -sf "http://127.0.0.1:${PORT}/systems/ocr/health" | grep -q '"paddlepaddle_importable": true' || exit 1
