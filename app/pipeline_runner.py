@@ -189,6 +189,7 @@ def run_pipeline_bytes(
     full_json: bool = False,
     cv_education_query: str = "",
     cv_experience_query: str = "",
+    expected_bank: str = "",
     log_source: str = "pipeline",
 ) -> PipelineResult:
     """Jalankan pipeline lengkap; tidak raise HTTPException."""
@@ -425,6 +426,7 @@ def run_pipeline_bytes(
             keywords=keywords,
             expected_name=name_ref,
             expected_nik=expected_nik,
+            expected_bank=expected_bank,
             mistral_annotation=mistral_ann,
         )
     else:

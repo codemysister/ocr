@@ -459,7 +459,7 @@ flowchart TD
 | KTP | `ktp`, `KTP`, `identitas` | Opsional (disarankan untuk cek milik) | ✅ | Keyword KTP ≥70% **dan** (nama kosong **atau** identitas ≥65) |
 | NPWP | `npwp`, `NPWP` | Opsional | ✅ | Keyword NPWP ≥70% **dan** identitas (jika dicek) |
 | KK | `kk`, `kartu keluarga` | Opsional | ✅ | Keyword KK ≥70%; nama bisa dari baris tabel anggota |
-| Rekening | `rekening`, `rekening tabungan` | Opsional | ✅ | Ada `tabungan`, **tidak** ada `e-statement` |
+| Rekening | `rekening`, `rekening tabungan` | Opsional | ✅ | Ada `tabungan`, **tidak** ada `e-statement`; opsional `expected_bank` (`mandiri` \| `mas`) |
 | Mutasi | `mutasi`, `e-statement` | Tidak dipakai | ✅ | Ada `tabungan` **dan** `e-statement` (tanpa cek nama) |
 | SKCK | `skck` | Opsional | ✅ | Ada `skck` / `kepolisian` |
 | BPJS KIS | `bpjs`, `bpjs kesehatan`, `kartu indonesia sehat` | **Disarankan wajib** | ✅ | Keyword KIS ≥70% **dan** identitas (jika nama diisi) |
@@ -558,13 +558,24 @@ curl -X POST "https://checkinpro-ocr.web.id/api/v1/pipeline" \
 
 **Keyword terlarang (gagal jika terdeteksi):** `e-statement`
 
+**Validasi bank (opsional):** kirim `expected_bank=mandiri` atau `expected_bank=mas` — sistem memeriksa teks/logo/nomor rekening di OCR.
+
+| Bank | Sinyal OCR umum | Pola no. rekening |
+|------|-----------------|-------------------|
+| **Mandiri** | `livin`, `bank mandiri`, `detail rekening` | **13 digit** (awalan `156`, `173`, `166`, …) |
+| **MAS** | `bank mas`, `mas saving`, `bebaspoin` | **10 digit** (umumnya awalan `100`) |
+
 > Rekening tabungan biasa ≠ mutasi/e-statement. Jika OCR mengandung `e-statement`, profil `rekening` **ditolak**.
 
 ```bash
 curl -X POST "https://checkinpro-ocr.web.id/api/v1/pipeline" \
-  -F "file=@Rekening.jpg" \
-  -F "document_type=rekening"
+  -F "file=@Rekening_Mandiri.jpg" \
+  -F "document_type=rekening" \
+  -F "expected_bank=mandiri" \
+  -F "expected_name=Reva Wulan Rahmawati"
 ```
+
+Respons validasi menyertakan `bank_detection` dan `bank_pass` (bila `expected_bank` diisi).
 
 ---
 

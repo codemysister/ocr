@@ -1187,6 +1187,21 @@ def extract_holder_name_candidate(ocr_text: str, document_profile_id: str) -> tu
         if ks_name:
             return ks_name, "bpjs_kesanggupan_name"
 
+    if profile == "rekening":
+        m = re.search(
+            r"(?i)halo,?\s+([A-Z][A-Z\s'.-]{3,80})",
+            ocr_text,
+        )
+        if m:
+            cand = re.sub(r"\s+", " ", m.group(1)).strip(" .,-")
+            if _looks_like_person_name(cand) or (
+                cand.upper() == cand and len(cand.split()) >= 2
+            ):
+                return cand, "rekening_halo_greeting"
+        for seg in person_like_segments(ocr_text):
+            if seg.upper() == seg and len(seg.split()) >= 2 and _looks_like_person_name(seg):
+                return seg, "rekening_caps_name"
+
     if profile == "bpjs":
         segments = _split_segments(ocr_text)
         for i, seg in enumerate(segments):

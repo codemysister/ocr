@@ -8,6 +8,7 @@ from typing import Any
 
 from rapidfuzz import fuzz
 
+from systems.validation.bank_rekening import validate_rekening_bank
 from systems.validation.document_profiles import (
     CANONICAL_KEYWORDS,
     any_keyword_groups_for_profile,
@@ -1035,6 +1036,7 @@ def validate_document_ocr(
     keywords: list[str] | None = None,
     expected_name: str = "",
     expected_nik: str = "",
+    expected_bank: str = "",
     aggregate_min_pass_ratio: float = 0.7,
     identity_min_score: float = 65.0,
     mistral_annotation: dict[str, Any] | None = None,
@@ -1391,6 +1393,17 @@ def validate_document_ocr(
         name_extraction["method"] = "skipped_no_expected_name"
         document_matched = bool(document_type_pass)
 
+    bank_detection: dict[str, Any] | None = None
+    bank_pass: bool | None = None
+    if profile == "rekening":
+        bank_detection = validate_rekening_bank(ocr_text, expected_bank=expected_bank)
+        bank_pass = bank_detection.get("bank_pass")
+        if bank_detection.get("expected_bank"):
+            if bank_pass is False:
+                document_matched = False
+            elif bank_pass is True and document_matched is False:
+                pass  # jangan override gagal jenis/identitas
+
     explanation = _validation_explanation(
         document_matched=document_matched,
         document_type_pass=document_type_pass,
@@ -1425,6 +1438,32 @@ def validate_document_ocr(
         explanation["primary_blockers"] = blockers
         if explanation.get("gates", {}).get("document_type"):
             explanation["gates"]["document_type"]["pass"] = False
+
+    if profile == "rekening" and bank_detection and bank_detection.get("expected_bank"):
+        exp_lbl = bank_detection.get("expected_bank_label") or bank_detection.get("expected_bank")
+        det_lbl = bank_detection.get("detected_bank_label")
+        if bank_pass is True:
+            bank_line = f"Bank: cocok dengan {exp_lbl}"
+            if det_lbl and det_lbl != exp_lbl:
+                bank_line = f"Bank: cocok dengan {exp_lbl} (terdeteksi: {det_lbl})"
+        else:
+            bank_line = f"Bank: tidak cocok — diharapkan {exp_lbl}"
+            if det_lbl:
+                bank_line += f", terdeteksi {det_lbl}"
+            else:
+                bank_line += " (bank tidak teridentifikasi di OCR)"
+        explanation["detail_lines"] = [bank_line, *list(explanation.get("detail_lines") or [])]
+        if bank_pass is False:
+            explanation["summary"] = (
+                f"Dokumen rekening tidak cocok: bank bukan {exp_lbl}."
+            )
+            blockers = list(explanation.get("primary_blockers") or [])
+            if "BANK" not in blockers:
+                blockers.insert(0, "BANK")
+            explanation["primary_blockers"] = blockers
+            gates = dict(explanation.get("gates") or {})
+            gates["bank"] = {"pass": False}
+            explanation["gates"] = gates
 
     detection = detect_document_type_from_ocr(
         ocr_text,
@@ -1474,4 +1513,6 @@ def validate_document_ocr(
         "is_own_document": verdict["is_own_document"],
         "document_type_current": verdict["document_type_current"],
         "document_type_current_label": verdict["document_type_current_label"],
+        "bank_detection": bank_detection,
+        "bank_pass": bank_pass,
     }

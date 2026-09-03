@@ -262,6 +262,13 @@
       <label class="block" for="expected" id="expectedLabel">Nama referensi (opsional)</label>
       <textarea id="expected" placeholder="Kosongkan bila hanya mengecek keyword profil dokumen."></textarea>
 
+      <label class="block" for="expectedBank" id="expectedBankLabel" style="display: none; margin-top: 0.75rem;">Bank (rekening)</label>
+      <select id="expectedBank" style="display: none; margin-top: 0.35rem;">
+        <option value="">— opsional —</option>
+        <option value="mandiri">Bank Mandiri</option>
+        <option value="mas">Bank MAS</option>
+      </select>
+
       <div id="ocrSection">
       <label class="block">Engine OCR</label>
       <div class="mode-row" role="radiogroup" aria-label="Engine OCR">
@@ -325,6 +332,8 @@
     const fileInput = document.getElementById("file");
     const docInput = document.getElementById("doc");
     const expectedInputEl = document.getElementById("expected");
+    const expectedBankEl = document.getElementById("expectedBank");
+    const expectedBankLabel = document.getElementById("expectedBankLabel");
     const runBtn = document.getElementById("run");
     const statusEl = document.getElementById("status");
     const previewPre = document.getElementById("previewPreprocessed");
@@ -357,14 +366,21 @@
       return (docType || "").trim() === "cv";
     }
 
+    function isRekeningProfile(docType) {
+      return (docType || "").trim() === "rekening";
+    }
+
     function syncUiForDocType() {
       const foto = isFotoProfile(docInput.value);
       const cv = isCvProfile(docInput.value);
+      const rekening = isRekeningProfile(docInput.value);
       const special = foto || cv;
       ocrSection.classList.toggle("hidden-for-foto", special);
       panelOcr.classList.toggle("hidden-for-foto", special);
       expectedLabel.classList.toggle("hidden-for-foto", foto);
       expectedInputEl.classList.toggle("hidden-for-foto", foto);
+      expectedBankLabel.style.display = rekening ? "" : "none";
+      expectedBankEl.style.display = rekening ? "" : "none";
       stPrep.style.display = special ? "none" : "";
       stOcr.style.display = special ? "none" : "";
       stVal.style.display = special ? "none" : "";
@@ -380,6 +396,15 @@
           "cv: ingest + match nama / pendidikan / pengalaman (keyword wajib: pendidikan, experience).";
         previewTitle.textContent = "File CV";
         jsonTitle.textContent = "Hasil ingest & match";
+      } else if (rekening) {
+        fileLabel.textContent = "Gambar / screenshot rekening";
+        fileInputEl.accept = "image/*";
+        expectedLabel.textContent = "Nama pemilik rekening (opsional)";
+        expectedInputEl.placeholder = "Contoh: Reva Wulan Rahmawati — dicek vs teks aplikasi bank.";
+        pipelineHint.textContent =
+          "rekening: OCR + keyword tabungan; pilih bank Mandiri/MAS untuk validasi bank.";
+        previewTitle.textContent = "Gambar rekening";
+        jsonTitle.textContent = "JSON validasi (mentah)";
       } else if (foto) {
         fileLabel.textContent = "Gambar dokumen";
         fileInputEl.accept = "image/*";
@@ -633,13 +658,19 @@
           ")";
       }
       const shortLine = "keyword ~" + kw + "% · " + dt + " · " + idLine;
+      let bankLine = "";
+      if (valData.bank_pass === true) {
+        bankLine = " · bank ✓";
+      } else if (valData.bank_pass === false) {
+        bankLine = " · bank ✗";
+      }
 
       let html = "";
       html +=
         '<p class="ex-sum">' +
         esc(ok ? "Dokumen cocok" : "Dokumen tidak cocok") +
         " — " +
-        esc(shortLine) +
+        esc(shortLine + bankLine) +
         "</p>";
 
       const ex = valData.explanation;
@@ -866,6 +897,10 @@
           }
         }
         const valBody = { ocr_text, document_type, expected_name };
+        const expected_bank = (expectedBankEl.value || "").trim();
+        if (expected_bank) {
+          valBody.expected_bank = expected_bank;
+        }
         if (mistral_annotation && typeof mistral_annotation === "object") {
           valBody.mistral_annotation = mistral_annotation;
         }

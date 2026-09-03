@@ -33,6 +33,7 @@ from systems.observability.llm_fallback_log import (
     log_stats,
     read_llm_fallback_logs,
 )
+from systems.validation.bank_rekening import list_supported_banks, normalize_expected_bank
 from systems.validation.document_profiles import list_supported_document_types, resolve_keywords
 
 router = APIRouter(prefix="/api/v1", tags=["api"])
@@ -240,6 +241,10 @@ async def api_pipeline(
         "",
         description="Hanya document_type=cv: kata kunci tambahan section pengalaman",
     ),
+    expected_bank: str = Form(
+        "",
+        description="Hanya document_type=rekening: bank yang diharapkan (mandiri | mas)",
+    ),
 ) -> JSONResponse:
     """
     Pipeline lengkap: OCR (pilihan model) → validasi dokumen. Preprocess opsional (`enable_preprocess=true`).
@@ -280,6 +285,17 @@ async def api_pipeline(
         log_safe_failure(subsystem="pipeline", method="POST", path=path, http_status=400, detail=detail)
         raise HTTPException(status_code=400, detail=detail)
 
+    canonical_id, _keywords = resolved
+    if expected_bank.strip() and canonical_id == "rekening":
+        if not normalize_expected_bank(expected_bank):
+            detail = {
+                "message": "expected_bank tidak dikenal.",
+                "expected_bank": expected_bank.strip(),
+                "supported": list_supported_banks(),
+            }
+            log_safe_failure(subsystem="pipeline", method="POST", path=path, http_status=400, detail=detail)
+            raise HTTPException(status_code=400, detail=detail)
+
     result = run_pipeline_bytes(
         raw,
         document_type=doc_type,
@@ -293,6 +309,7 @@ async def api_pipeline(
         full_json=full_json,
         cv_education_query=cv_education_query.strip(),
         cv_experience_query=cv_experience_query.strip(),
+        expected_bank=expected_bank.strip(),
     )
 
     if not result.ok:
@@ -325,6 +342,7 @@ async def api_pipeline(
                 "expected_name": (name_ref or cv_search_query).strip() or None,
                 "cv_education_query": cv_education_query or None,
                 "cv_experience_query": cv_experience_query or None,
+                "expected_bank": expected_bank.strip() or None,
             },
             "request": {
                 "document_type": doc_type,

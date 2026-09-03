@@ -10,6 +10,7 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field, field_validator
 
+from systems.validation.bank_rekening import list_supported_banks, normalize_expected_bank
 from systems.validation.document_profiles import (
     is_image_only_profile,
     list_supported_document_types,
@@ -76,6 +77,10 @@ class ValidateDocumentBody(BaseModel):
             "Structured extraction dari Mistral document_annotation (opsional). "
             "Jika ada holder_name valid, diprioritaskan untuk cek identitas."
         ),
+    )
+    expected_bank: str = Field(
+        "",
+        description="Hanya profil rekening: mandiri | mas (opsional, untuk validasi bank)",
     )
 
     @field_validator("document_type")
@@ -196,12 +201,25 @@ def api_validate_document(body: ValidateDocumentBody) -> JSONResponse:
         )
 
     canonical_id, keywords = resolved
+    if body.expected_bank.strip() and canonical_id == "rekening":
+        if not normalize_expected_bank(body.expected_bank):
+            detail = {
+                "message": "expected_bank tidak dikenal.",
+                "expected_bank": body.expected_bank.strip(),
+                "supported": list_supported_banks(),
+            }
+            log_safe_failure(
+                subsystem=sub, method="POST", path=path, http_status=400, detail=detail
+            )
+            raise HTTPException(status_code=400, detail=detail)
+
     detail = validate_document_ocr(
         body.ocr_text,
         document_type=body.document_type.strip(),
         document_profile_id=canonical_id,
         keywords=keywords,
         expected_name=body.expected_name,
+        expected_bank=body.expected_bank,
         aggregate_min_pass_ratio=body.aggregate_min_pass_ratio,
         identity_min_score=body.identity_min_score,
         mistral_annotation=body.mistral_annotation,
