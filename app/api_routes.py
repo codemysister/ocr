@@ -378,6 +378,7 @@ class DatasetBenchmarkBody(BaseModel):
     ocr_mode: OcrMode = "fast"
     pp_ocr_tier: PpOcrTier = "medium"
     use_expected_name: bool = True
+    use_expected_bank: bool = True
     enable_preprocess: bool = False
     skip_passthrough: bool = False
 
@@ -443,6 +444,7 @@ def api_dataset_benchmark(body: DatasetBenchmarkBody) -> StreamingResponse:
         ocr_mode=body.ocr_mode,
         pp_ocr_tier=body.pp_ocr_tier,
         use_expected_name=body.use_expected_name,
+        use_expected_bank=body.use_expected_bank,
         enable_preprocess=body.enable_preprocess,
         skip_passthrough=body.skip_passthrough,
     )

@@ -80,7 +80,8 @@
     }
     input[type="text"],
     textarea,
-    select#doc {
+    select#doc,
+    select#expectedBank {
       width: 100%;
       font-family: inherit;
       font-size: 0.9rem;
@@ -262,12 +263,15 @@
       <label class="block" for="expected" id="expectedLabel">Nama referensi (opsional)</label>
       <textarea id="expected" placeholder="Kosongkan bila hanya mengecek keyword profil dokumen."></textarea>
 
-      <label class="block" for="expectedBank" id="expectedBankLabel" style="display: none; margin-top: 0.75rem;">Bank (rekening)</label>
-      <select id="expectedBank" style="display: none; margin-top: 0.35rem;">
-        <option value="">— opsional —</option>
-        <option value="mandiri">Bank Mandiri</option>
-        <option value="mas">Bank MAS</option>
-      </select>
+      <div id="bankRow">
+        <label class="block" for="expectedBank" id="expectedBankLabel" style="margin-top: 0.75rem;">Bank (rekening)</label>
+        <select id="expectedBank" disabled>
+          <option value="">— pilih bank —</option>
+          <option value="mandiri">Bank Mandiri</option>
+          <option value="mas">Bank MAS</option>
+        </select>
+        <p class="hint" id="bankHint" style="margin-top: 0.35rem;">Pilih jenis dokumen « Rekening tabungan » di atas untuk mengaktifkan.</p>
+      </div>
 
       <div id="ocrSection">
       <label class="block">Engine OCR</label>
@@ -333,7 +337,8 @@
     const docInput = document.getElementById("doc");
     const expectedInputEl = document.getElementById("expected");
     const expectedBankEl = document.getElementById("expectedBank");
-    const expectedBankLabel = document.getElementById("expectedBankLabel");
+    const bankRowEl = document.getElementById("bankRow");
+    const bankHintEl = document.getElementById("bankHint");
     const runBtn = document.getElementById("run");
     const statusEl = document.getElementById("status");
     const previewPre = document.getElementById("previewPreprocessed");
@@ -379,8 +384,15 @@
       panelOcr.classList.toggle("hidden-for-foto", special);
       expectedLabel.classList.toggle("hidden-for-foto", foto);
       expectedInputEl.classList.toggle("hidden-for-foto", foto);
-      expectedBankLabel.style.display = rekening ? "" : "none";
-      expectedBankEl.style.display = rekening ? "" : "none";
+      expectedBankEl.disabled = !rekening;
+      if (rekening) {
+        bankHintEl.textContent = "Pilih bank sesuai data HR (Mandiri atau MAS).";
+      } else if (cv || foto) {
+        bankHintEl.textContent = "Hanya untuk jenis dokumen Rekening tabungan.";
+      } else {
+        bankHintEl.textContent = "Pilih jenis dokumen « Rekening tabungan » di atas untuk mengaktifkan.";
+      }
+      bankRowEl.style.display = cv || foto ? "none" : "";
       stPrep.style.display = special ? "none" : "";
       stOcr.style.display = special ? "none" : "";
       stVal.style.display = special ? "none" : "";

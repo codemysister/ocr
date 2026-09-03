@@ -653,6 +653,12 @@
               Pakai nama dari filename
             </label>
           </div>
+          <div class="full">
+            <label class="check-row">
+              <input type="checkbox" id="useExpectedBank" checked />
+              Pakai bank dari <code>manifest.json</code> (folder rekening: Mandiri / MAS)
+            </label>
+          </div>
         </div>
         <p class="hint" id="datasetRootHint">Memuat daftar folder…</p>
       </section>
@@ -1050,6 +1056,7 @@
         ocr_mode: document.getElementById("ocrMode").value,
         pp_ocr_tier: document.getElementById("ppTier").value,
         use_expected_name: document.getElementById("useExpectedName").checked,
+        use_expected_bank: document.getElementById("useExpectedBank").checked,
         enable_preprocess: document.getElementById("enablePreprocess").checked,
         skip_passthrough: document.getElementById("skipPassthrough").checked,
       };
@@ -1270,9 +1277,14 @@
                 </div>`
               : "";
             const llmBlock = renderLlmBlock(llmDataFromRow(f), idx);
-            const expected = f.expected_name
-              ? `<div class="expected">Expected name: <strong>${esc(f.expected_name)}</strong></div>`
-              : "";
+            const expected = [
+              f.expected_name
+                ? `<div class="expected">Expected name: <strong>${esc(f.expected_name)}</strong></div>`
+                : "",
+              f.expected_bank
+                ? `<div class="expected">Expected bank: <strong>${esc(f.expected_bank)}</strong>${f.bank_pass === false ? " ✗" : f.bank_pass === true ? " ✓" : ""}${f.detected_bank && f.detected_bank !== f.expected_bank ? ` <span style="color:var(--muted)">(deteksi: ${esc(f.detected_bank)})</span>` : ""}</div>`
+                : "",
+            ].join("");
             return `<article class="fail-card${previewOnly ? " preview-only" : ""}">
               <div class="fail-card-head">
                 ${renderFailurePreview(f, previewOnly, idx)}

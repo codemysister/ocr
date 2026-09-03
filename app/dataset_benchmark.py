@@ -11,7 +11,9 @@ from pathlib import Path
 from typing import Any, Generator
 
 from app.pipeline_runner import OcrMode, PipelineResult, run_pipeline_bytes
+from systems.validation.bank_rekening import normalize_expected_bank
 from systems.validation.document_profiles import profile_label, resolve_keywords
+from systems.validation.fuzzy_compare import parse_nik16_from_filename
 
 _NIK_SUFFIX_RE = re.compile(r"_(\d{16})$")
 _DATASET_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".pdf"}
@@ -44,6 +46,49 @@ def parse_dataset_filename(folder: str, filename: str) -> str | None:
         return None
     name_part = stem[: m.start()].strip()
     return name_part or None
+
+
+_manifest_bank_by_nik: dict[str, str] | None = None
+
+
+def _load_manifest_bank_by_nik() -> dict[str, str]:
+    global _manifest_bank_by_nik
+    if _manifest_bank_by_nik is not None:
+        return _manifest_bank_by_nik
+
+    out: dict[str, str] = {}
+    manifest_path = dataset_root() / "manifest.json"
+    if manifest_path.is_file():
+        try:
+            data = json.loads(manifest_path.read_text(encoding="utf-8"))
+            for emp in data.get("employees") or []:
+                if not isinstance(emp, dict):
+                    continue
+                nik = re.sub(r"\D", "", str(emp.get("nik") or emp.get("nomor_ktp") or ""))
+                bank = normalize_expected_bank(str(emp.get("selected_bank") or ""))
+                if len(nik) == 16 and bank:
+                    out[nik] = bank
+        except (OSError, json.JSONDecodeError, TypeError):
+            pass
+    _manifest_bank_by_nik = out
+    return out
+
+
+def expected_bank_for_dataset_file(
+    folder: str,
+    filename: str,
+    *,
+    use_manifest: bool,
+) -> str:
+    if not use_manifest:
+        return ""
+    resolved = resolve_keywords(folder)
+    if not resolved or resolved[0] != "rekening":
+        return ""
+    nik = parse_nik16_from_filename(filename)
+    if not nik:
+        return ""
+    return _load_manifest_bank_by_nik().get(nik, "")
 
 
 def resolve_dataset_file(folder: str, filename: str) -> Path:
@@ -266,6 +311,7 @@ class BenchmarkConfig:
     ocr_mode: OcrMode = "fast"
     pp_ocr_tier: str = "medium"
     use_expected_name: bool = True
+    use_expected_bank: bool = True
     enable_preprocess: bool = False
     skip_passthrough: bool = False
 
@@ -366,12 +412,13 @@ def _collect_jobs_for_selection(
     root: Path,
     *,
     use_expected_name: bool,
-) -> tuple[list[tuple[str, Path, str | None]], list[str]]:
+    use_expected_bank: bool,
+) -> tuple[list[tuple[str, Path, str | None, str | None]], list[str]]:
     """
     Kumpulkan job dari selection (file spesifik atau limit/offset).
-    Return (jobs, error_messages).
+    Return (jobs, error_messages) dengan (folder, path, expected_name, expected_bank).
     """
-    jobs: list[tuple[str, Path, str | None]] = []
+    jobs: list[tuple[str, Path, str | None, str | None]] = []
     errors: list[str] = []
 
     if sel.files:
@@ -397,7 +444,12 @@ def _collect_jobs_for_selection(
             expected = None
             if use_expected_name:
                 expected = parse_dataset_filename(job_folder, fp.name)
-            jobs.append((job_folder, fp, expected))
+            expected_bank = expected_bank_for_dataset_file(
+                job_folder,
+                fp.name,
+                use_manifest=use_expected_bank,
+            )
+            jobs.append((job_folder, fp, expected, expected_bank or None))
         return jobs, errors
 
     if not sel.enabled or sel.limit <= 0:
@@ -412,7 +464,12 @@ def _collect_jobs_for_selection(
         expected = None
         if use_expected_name:
             expected = parse_dataset_filename(sel.folder, fp.name)
-        jobs.append((sel.folder, fp, expected))
+        expected_bank = expected_bank_for_dataset_file(
+            sel.folder,
+            fp.name,
+            use_manifest=use_expected_bank,
+        )
+        jobs.append((sel.folder, fp, expected, expected_bank or None))
     return jobs, errors
 
 
@@ -425,12 +482,13 @@ def run_benchmark(config: BenchmarkConfig) -> Generator[str, None, None]:
     all_results: list[dict[str, Any]] = []
 
     # Kumpulkan job
-    jobs: list[tuple[str, Path, str | None]] = []
+    jobs: list[tuple[str, Path, str | None, str | None]] = []
     for sel in config.selections:
         batch_jobs, batch_errors = _collect_jobs_for_selection(
             sel,
             root,
             use_expected_name=config.use_expected_name,
+            use_expected_bank=config.use_expected_bank,
         )
         for msg in batch_errors:
             yield json.dumps(
@@ -441,15 +499,15 @@ def run_benchmark(config: BenchmarkConfig) -> Generator[str, None, None]:
                 },
                 ensure_ascii=False,
             ) + "\n"
-        for folder, fp, expected in batch_jobs:
+        for folder, fp, expected, expected_bank in batch_jobs:
             if folder not in folder_meta:
                 resolved = resolve_keywords(folder)
                 doc_type = resolved[0] if resolved else None
                 folder_meta[folder] = (doc_type, profile_label(doc_type) if doc_type else None)
-            jobs.append((folder, fp, expected))
+            jobs.append((folder, fp, expected, expected_bank))
 
     total_jobs = len(jobs)
-    for idx, (folder, file_path, expected_name) in enumerate(jobs, start=1):
+    for idx, (folder, file_path, expected_name, expected_bank) in enumerate(jobs, start=1):
         yield json.dumps(
             {
                 "type": "progress",
@@ -469,6 +527,7 @@ def run_benchmark(config: BenchmarkConfig) -> Generator[str, None, None]:
             raw,
             document_type=doc_type,
             expected_name=expected_name or "",
+            expected_bank=expected_bank or "",
             filename=file_path.name,
             ocr_mode=config.ocr_mode,
             pp_ocr_tier=config.pp_ocr_tier,
@@ -487,10 +546,18 @@ def run_benchmark(config: BenchmarkConfig) -> Generator[str, None, None]:
             "file": file_path.name,
             "document_type": doc_type,
             "expected_name": expected_name,
+            "expected_bank": expected_bank,
             "pipeline_ok": pipeline_ok,
             "document_matched": matched,
             "timing": result.timing.as_dict(),
         }
+        validation = (result.payload or {}).get("validation") if result.payload else None
+        if isinstance(validation, dict):
+            if validation.get("bank_pass") is not None:
+                row["bank_pass"] = validation.get("bank_pass")
+            bank_detection = validation.get("bank_detection")
+            if isinstance(bank_detection, dict) and bank_detection.get("detected_bank"):
+                row["detected_bank"] = bank_detection.get("detected_bank")
         llm_fb = _llm_fallback_from_result(result)
         if llm_fb:
             row.update(llm_fb)
@@ -519,6 +586,9 @@ def run_benchmark(config: BenchmarkConfig) -> Generator[str, None, None]:
             "file": r["file"],
             "document_type": r.get("document_type"),
             "expected_name": r.get("expected_name"),
+            "expected_bank": r.get("expected_bank"),
+            "bank_pass": r.get("bank_pass"),
+            "detected_bank": r.get("detected_bank"),
             "failure_kind": r.get("failure_kind"),
             "failure_reason": r.get("failure_reason") or r.get("error"),
             "ocr_text": r.get("ocr_text"),
@@ -570,6 +640,7 @@ def run_benchmark(config: BenchmarkConfig) -> Generator[str, None, None]:
             "ocr_mode": config.ocr_mode,
             "pp_ocr_tier": config.pp_ocr_tier,
             "use_expected_name": config.use_expected_name,
+            "use_expected_bank": config.use_expected_bank,
             "enable_preprocess": config.enable_preprocess,
             "skip_passthrough": config.skip_passthrough,
             "total_jobs": total_jobs,
