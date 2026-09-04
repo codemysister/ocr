@@ -8,7 +8,7 @@ from typing import Any
 
 from rapidfuzz import fuzz
 
-from systems.validation.bank_rekening import validate_rekening_bank
+from systems.validation.bank_rekening import normalize_expected_bank, validate_rekening_bank
 from systems.validation.document_profiles import (
     CANONICAL_KEYWORDS,
     any_keyword_groups_for_profile,
@@ -33,16 +33,33 @@ from systems.validation.name_extraction import (
 )
 
 _NIK16_SPACED_RE = re.compile(r"\d{4}[\s.\-]?\d{4}[\s.\-]?\d{4}[\s.\-]?\d{4}")
-_NIK16_FILENAME_RE = re.compile(r"_(\d{16})(?:\.[^.]+)?$", re.I)
+_NIK_ACCOUNT_SUFFIX_RE = re.compile(r"(\d{16})(?:_(\d{10,13}))?$", re.I)
 
 
 def parse_nik16_from_filename(filename: str) -> str | None:
-    """Ambil NIK 16 digit dari pola umum benchmark: `{tipe}_{Nama}_{NIK16}.ext`."""
+    """Ambil NIK 16 digit dari pola `{tipe}_{Nama}_{NIK16}` atau `..._{NIK16}_{NoRek}.ext`."""
     stem = (filename or "").rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
     if "." in stem:
         stem = stem.rsplit(".", 1)[0]
-    m = _NIK16_FILENAME_RE.search(stem)
+    m = _NIK_ACCOUNT_SUFFIX_RE.search(stem)
     return m.group(1) if m else None
+
+
+def _rekening_identity_or_account_pass(
+    *,
+    has_name_ref: bool,
+    has_account_ref: bool,
+    identity_pass: bool | None,
+    account_pass: bool | None,
+) -> bool:
+    """Nama atau nomor rekening — minimal salah satu harus lolos."""
+    if has_name_ref and has_account_ref:
+        return bool(identity_pass is True or account_pass is True)
+    if has_name_ref:
+        return identity_pass is True
+    if has_account_ref:
+        return account_pass is True
+    return False
 
 
 def extract_nik16_from_ocr(ocr_text: str) -> list[str]:
@@ -1037,6 +1054,7 @@ def validate_document_ocr(
     expected_name: str = "",
     expected_nik: str = "",
     expected_bank: str = "",
+    expected_account: str = "",
     aggregate_min_pass_ratio: float = 0.7,
     identity_min_score: float = 65.0,
     mistral_annotation: dict[str, Any] | None = None,
@@ -1395,14 +1413,40 @@ def validate_document_ocr(
 
     bank_detection: dict[str, Any] | None = None
     bank_pass: bool | None = None
+    account_pass: bool | None = None
+    identity_or_account_pass: bool | None = None
     if profile == "rekening":
-        bank_detection = validate_rekening_bank(ocr_text, expected_bank=expected_bank)
+        bank_detection = validate_rekening_bank(
+            ocr_text,
+            expected_bank=expected_bank,
+            expected_account=expected_account,
+        )
         bank_pass = bank_detection.get("bank_pass")
-        if bank_detection.get("expected_bank"):
-            if bank_pass is False:
-                document_matched = False
-            elif bank_pass is True and document_matched is False:
-                pass  # jangan override gagal jenis/identitas
+        account_pass = bank_detection.get("account_pass")
+
+        exp_bank = normalize_expected_bank(expected_bank or "")
+        if not exp_bank:
+            bank_pass = False
+            bank_detection["bank_pass"] = False
+            bank_detection["note"] = "expected_bank wajib untuk validasi rekening (mandiri | mas)."
+        elif bank_pass is None:
+            bank_pass = False
+            bank_detection["bank_pass"] = False
+
+        has_name_ref = bool(expected_name.strip())
+        has_account_ref = bool(bank_detection.get("expected_account"))
+        identity_or_account_pass = _rekening_identity_or_account_pass(
+            has_name_ref=has_name_ref,
+            has_account_ref=has_account_ref,
+            identity_pass=identity_pass,
+            account_pass=account_pass,
+        )
+
+        document_matched = bool(
+            document_type_pass
+            and bank_pass is True
+            and identity_or_account_pass is True
+        )
 
     explanation = _validation_explanation(
         document_matched=document_matched,
@@ -1439,23 +1483,27 @@ def validate_document_ocr(
         if explanation.get("gates", {}).get("document_type"):
             explanation["gates"]["document_type"]["pass"] = False
 
-    if profile == "rekening" and bank_detection and bank_detection.get("expected_bank"):
+    if profile == "rekening" and bank_detection:
         exp_lbl = bank_detection.get("expected_bank_label") or bank_detection.get("expected_bank")
         det_lbl = bank_detection.get("detected_bank_label")
-        if bank_pass is True:
+        if bank_pass is True and exp_lbl:
             bank_line = f"Bank: cocok dengan {exp_lbl}"
             if det_lbl and det_lbl != exp_lbl:
                 bank_line = f"Bank: cocok dengan {exp_lbl} (terdeteksi: {det_lbl})"
-        else:
+        elif exp_lbl:
             bank_line = f"Bank: tidak cocok — diharapkan {exp_lbl}"
             if det_lbl:
                 bank_line += f", terdeteksi {det_lbl}"
             else:
                 bank_line += " (bank tidak teridentifikasi di OCR)"
+        else:
+            bank_line = "Bank: expected_bank wajib (mandiri | mas)."
         explanation["detail_lines"] = [bank_line, *list(explanation.get("detail_lines") or [])]
         if bank_pass is False:
             explanation["summary"] = (
                 f"Dokumen rekening tidak cocok: bank bukan {exp_lbl}."
+                if exp_lbl
+                else "Dokumen rekening tidak cocok: expected_bank wajib."
             )
             blockers = list(explanation.get("primary_blockers") or [])
             if "BANK" not in blockers:
@@ -1464,6 +1512,55 @@ def validate_document_ocr(
             gates = dict(explanation.get("gates") or {})
             gates["bank"] = {"pass": False}
             explanation["gates"] = gates
+
+    if profile == "rekening" and bank_detection and bank_detection.get("expected_account"):
+        exp_acct = bank_detection.get("expected_account")
+        if account_pass is True:
+            acct_line = f"Nomor rekening: cocok dengan {exp_acct}"
+        else:
+            acct_line = f"Nomor rekening: tidak cocok — diharapkan {exp_acct}"
+            det = bank_detection.get("account_detection") or {}
+            found = det.get("detected_accounts") or []
+            if found:
+                acct_line += f", terbaca di OCR: {', '.join(str(x) for x in found[:3])}"
+            else:
+                acct_line += " (nomor rekening tidak terbaca di OCR)"
+        explanation["detail_lines"] = [acct_line, *list(explanation.get("detail_lines") or [])]
+
+    if profile == "rekening" and identity_or_account_pass is not None:
+        has_name_ref = bool(expected_name.strip())
+        has_account_ref = bool((bank_detection or {}).get("expected_account"))
+        if identity_or_account_pass is True:
+            if has_name_ref and has_account_ref:
+                or_line = "Nama atau nomor rekening: lolos (minimal salah satu cocok)."
+            elif has_name_ref:
+                or_line = "Nama: cocok dengan referensi."
+            else:
+                or_line = "Nomor rekening: cocok dengan referensi."
+        else:
+            if has_name_ref and has_account_ref:
+                or_line = (
+                    "Nama dan nomor rekening tidak cocok — minimal salah satu harus lolos."
+                )
+            elif has_name_ref:
+                or_line = "Nama tidak cocok dengan referensi."
+            else:
+                or_line = "Nomor rekening tidak cocok dengan referensi."
+        explanation["detail_lines"] = [or_line, *list(explanation.get("detail_lines") or [])]
+        if identity_or_account_pass is False and bank_pass is not False:
+            explanation["summary"] = or_line
+            blockers = list(explanation.get("primary_blockers") or [])
+            if "IDENTITY_OR_ACCOUNT" not in blockers:
+                blockers.insert(0, "IDENTITY_OR_ACCOUNT")
+            explanation["primary_blockers"] = blockers
+            gates = dict(explanation.get("gates") or {})
+            gates["identity_or_account"] = {"pass": False}
+            explanation["gates"] = gates
+        elif identity_or_account_pass is False and account_pass is False:
+            blockers = list(explanation.get("primary_blockers") or [])
+            if "ACCOUNT" not in blockers:
+                blockers.append("ACCOUNT")
+            explanation["primary_blockers"] = blockers
 
     detection = detect_document_type_from_ocr(
         ocr_text,
@@ -1483,6 +1580,13 @@ def validate_document_ocr(
         name_extraction=name_extraction,
         ownership_checked=bool(expected_name.strip()) and not skip_identity,
     )
+    if profile == "rekening" and identity_or_account_pass is not None:
+        verdict["is_own_document"] = identity_or_account_pass
+        if identity_or_account_pass is True and document_matched:
+            verdict["summary"] = (
+                f"Dokumen rekening {bank_detection.get('expected_bank_label') or ''} "
+                "cocok (bank + nama/rekening)."
+            ).strip()
 
     return {
         "document_type": (document_type or "").strip(),
@@ -1515,4 +1619,6 @@ def validate_document_ocr(
         "document_type_current_label": verdict["document_type_current_label"],
         "bank_detection": bank_detection,
         "bank_pass": bank_pass,
+        "account_pass": account_pass,
+        "identity_or_account_pass": identity_or_account_pass,
     }

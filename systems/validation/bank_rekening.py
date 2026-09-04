@@ -109,7 +109,47 @@ def _phrase_score(ocr_n: str, phrase: str) -> float:
     return float(fuzz.partial_ratio(phrase, ocr_n))
 
 
-def _extract_account_numbers(ocr_text: str) -> list[str]:
+def normalize_account_digits(raw: str) -> str:
+    return re.sub(r"\D", "", (raw or "").strip())
+
+
+_ACCOUNT_FILENAME_RE = re.compile(r"_(\d{10,13})$", re.I)
+_LEGACY_ACCOUNT_FILENAME_RE = re.compile(r"(\d{16})_(\d{10,13})$", re.I)
+
+
+def parse_account_from_filename(filename: str) -> str | None:
+    """Ambil nomor rekening dari pola `{...}_{NoRek10-13}.ext`."""
+    stem = (filename or "").rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+    if "." in stem:
+        stem = stem.rsplit(".", 1)[0]
+    m = _ACCOUNT_FILENAME_RE.search(stem)
+    if m:
+        digits = normalize_account_digits(m.group(1))
+        return digits if len(digits) >= 10 else None
+    m = _LEGACY_ACCOUNT_FILENAME_RE.search(stem)
+    if m:
+        digits = normalize_account_digits(m.group(2))
+        return digits if len(digits) >= 10 else None
+    return None
+
+
+def parse_rekening_name_from_filename(filename: str) -> str | None:
+    """Ambil nama dari pola `rekening bank_{Nama}_{NoRek}.ext`."""
+    stem = (filename or "").rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+    if "." in stem:
+        stem = stem.rsplit(".", 1)[0]
+    prefix = "rekening bank_"
+    if not stem.casefold().startswith(prefix.casefold()):
+        return None
+    body = stem[len(prefix) :]
+    m = _ACCOUNT_FILENAME_RE.search(body)
+    if not m:
+        return None
+    name = body[: m.start()].strip().rstrip("_")
+    return name or None
+
+
+def extract_account_numbers(ocr_text: str) -> list[str]:
     candidates: list[str] = []
     for m in re.finditer(r"\d[\d\s.\-]{8,24}\d", ocr_text):
         digits = re.sub(r"\D", "", m.group(0))
@@ -148,6 +188,8 @@ def score_bank_signals(ocr_text: str) -> dict[str, Any]:
             signals["mandiri"].append("keyword:mandiri+banking_context")
 
     for phrase in MAS_PHRASES:
+        if phrase == "bank mas" and re.search(r"\bbank mandiri\b", ocr_n):
+            continue
         sc = _phrase_score(ocr_n, phrase)
         if sc >= 82.0:
             mas_score = max(mas_score, sc)
@@ -156,7 +198,7 @@ def score_bank_signals(ocr_text: str) -> dict[str, Any]:
     if re.search(r"\bmas saving\b", ocr_n) or re.search(r"\bbank mas\b", ocr_n):
         mas_score = max(mas_score, 92.0)
 
-    for acct in _extract_account_numbers(ocr_text):
+    for acct in extract_account_numbers(ocr_text):
         if len(acct) == 13 and acct[:3] in MANDIRI_ACCOUNT_PREFIXES:
             mandiri_score = max(mandiri_score, 96.0)
             signals["mandiri"].append(f"account:{acct}")
@@ -187,13 +229,41 @@ def detect_bank_from_ocr(ocr_text: str, *, min_score: float = 70.0) -> str | Non
     return None
 
 
+def validate_account_in_ocr(ocr_text: str, expected_account: str) -> dict[str, Any]:
+    """Cocokkan nomor rekening referensi dengan digit yang terbaca OCR."""
+    exp = normalize_account_digits(expected_account)
+    if len(exp) < 10:
+        return {
+            "expected_account": exp or None,
+            "detected_accounts": [],
+            "account_pass": None,
+        }
+
+    found = extract_account_numbers(ocr_text)
+    compact = normalize_account_digits(ocr_text)
+    matched = exp in found or exp in compact
+    method: str | None = None
+    if exp in found:
+        method = "exact_token"
+    elif exp in compact:
+        method = "ocr_digit_substring"
+
+    return {
+        "expected_account": exp,
+        "detected_accounts": found[:12],
+        "account_pass": matched,
+        "match_method": method,
+    }
+
+
 def validate_rekening_bank(
     ocr_text: str,
     *,
     expected_bank: str | None = None,
+    expected_account: str | None = None,
     min_score: float = 70.0,
 ) -> dict[str, Any]:
-    """Deteksi bank dari OCR; validasi terhadap expected_bank bila diisi."""
+    """Deteksi bank + nomor rekening dari OCR."""
     exp = normalize_expected_bank(expected_bank or "")
     scores = score_bank_signals(ocr_text)
     detected = detect_bank_from_ocr(ocr_text, min_score=min_score)
@@ -207,12 +277,23 @@ def validate_rekening_bank(
         "signals": scores["signals"],
         "min_score": min_score,
         "bank_pass": None,
+        "expected_account": None,
+        "account_pass": None,
+        "account_detection": None,
     }
+
+    exp_acct = normalize_account_digits(expected_account or "")
+    if len(exp_acct) >= 10:
+        acct_info = validate_account_in_ocr(ocr_text, exp_acct)
+        out["expected_account"] = exp_acct
+        out["account_pass"] = acct_info.get("account_pass")
+        out["account_detection"] = acct_info
 
     if not exp:
         return out
 
     exp_score = float(scores["mandiri"] if exp == "mandiri" else scores["mas"])
+    other_score = float(scores["mas"] if exp == "mandiri" else scores["mandiri"])
 
     if detected == exp and exp_score >= min_score:
         out["bank_pass"] = True
@@ -222,9 +303,20 @@ def validate_rekening_bank(
             "expected": exp,
             "detected": detected,
         }
-    elif exp_score >= min_score:
+    elif exp_score >= min_score and other_score <= exp_score:
         out["bank_pass"] = True
         out["note"] = "Bank terdeteksi lewat sinyal OCR tanpa pemenang eksplisit."
+    elif other_score > exp_score and other_score >= min_score:
+        out["bank_pass"] = False
+        out["mismatch"] = {
+            "expected": exp,
+            "detected": "mandiri" if exp == "mas" else "mas",
+            "reason": "competing_bank_stronger",
+        }
+        out["note"] = (
+            f"Sinyal {bank_label('mandiri' if exp == 'mas' else 'mas')} "
+            f"lebih kuat ({other_score:.0f} vs {exp_score:.0f})."
+        )
     else:
         out["bank_pass"] = False
         out["note"] = f"Sinyal {bank_label(exp)} di OCR di bawah ambang {min_score:.0f}."

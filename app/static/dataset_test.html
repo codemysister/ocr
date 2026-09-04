@@ -217,6 +217,29 @@
       text-align: right;
       color: var(--muted);
     }
+    th.bank-col, td.bank-cell {
+      min-width: 8.5rem;
+      width: 8.5rem;
+    }
+    td.bank-cell select {
+      width: 100%;
+      padding: 0.4rem 0.35rem;
+      font-size: 0.8rem;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      color: var(--text);
+    }
+    td.bank-cell .bank-na {
+      color: var(--muted);
+      font-size: 0.8rem;
+    }
+    .rekening-bank-row {
+      margin-top: 0.5rem;
+    }
+    .rekening-bank-row.hidden {
+      display: none;
+    }
     td.empty-row {
       color: var(--muted);
       font-size: 0.85rem;
@@ -655,10 +678,11 @@
           </div>
           <div class="full">
             <label class="check-row">
-              <input type="checkbox" id="useExpectedBank" checked />
-              Pakai bank dari <code>manifest.json</code> (folder rekening: Mandiri / MAS)
+              <input type="checkbox" id="useExpectedAccount" checked />
+              Pakai nomor rekening dari filename / <code>manifest.json</code>
             </label>
           </div>
+          <p class="hint full" style="margin:0;">Folder <strong>rekening bank</strong>: pilih bank Mandiri / MAS di tabel batch atau di mode file spesifik.</p>
         </div>
         <p class="hint" id="datasetRootHint">Memuat daftar folder…</p>
       </section>
@@ -706,6 +730,7 @@
                   <th style="width:2.25rem;"></th>
                   <th>Folder</th>
                   <th style="width:3.5rem;">File</th>
+                  <th class="bank-col">Bank</th>
                   <th class="limit-col">Limit</th>
                   <th class="offset-col">Offset</th>
                 </tr>
@@ -724,6 +749,15 @@
               <label class="block" for="specificFolder">Folder default</label>
               <select id="specificFolder">
                 <option value="">— pilih folder —</option>
+              </select>
+            </div>
+            <div class="full rekening-bank-row hidden" id="specificRekeningBankRow">
+              <label class="block" for="specificRekeningBank">Bank (rekening)</label>
+              <select id="specificRekeningBank">
+                <option value="">— pilih bank —</option>
+                <option value="mandiri">Bank Mandiri</option>
+                <option value="mas">Bank MAS</option>
+                <option value="manifest">Dari manifest.json (per file)</option>
               </select>
             </div>
             <div class="full">
@@ -807,6 +841,8 @@
     const btnRun = document.getElementById("btnRun");
     const btnDownload = document.getElementById("btnDownload");
     const specificFolder = document.getElementById("specificFolder");
+    const specificRekeningBankRow = document.getElementById("specificRekeningBankRow");
+    const specificRekeningBank = document.getElementById("specificRekeningBank");
     const specificFiles = document.getElementById("specificFiles");
     const modeBatch = document.getElementById("modeBatch");
     const modeSpecific = document.getElementById("modeSpecific");
@@ -930,9 +966,39 @@
       return (ratio * 100).toFixed(1) + "%";
     }
 
+    function isRekeningRow(row) {
+      return row && row.document_type === "rekening";
+    }
+
+    function bankSelectHtml(selected, { disabled = false } = {}) {
+      const dis = disabled ? "disabled" : "";
+      return `<select class="row-bank" ${dis}>
+        <option value=""${selected ? "" : " selected"}>— pilih —</option>
+        <option value="mandiri"${selected === "mandiri" ? " selected" : ""}>Mandiri</option>
+        <option value="mas"${selected === "mas" ? " selected" : ""}>MAS</option>
+        <option value="manifest"${selected === "manifest" ? " selected" : ""}>Manifest</option>
+      </select>`;
+    }
+
+    function readBankFromSelect(el) {
+      if (!el) return { expected_bank: "", valid: false };
+      const v = (el.value || "").trim();
+      if (v === "mandiri" || v === "mas") return { expected_bank: v, valid: true };
+      if (v === "manifest") return { expected_bank: "", valid: true };
+      return { expected_bank: "", valid: false };
+    }
+
+    function updateSpecificRekeningBankUI() {
+      const folder = specificFolder.value.trim();
+      const row = folderRows.find((r) => r.folder === folder);
+      const show = isRekeningRow(row);
+      specificRekeningBankRow.classList.toggle("hidden", !show);
+      if (!show) specificRekeningBank.value = "";
+    }
+
     function renderFolderTable() {
       if (!folderRows.length) {
-        folderTable.innerHTML = `<tr><td colspan="5" class="empty-row">Tidak ada folder di dataset. Di Docker, mount folder <code>dataset/</code> ke <code>/app/dataset</code> lalu restart container.</td></tr>`;
+        folderTable.innerHTML = `<tr><td colspan="6" class="empty-row">Tidak ada folder di dataset. Di Docker, mount folder <code>dataset/</code> ke <code>/app/dataset</code> lalu restart container.</td></tr>`;
         renderSpecificFolderOptions();
         return;
       }
@@ -941,10 +1007,14 @@
         const title = row.document_type
           ? `${row.document_type} — ${row.label}`
           : "belum didukung";
+        const bankCell = isRekeningRow(row)
+          ? `<td class="bank-cell">${bankSelectHtml("", { disabled: !row.supported })}</td>`
+          : `<td class="bank-cell"><span class="bank-na">—</span></td>`;
         return `<tr class="${cls}" data-idx="${i}" title="${esc(title)}">
           <td><input type="checkbox" class="row-enable" ${row.supported ? "" : "disabled"} /></td>
           <td class="folder-name">${esc(row.folder)}</td>
           <td class="file-count-cell">${row.file_count}</td>
+          ${bankCell}
           <td class="limit-cell"><input type="number" class="row-limit" value="20" min="0" max="500" ${row.supported ? "" : "disabled"} /></td>
           <td class="offset-cell"><input type="number" class="row-offset" value="0" min="0" max="10000" ${row.supported ? "" : "disabled"} /></td>
         </tr>`;
@@ -964,6 +1034,7 @@
       } else if (supported.length === 1) {
         specificFolder.value = supported[0].folder;
       }
+      updateSpecificRekeningBankUI();
     }
 
     function parseSpecificFileLines(text) {
@@ -989,7 +1060,27 @@
         limit: 0,
         offset: 0,
         files,
+        ...(() => {
+          const row = folderRows.find((r) => r.folder === (folder || files[0].split("/")[0]));
+          if (!isRekeningRow(row)) return {};
+          const bank = readBankFromSelect(specificRekeningBank);
+          return {
+            expected_bank: bank.expected_bank,
+            _rekeningBankMissing: !bank.valid,
+          };
+        })(),
       };
+    }
+
+    function validateRekeningBankSelections(selections) {
+      for (const sel of selections) {
+        const row = folderRows.find((r) => r.folder === sel.folder);
+        if (!isRekeningRow(row)) continue;
+        if (sel._rekeningBankMissing) {
+          return `Folder «${sel.folder}»: pilih Bank Mandiri, MAS, atau Dari manifest.`;
+        }
+      }
+      return null;
     }
 
     async function loadTypes() {
@@ -1018,7 +1109,15 @@
         const enabled = tr.querySelector(".row-enable").checked;
         const limit = Number(tr.querySelector(".row-limit").value) || 0;
         const offset = Number(tr.querySelector(".row-offset").value) || 0;
-        out.push({ folder: row.folder, enabled, limit, offset });
+        const item = { folder: row.folder, enabled, limit, offset };
+        if (isRekeningRow(row)) {
+          const bank = readBankFromSelect(tr.querySelector(".row-bank"));
+          item.expected_bank = bank.expected_bank;
+          if (enabled && limit > 0 && !bank.valid) {
+            item._rekeningBankMissing = true;
+          }
+        }
+        out.push(item);
       });
       return out;
     }
@@ -1043,20 +1142,31 @@
       document.getElementById("btnSelectAll").disabled = running;
       document.getElementById("btnSelectNone").disabled = running;
       specificFolder.disabled = running;
+      specificRekeningBank.disabled = running;
       specificFiles.disabled = running;
       testModeInputs.forEach((el) => { el.disabled = running; });
-      folderTable.querySelectorAll("input").forEach((el) => {
-        el.disabled = running || ((el.classList.contains("row-limit") || el.classList.contains("row-offset")) && el.closest("tr")?.classList.contains("unsupported"));
+      folderTable.querySelectorAll("input, select").forEach((el) => {
+        const tr = el.closest("tr");
+        const unsupported = tr?.classList.contains("unsupported");
+        if (el.classList.contains("row-limit") || el.classList.contains("row-offset")) {
+          el.disabled = running || unsupported;
+        } else if (el.classList.contains("row-bank")) {
+          el.disabled = running || unsupported;
+        } else if (el.classList.contains("row-enable")) {
+          el.disabled = running || unsupported;
+        }
       });
     }
 
     function buildBenchmarkBody(selections) {
+      const cleaned = selections.map(({ _rekeningBankMissing, ...rest }) => rest);
       return {
-        selections,
+        selections: cleaned,
         ocr_mode: document.getElementById("ocrMode").value,
         pp_ocr_tier: document.getElementById("ppTier").value,
         use_expected_name: document.getElementById("useExpectedName").checked,
-        use_expected_bank: document.getElementById("useExpectedBank").checked,
+        use_expected_bank: true,
+        use_expected_account: document.getElementById("useExpectedAccount").checked,
         enable_preprocess: document.getElementById("enablePreprocess").checked,
         skip_passthrough: document.getElementById("skipPassthrough").checked,
       };
@@ -1284,6 +1394,12 @@
               f.expected_bank
                 ? `<div class="expected">Expected bank: <strong>${esc(f.expected_bank)}</strong>${f.bank_pass === false ? " ✗" : f.bank_pass === true ? " ✓" : ""}${f.detected_bank && f.detected_bank !== f.expected_bank ? ` <span style="color:var(--muted)">(deteksi: ${esc(f.detected_bank)})</span>` : ""}</div>`
                 : "",
+              f.expected_account
+                ? `<div class="expected">Expected rekening: <strong>${esc(f.expected_account)}</strong>${f.account_pass === false ? " ✗" : f.account_pass === true ? " ✓" : ""}</div>`
+                : "",
+              f.identity_or_account_pass != null
+                ? `<div class="expected">Nama/rekening (OR): ${f.identity_or_account_pass ? "<strong>lolos ✓</strong>" : "<strong>gagal ✗</strong>"}${f.identity_pass === true ? " <span style=\"color:var(--muted)\">(nama ✓)</span>" : ""}${f.account_pass === true ? " <span style=\"color:var(--muted)\">(rekening ✓)</span>" : ""}</div>`
+                : "",
             ].join("");
             return `<article class="fail-card${previewOnly ? " preview-only" : ""}">
               <div class="fail-card-head">
@@ -1374,6 +1490,12 @@
         }
       }
 
+      const bankErr = validateRekeningBankSelections(selections);
+      if (bankErr) {
+        alert(bankErr);
+        return;
+      }
+
       await startBenchmark(selections);
 
       if (mode === "batch") {
@@ -1385,10 +1507,16 @@
             tr.querySelector(".row-enable").checked = sel.enabled;
             tr.querySelector(".row-limit").value = sel.limit;
             tr.querySelector(".row-offset").value = sel.offset ?? 0;
+            const bankEl = tr.querySelector(".row-bank");
+            if (bankEl) {
+              bankEl.value = sel.expected_bank || "manifest";
+            }
           }
         });
       }
     }
+
+    specificFolder.addEventListener("change", updateSpecificRekeningBankUI);
 
     document.getElementById("btnApplyLimit").addEventListener("click", () => {
       const v = Number(document.getElementById("globalLimit").value) || 0;

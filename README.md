@@ -558,7 +558,17 @@ curl -X POST "https://checkinpro-ocr.web.id/api/v1/pipeline" \
 
 **Keyword terlarang (gagal jika terdeteksi):** `e-statement`
 
-**Validasi bank (opsional):** kirim `expected_bank=mandiri` atau `expected_bank=mas` — sistem memeriksa teks/logo/nomor rekening di OCR.
+**Validasi rekening (3 payload):**
+
+| Payload | Wajib? | Aturan |
+|---------|--------|--------|
+| `expected_bank` | **Ya** | Harus `mandiri` atau `mas` — bank **wajib** cocok |
+| `expected_name` | Salah satu* | Nama pemilik rekening |
+| `expected_account` | Salah satu* | Nomor rekening (10–13 digit) |
+
+\* Nama **atau** nomor rekening: **minimal salah satu** harus cocok (OR). Keduanya boleh dikirim sekaligus.
+
+Pola filename benchmark: `rekening bank_{Nama}_{NoRek}.ext`
 
 | Bank | Sinyal OCR umum | Pola no. rekening |
 |------|-----------------|-------------------|
@@ -572,10 +582,11 @@ curl -X POST "https://checkinpro-ocr.web.id/api/v1/pipeline" \
   -F "file=@Rekening_Mandiri.jpg" \
   -F "document_type=rekening" \
   -F "expected_bank=mandiri" \
-  -F "expected_name=Reva Wulan Rahmawati"
+  -F "expected_account=1560027601493" \
+  -F "expected_name=Adinda Putri Khalista"
 ```
 
-Respons validasi menyertakan `bank_detection` dan `bank_pass` (bila `expected_bank` diisi).
+`document_matched` = keyword dokumen OK **dan** `bank_pass` **dan** (`identity_pass` **atau** `account_pass`).
 
 ---
 

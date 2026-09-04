@@ -33,7 +33,11 @@ from systems.observability.llm_fallback_log import (
     log_stats,
     read_llm_fallback_logs,
 )
-from systems.validation.bank_rekening import list_supported_banks, normalize_expected_bank
+from systems.validation.bank_rekening import (
+    list_supported_banks,
+    normalize_expected_bank,
+    parse_account_from_filename,
+)
 from systems.validation.document_profiles import list_supported_document_types, resolve_keywords
 
 router = APIRouter(prefix="/api/v1", tags=["api"])
@@ -243,7 +247,11 @@ async def api_pipeline(
     ),
     expected_bank: str = Form(
         "",
-        description="Hanya document_type=rekening: bank yang diharapkan (mandiri | mas)",
+        description="Wajib untuk document_type=rekening: bank yang diharapkan (mandiri | mas)",
+    ),
+    expected_account: str = Form(
+        "",
+        description="Untuk document_type=rekening: nomor rekening referensi (opsional jika ada di filename)",
     ),
 ) -> JSONResponse:
     """
@@ -286,12 +294,24 @@ async def api_pipeline(
         raise HTTPException(status_code=400, detail=detail)
 
     canonical_id, _keywords = resolved
-    if expected_bank.strip() and canonical_id == "rekening":
+    upload_name = file.filename or "upload"
+    if canonical_id == "rekening":
         if not normalize_expected_bank(expected_bank):
             detail = {
-                "message": "expected_bank tidak dikenal.",
+                "message": "expected_bank wajib untuk dokumen rekening (mandiri | mas).",
                 "expected_bank": expected_bank.strip(),
                 "supported": list_supported_banks(),
+            }
+            log_safe_failure(subsystem="pipeline", method="POST", path=path, http_status=400, detail=detail)
+            raise HTTPException(status_code=400, detail=detail)
+        acct_ref = (
+            expected_account.strip()
+            or parse_account_from_filename(upload_name)
+            or ""
+        )
+        if not (name_ref or cv_search_query).strip() and not acct_ref:
+            detail = {
+                "message": "Untuk rekening, isi expected_name dan/atau expected_account (nama/rekening: salah satu harus cocok).",
             }
             log_safe_failure(subsystem="pipeline", method="POST", path=path, http_status=400, detail=detail)
             raise HTTPException(status_code=400, detail=detail)
@@ -300,7 +320,7 @@ async def api_pipeline(
         raw,
         document_type=doc_type,
         expected_name=(name_ref or cv_search_query).strip(),
-        filename=file.filename or "upload",
+        filename=upload_name,
         ocr_mode=ocr_mode,
         pp_ocr_tier=pp_ocr_tier if ocr_mode == "fast" else None,
         include_preprocessed_image=include_preprocessed_image,
@@ -310,6 +330,7 @@ async def api_pipeline(
         cv_education_query=cv_education_query.strip(),
         cv_experience_query=cv_experience_query.strip(),
         expected_bank=expected_bank.strip(),
+        expected_account=expected_account.strip(),
     )
 
     if not result.ok:
@@ -371,6 +392,10 @@ class DatasetSelectionBody(BaseModel):
         default_factory=list,
         description="Daftar nama file spesifik (abaikan limit/offset bila diisi). Boleh `folder/file.jpg`.",
     )
+    expected_bank: str = Field(
+        "",
+        description="Folder rekening: mandiri | mas (kosong = pakai manifest per file bila use_expected_bank)",
+    )
 
 
 class DatasetBenchmarkBody(BaseModel):
@@ -379,6 +404,7 @@ class DatasetBenchmarkBody(BaseModel):
     pp_ocr_tier: PpOcrTier = "medium"
     use_expected_name: bool = True
     use_expected_bank: bool = True
+    use_expected_account: bool = True
     enable_preprocess: bool = False
     skip_passthrough: bool = False
 
@@ -438,6 +464,7 @@ def api_dataset_benchmark(body: DatasetBenchmarkBody) -> StreamingResponse:
                 limit=s.limit,
                 offset=s.offset,
                 files=list(s.files or []),
+                expected_bank=(s.expected_bank or "").strip() or None,
             )
             for s in body.selections
         ],
@@ -445,6 +472,7 @@ def api_dataset_benchmark(body: DatasetBenchmarkBody) -> StreamingResponse:
         pp_ocr_tier=body.pp_ocr_tier,
         use_expected_name=body.use_expected_name,
         use_expected_bank=body.use_expected_bank,
+        use_expected_account=body.use_expected_account,
         enable_preprocess=body.enable_preprocess,
         skip_passthrough=body.skip_passthrough,
     )

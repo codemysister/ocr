@@ -24,6 +24,7 @@ from systems.validation.document_profiles import (
     is_image_only_profile,
     resolve_keywords,
 )
+from systems.validation.bank_rekening import parse_account_from_filename
 from systems.validation.fuzzy_compare import validate_document_ocr, parse_nik16_from_filename
 from systems.validation.llm_fallback import (
     is_llm_fallback_enabled,
@@ -190,6 +191,7 @@ def run_pipeline_bytes(
     cv_education_query: str = "",
     cv_experience_query: str = "",
     expected_bank: str = "",
+    expected_account: str = "",
     log_source: str = "pipeline",
 ) -> PipelineResult:
     """Jalankan pipeline lengkap; tidak raise HTTPException."""
@@ -410,6 +412,7 @@ def run_pipeline_bytes(
     ocr_text = _ocr_text_from_payload(ocr_payload)
     image_mime = pre_meta.get("mime") if isinstance(pre_meta.get("mime"), str) else "image/png"
     expected_nik = parse_nik16_from_filename(filename) or ""
+    expected_acct = (expected_account or "").strip() or parse_account_from_filename(filename) or ""
 
     mistral_ann: dict | None = None
     if ocr_mode == "mistral":
@@ -427,6 +430,7 @@ def run_pipeline_bytes(
             expected_name=name_ref,
             expected_nik=expected_nik,
             expected_bank=expected_bank,
+            expected_account=expected_acct,
             mistral_annotation=mistral_ann,
         )
     else:

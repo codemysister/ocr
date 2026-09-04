@@ -80,7 +80,11 @@ class ValidateDocumentBody(BaseModel):
     )
     expected_bank: str = Field(
         "",
-        description="Hanya profil rekening: mandiri | mas (opsional, untuk validasi bank)",
+        description="Wajib untuk profil rekening: mandiri | mas",
+    )
+    expected_account: str = Field(
+        "",
+        description="Profil rekening: nomor rekening referensi (nama atau rekening: salah satu harus cocok)",
     )
 
     @field_validator("document_type")
@@ -110,6 +114,7 @@ def validation_health() -> dict:
         ),
         "validate_document_note": (
             "document_matched = document_type_pass AND (tanpa nama referensi | identity_pass). "
+            "Profil rekening: bank wajib + (nama ATAU nomor rekening). "
             "Default aggregate_min_pass_ratio=0.7, identity_min_score=65 (opsional di body JSON)."
         ),
         "last_tuning_log": {
@@ -201,12 +206,20 @@ def api_validate_document(body: ValidateDocumentBody) -> JSONResponse:
         )
 
     canonical_id, keywords = resolved
-    if body.expected_bank.strip() and canonical_id == "rekening":
+    if canonical_id == "rekening":
         if not normalize_expected_bank(body.expected_bank):
             detail = {
-                "message": "expected_bank tidak dikenal.",
+                "message": "expected_bank wajib untuk dokumen rekening (mandiri | mas).",
                 "expected_bank": body.expected_bank.strip(),
                 "supported": list_supported_banks(),
+            }
+            log_safe_failure(
+                subsystem=sub, method="POST", path=path, http_status=400, detail=detail
+            )
+            raise HTTPException(status_code=400, detail=detail)
+        if not body.expected_name.strip() and not body.expected_account.strip():
+            detail = {
+                "message": "Untuk rekening, isi expected_name dan/atau expected_account.",
             }
             log_safe_failure(
                 subsystem=sub, method="POST", path=path, http_status=400, detail=detail
@@ -220,6 +233,7 @@ def api_validate_document(body: ValidateDocumentBody) -> JSONResponse:
         keywords=keywords,
         expected_name=body.expected_name,
         expected_bank=body.expected_bank,
+        expected_account=body.expected_account,
         aggregate_min_pass_ratio=body.aggregate_min_pass_ratio,
         identity_min_score=body.identity_min_score,
         mistral_annotation=body.mistral_annotation,
