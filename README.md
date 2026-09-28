@@ -156,8 +156,9 @@ Baca field **`valid`** (`true` = VALID). Tidak ada OCR.
 4. [Profil dokumen & ketentuan validasi](#profil-dokumen--ketentuan-validasi)
 5. [Endpoint per subsistem](#endpoint-per-subsistem)
 6. [Struktur respons & verdict](#struktur-respons--verdict)
-7. [Kode error](#kode-error)
-8. [Variabel lingkungan](#variabel-lingkungan)
+7. [Pesan error frontend (API spec)](#pesan-error-frontend-api-spec)
+8. [Kode error HTTP](#kode-error-http)
+9. [Variabel lingkungan](#variabel-lingkungan)
 
 ---
 
@@ -201,14 +202,16 @@ Untuk profil selain `foto_profile`:
 
 ```
 document_matched = document_type_pass AND (expected_name kosong ATAU identity_pass)
+                   AND (bukan Helper KTP ATAU marital_pass)
 ```
 
 | Gate | Default | Arti |
 |------|---------|------|
 | `document_type_pass` | aggregate ≥ **70%** | Rata-rata skor fuzzy keyword profil vs teks OCR |
-| `identity_pass` | skor ≥ **65** | Nama diekstrak dari OCR vs `expected_name` (hanya jika nama diisi) |
+| `identity_pass` | skor ≥ **65** | Nama diekstrak dari OCR vs `expected_name` (hanya jika nama diisi); kata nama harus cocok 1-1, bukan hanya satu token yang sama |
+| `marital_pass` | Helper + KTP | Status perkawinan di KTP harus **BELUM KAWIN** bila `job_position=helper`. Posisi lain tidak dicek. |
 
-Skor identitas = rata-rata `token_sort_ratio`, `WRatio`, `partial_ratio` (RapidFuzz).
+Skor identitas = rata-rata `token_sort_ratio` dan cakupan kata (`token_coverage`). `WRatio`/`partial_ratio` tidak dipakai untuk lolos/gagal karena terlalu longgar pada nama yang hanya berbagi satu kata.
 
 ### Gate validasi (`foto_profile`)
 
@@ -254,6 +257,7 @@ valid = document_matched = face_pass AND blue_background_pass
 | POST | `/systems/ocr/api/v1/ocr-fast` | multipart | **OCR lokal PP-OCRv6 (default pipeline)** |
 | POST | `/systems/ocr/api/v1/ocr` | multipart | OCR lokal PaddleOCR-VL |
 | POST | `/systems/validation/api/v1/validate-document` | JSON | Validasi teks OCR vs profil |
+| GET | `/systems/validation/api/v1/error-catalog` | — | Katalog `error_code` + `error_message` untuk UI |
 | POST | `/systems/validation/api/v1/validate-foto-profile` | multipart | Validasi foto profil biru (tanpa pipeline) |
 | POST | `/systems/validation/api/v1/compare-names` | JSON | Bandingkan dua string nama |
 | POST | `/systems/cv/api/v1/ingest` | multipart | Ingest CV (PDF/DOCX/MD/gambar) → OpenSearch |
@@ -460,12 +464,12 @@ flowchart TD
 | NPWP | `npwp`, `NPWP` | Opsional | ✅ | Keyword NPWP ≥70% **dan** identitas (jika dicek) |
 | KK | `kk`, `kartu keluarga` | Opsional | ✅ | Keyword KK ≥70%; nama bisa dari baris tabel anggota |
 | Rekening | `rekening`, `rekening tabungan` | Opsional | ✅ | Ada `tabungan`, **tidak** ada `e-statement`; opsional `expected_bank` (`mandiri` \| `mas`) |
-| Mutasi | `mutasi`, `e-statement` | Tidak dipakai | ✅ | Ada `tabungan` **dan** `e-statement` (tanpa cek nama) |
+| Mutasi | `mutasi`, `e-statement` | Tidak dipakai | ✅ | Ada `tabungan` **dan** `e-statement`; `expected_bank` + `expected_account` wajib |
 | SKCK | `skck` | Opsional | ✅ | Ada `skck` / `kepolisian` |
 | BPJS KIS | `bpjs`, `bpjs kesehatan`, `kartu indonesia sehat` | **Disarankan wajib** | ✅ | Keyword KIS ≥70% **dan** identitas (jika nama diisi) |
 | BPJS TK | `bpjs_tk`, `bpjs ketenagakerjaan` | **Disarankan wajib** | ✅ | Keyword kartu TK ≥70% **dan** identitas (jika nama diisi) |
-| Kesanggupan BPJS | `bpjs_kesanggupan`, `kesanggupan bpjs` | **Disarankan wajib** | ✅ | Surat kesanggupan ≥70% **dan** identitas (jika nama diisi) |
-| JKN | `jkn`, `info peserta` | **Disarankan wajib** | ✅ | Ada `info peserta` **atau** `faskes` **dan** identitas ≥65 (jika nama diisi) |
+| Kesanggupan BPJS | `bpjs_kesanggupan`, `kesanggupan bpjs` | **Disarankan wajib** | ✅ | Surat kesanggupan ≥70%, **materai**, **dan** identitas (jika nama diisi) |
+| JKN | `jkn`, `info peserta` | **Disarankan wajib** | ✅ | Ada `info peserta` **atau** `faskes` **dan** identitas ≥65 (jika nama diisi). Status AKTIF/TIDAK AKTIF diekstrak, tidak memblokir |
 | Iuran JKN | `iuran`, `info iuran`, `iuran jkn` | **Disarankan wajib** | ✅ | Ada `info iuran` **dan** (salah satu keyword konten) **dan** identitas (modal tanpa nama: skip) |
 | Vaksinasi 1 | `vaksinasi_1`, `vaksinasi 1`, `vaksin dosis pertama` | **Disarankan wajib** | ✅ | Kartu/surat dosis 1 ≥70% **dan** identitas (jika nama diisi) |
 | Vaksinasi 2 | `vaksinasi_2`, `vaksinasi 2` | **Disarankan wajib** | ✅ | Kartu/surat dosis 2 ≥70% **dan** identitas (jika nama diisi) |
@@ -476,7 +480,7 @@ flowchart TD
 | Formulir lamaran | `formulir_lamaran`, `formulir lamaran pekerjaan` | Opsional | ✅ | Keyword lamaran pekerjaan ≥70% |
 | Surat lamaran | `surat_lamaran`, `surat lamaran` | Opsional | ✅ | Keyword surat lamaran ≥70% |
 | Pemadanan NPWP | `pemadanan_npwp`, `pemadanan npwp` | Opsional | ✅ | Keyword pemadanan/npwp ≥70% |
-| Surat keterangan kesehatan | `keterangan_kesehatan`, `keterangan kesehatan` | Opsional | ✅ | Keyword surat keterangan/kesehatan ≥70% |
+| Surat keterangan kesehatan | `keterangan_kesehatan`, `keterangan kesehatan` | Opsional | ✅ | Keyword ≥70%, nama (jika diisi), tertera SEHAT, tanggal dari dokumen (kadaluarsa hanya jika surat menulis sampai/durasi) |
 | CV | `cv`, `resume`, `curriculum vitae` | Disarankan (dimensi nama) | ❌ (match struktural) | **PDF/DOCX/MD/gambar** → ingest + match nama/pendidikan/pengalaman |
 | Foto Profil | `foto_profile`, `pas foto` | Tidak dipakai | ❌ | **JPEG/PNG/WebP** — 1 wajah + latar biru |
 
@@ -596,12 +600,25 @@ curl -X POST "https://checkinpro-ocr.web.id/api/v1/pipeline" \
 
 **Keyword wajib (keduanya):** `tabungan`, `e-statement`
 
-**Identitas:** `expected_name` **tidak** dicek untuk profil mutasi — hanya keyword dokumen.
+**Validasi bank + rekening (wajib keduanya):**
+
+| Payload | Wajib? |
+|---------|--------|
+| `expected_bank` | **Ya** — `mandiri` atau `mas` |
+| `expected_account` | **Ya** — nomor rekening 10–13 digit |
+
+**Identitas:** `expected_name` **tidak** dicek untuk profil mutasi.
+
+Pola filename benchmark: `mutasi rekening_{Nama}_{NoRek}.ext`
+
+`document_matched` = keyword dokumen OK **dan** `bank_pass` **dan** `account_pass`.
 
 ```bash
 curl -X POST "https://checkinpro-ocr.web.id/api/v1/pipeline" \
   -F "file=@Mutasi.jpg" \
-  -F "document_type=mutasi"
+  -F "document_type=mutasi" \
+  -F "expected_bank=mandiri" \
+  -F "expected_account=1560027756370"
 ```
 
 ---
@@ -621,9 +638,28 @@ curl -X POST "https://checkinpro-ocr.web.id/api/v1/pipeline" \
 
 ---
 
+### `keterangan_kesehatan`
+
+**Alias:** `keterangan kesehatan`, `surat keterangan kesehatan`, `surat sehat`
+
+**Keyword:** `surat keterangan`, `kesehatan`, `dokter`, `medis`
+
+**Validasi:**
+
+- Nama pemegang (jika `expected_name` diisi)
+- Surat harus menyatakan kondisi **SEHAT** (bukan “tidak sehat” / unfit)
+- Tanggal cek/dibuat diambil dari dokumen (tanda tangan, Tgl. Cetak, “pada pemeriksaan tanggal …”). Kadaluarsa **hanya** jika surat menulis “sampai dengan …” atau “berlaku N hari/minggu/bulan”. Tidak mengarang +90 hari.
+
+```bash
+curl -X POST "https://checkinpro-ocr.web.id/api/v1/pipeline" \
+  -F "file=@surat_sehat.jpg" \
+  -F "document_type=keterangan_kesehatan" \
+  -F "expected_name=Citra Amelia"
+```
+
 ---
 
-### `bpjs`
+---
 
 **Alias:** `bpjs kesehatan`, `kartu indonesia sehat`, `kis`, `kartu kis`
 
@@ -687,6 +723,8 @@ curl -X POST "https://checkinpro-ocr.web.id/api/v1/pipeline" \
 
 **Identitas:** Nama dari field `Nama Lengkap` / tanda tangan; dibandingkan dengan `expected_name` bila diisi.
 
+**Materai (wajib):** Stempel materai fisik (merah/keemasan) di area tanda tangan. Label kotak `Materai Rp10.000` tanpa stempel **tidak** lolos. Kode gagal: `bpjs_kesanggupan.stamp_missing`.
+
 **Keyword terlarang (exclusion):** `kartu indonesia sehat`, `ketenagakerjaan`
 
 ```bash
@@ -706,9 +744,11 @@ curl -X POST "https://checkinpro-ocr.web.id/api/v1/pipeline" \
 
 - `info peserta` **atau** `faskes`
 
-**Identitas:** Wajib dicek bila `expected_name` diisi — nama peserta di kartu Mobile JKN (biasanya huruf kapital) dibandingkan dengan referensi.
+**Identitas:** Wajib dicek bila `expected_name` diisi — nama peserta di kartu Mobile JKN (biasanya huruf kapital; boleh salah satu anggota keluarga).
 
-**Keyword terlarang (exclusion):** `info iuran`, `total tagihan`, `tidak memiliki tagihan pribadi`
+**Status (ekstraksi, bukan gate):** Status kartu peserta yang namanya cocok dikembalikan di `jkn_status_label` (`aktif` \| `tidak_aktif` \| `null`) dan `jkn_status_display` (`AKTIF` / `TIDAK AKTIF`). Tidak menggagalkan `document_matched`.
+
+**Keyword terlarang (exclusion):** `info iuran`, `total tagihan`, `tidak memiliki tagihan pribadi`, `kartu indonesia sehat`, `bpjs ketenagakerjaan`
 
 **Preprocess:** Screenshot aplikasi — isolasi kartu fisik dilewati (sama seperti mutasi/rekening).
 
@@ -1460,11 +1500,18 @@ Alur modular: **preprocess → OCR → validate-document** (3 request) jika tida
     "resize_scale": 2.0
   },
   "ocr": { "text": "...", "mode": "fast", "model": "PP-OCRv6" },
+  "document_matched": true,
+  "error_code": null,
+  "error_message": null,
+  "error_cases": [],
   "validation": {
     "document_profile_id": "ktp",
     "document_type_pass": true,
     "identity_pass": true,
     "document_matched": true,
+    "error_code": null,
+    "error_message": null,
+    "error_cases": [],
     "aggregate_min_pass_ratio": 0.7,
     "keywords": [ { "keyword_raw": "nik", "best_score": 95.0 } ],
     "explanation": {
@@ -1556,17 +1603,113 @@ Untuk `foto_profile`, `is_own_document` selalu `null` (identitas dari gambar bel
 
 ---
 
-## Kode error
+## Pesan error frontend (API spec)
 
-| HTTP | Situasi | Contoh `detail` |
-|------|---------|-----------------|
-| 400 | File kosong | `"File kosong."` |
-| 400 | `document_type` tidak dikenal | `{ "message": "...", "supported": ["foto_profile", "ktp", ...] }` |
-| 400 | OCR tidak menghasilkan teks (pipeline non-foto) | `"OCR tidak menghasilkan teks."` |
-| 400 | `ocr_text` kosong (validate-document) | `"ocr_text tidak boleh kosong."` |
-| 503 | Mistral belum dikonfigurasi | `{ "code": "MISTRAL_OCR_UNAVAILABLE", ... }` |
-| 503 | Paddle/OCR lokal belum siap | `{ "code": "OCR_INFERENCE_UNAVAILABLE", ... }` |
-| 503 | Subsistem CV / OpenSearch | `{ "code": "CV_SUBSYSTEM_UNAVAILABLE", ... }` atau detail OpenSearch |
+Dokumen **tidak lolos validasi tetap HTTP 200**. Jangan anggap 200 = valid.
+
+Swagger: [`/docs`](https://checkinpro-ocr.web.id/docs) · katalog: `GET /systems/validation/api/v1/error-catalog`
+
+### Field yang dibaca UI
+
+| Field | Tipe | Kapan | Tampilan |
+|-------|------|--------|----------|
+| `document_matched` / `valid` | boolean | HTTP 200 | `true` = lolos |
+| `error_code` | `string \| null` | gagal | kode tetap, mis. `ktp.name_mismatch` |
+| `error_message` | `string \| null` | gagal | **kalimat yang ditampilkan ke user** |
+| `error_cases` | `{ code, message }[]` | gagal | tampilkan semua `message` jika `length > 1` |
+
+Lokasi field (sama isinya):
+
+- `POST /api/v1/pipeline` → **root** dan `validation.*`
+- `POST /systems/validation/api/v1/validate-document` → **root**
+- `POST /systems/validation/api/v1/validate-foto-profile` → **root**
+
+HTTP **400/503** (file kosong, OCR down, dll.):
+
+```json
+{
+  "detail": {
+    "error_code": "pipeline.empty_file",
+    "error_message": "File kosong. Unggah gambar dokumen.",
+    "error_cases": [
+      { "code": "pipeline.empty_file", "message": "File kosong. Unggah gambar dokumen." }
+    ]
+  }
+}
+```
+
+Baca `detail.error_message`. Jangan compose `explanation.summary` / `verdict.summary` (teks debug, tidak stabil).
+
+### TypeScript
+
+```ts
+type UserErrorCase = { code: string; message: string };
+
+type ValidationErrors = {
+  error_code: string | null;
+  error_message: string | null;
+  error_cases: UserErrorCase[];
+};
+
+function uiError(res: { document_matched?: boolean; valid?: boolean } & ValidationErrors): string | null {
+  if (res.document_matched === true || res.valid === true) return null;
+  return res.error_message;
+}
+```
+
+```ts
+async function showPipelineError(res: Response, body: any) {
+  if (!res.ok) {
+    return body?.detail?.error_message ?? "Gagal memproses dokumen.";
+  }
+  if (body.document_matched === false) {
+    const extra = (body.error_cases ?? [])
+      .slice(1)
+      .map((c: UserErrorCase) => c.message);
+    return [body.error_message, ...extra].filter(Boolean).join(" ");
+  }
+  return null;
+}
+```
+
+### Contoh gagal (HTTP 200)
+
+```json
+{
+  "success": true,
+  "document_matched": false,
+  "error_code": "rekening.name_mismatch",
+  "error_message": "Nama pemilik rekening tidak cocok.",
+  "error_cases": [
+    { "code": "rekening.name_mismatch", "message": "Nama pemilik rekening tidak cocok." }
+  ],
+  "validation": {
+    "document_matched": false,
+    "error_code": "rekening.name_mismatch",
+    "error_message": "Nama pemilik rekening tidak cocok.",
+    "error_cases": [
+      { "code": "rekening.name_mismatch", "message": "Nama pemilik rekening tidak cocok." }
+    ]
+  }
+}
+```
+
+Daftar lengkap kode per dokumen ada di `GET /systems/validation/api/v1/error-catalog` (`catalog` + `by_document`).
+
+---
+
+## Kode error HTTP
+
+| HTTP | Situasi | `detail.error_code` | `detail.error_message` |
+|------|---------|---------------------|------------------------|
+| 400 | File kosong | `pipeline.empty_file` | File kosong. Unggah gambar dokumen. |
+| 400 | `document_type` kosong | `pipeline.empty_document_type` | Jenis dokumen wajib diisi. |
+| 400 | `document_type` tidak dikenal | `pipeline.unknown_document_type` | Jenis dokumen tidak dikenali. |
+| 400 | Rekening/mutasi tanpa `expected_bank` | `pipeline.missing_expected_bank` | Bank referensi wajib diisi (mandiri atau mas). |
+| 400 | Mutasi tanpa norek | `pipeline.missing_expected_account` | Nomor rekening referensi wajib diisi. |
+| 400 | OCR tidak menghasilkan teks | `pipeline.empty_ocr` | Teks pada dokumen tidak terbaca. Foto ulang dengan lebih jelas. |
+| 400 | `ocr_text` kosong (validate-document) | `pipeline.missing_ocr_text` | Teks OCR kosong. |
+| 503 | OCR/Mistral/CV down | `pipeline.ocr_unavailable` / `pipeline.internal` | Layanan OCR sedang tidak tersedia. / Terjadi kesalahan sistem… |
 
 ---
 
@@ -1605,6 +1748,8 @@ curl -s http://172.21.15.218:8081/v1/models | jq '.data[].id'
 |-----|---------|--------|
 | `OCR_DEVICE` | `gpu` | Device PaddleOCR: `gpu` / `gpu:0` / `cpu`. Default GPU; fallback CPU jika CUDA tidak siap |
 | `OCR_DEVICE_FALLBACK` | `1` | `0` = gagal jika GPU diminta tetapi tidak tersedia |
+| `OCR_REMOTE_BASE_URL` | — | Jika diisi (mis. `https://checkinpro-ocr.web.id`), OCR dijalankan di server itu; validasi tetap lokal |
+| `OCR_REMOTE_TIMEOUT_S` | `120` | Timeout HTTP ke OCR remote |
 | `pp_ocr_tier` (query) | `medium` | `balanced` \| `medium` \| `small` \| `tiny` |
 
 ### Mistral OCR (opsional, `ocr_mode=mistral`)
