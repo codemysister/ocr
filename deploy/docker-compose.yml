@@ -64,6 +64,12 @@ services:
     volumes:
       - paddle-models:/root/.paddlex
       - ocr-logs:/app/logs
+    healthcheck:
+      test: ["CMD", "python3", "scripts/docker_healthcheck.py"]
+      interval: 30s
+      timeout: 10s
+      start_period: 120s
+      retries: 3
     restart: unless-stopped
 
 volumes:

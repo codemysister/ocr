@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import APIRouter, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import FileResponse, JSONResponse
 
@@ -19,7 +19,8 @@ from systems.ocr.runtime_hint import (
 )
 from systems.ocr.fast_runner import list_pp_ocr_tiers, run_paddleocr_fast
 from systems.ocr.mistral_runner import run_mistral_ocr
-from systems.ocr.vl_runner import run_paddleocr_vl
+from systems.ocr.remote_client import ocr_remote_base_url, ocr_remote_enabled, run_remote_ocr_fast, run_remote_ocr_mistral, run_remote_ocr_vl
+from systems.ocr.vl_runner import run_paddleocr_vl, run_paddleocr_vl_ktp
 from systems.observability.last_tuning_log import log_safe_failure, summarize_text_fields, write_last_tuning_log
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -40,7 +41,8 @@ def ocr_health() -> dict:
         "api_fast": "/systems/ocr/api/v1/ocr-fast",
         "api_mistral": "/systems/ocr/api/v1/ocr-mistral",
         "paddlepaddle_importable": paddle_ok,
-        "inference_ready": paddle_ok,
+        "inference_ready": paddle_ok or ocr_remote_enabled(),
+        "ocr_remote_base_url": ocr_remote_base_url(),
         "paddle_device": resolve_paddle_device() if paddle_ok else None,
         "paddle_cuda": cuda,
         "health_vs_inference": OCR_HEALTH_VS_INFERENCE,
@@ -114,24 +116,41 @@ def ocr_page() -> FileResponse:
 
 @router.post("/api/v1/ocr")
 async def api_ocr_vl(
+    request: Request,
     file: UploadFile = File(..., description="Gambar masukan (JPEG/PNG/WebP, dll.)"),
     full_json: bool = Query(
         False,
         description="Jika true, lampirkan objek result_json lengkap (dapat besar).",
     ),
+    extract: str | None = Query(
+        None,
+        description="extract=ktp: ekstraksi NIK/nama/status tanpa deteksi layout.",
+    ),
 ) -> JSONResponse:
     """Respons berisi `timing` (detik): decode, get_pipeline, predict, restructure_pages, total."""
     path = "/systems/ocr/api/v1/ocr"
-    sub = "ocr_vl"
     raw = await file.read()
     if not raw:
         log_safe_failure(
-            subsystem=sub, method="POST", path=path, http_status=400, detail="File kosong."
+            subsystem="ocr_vl", method="POST", path=path, http_status=400, detail="File kosong."
         )
         raise HTTPException(status_code=400, detail="File kosong.")
 
+    referer = (request.headers.get("referer") or "").lower()
+    want_ktp = (extract or "").strip().lower() in {"ktp", "vl-ktp"} or "/paddle-vl" in referer
+    if want_ktp:
+        return await _ocr_vl_ktp_response(raw, path="/systems/ocr/api/v1/ocr", sub="ocr_vl_ktp")
+
+    sub = "ocr_vl"
     try:
-        payload = run_paddleocr_vl(raw, include_full_json=full_json)
+        if ocr_remote_enabled():
+            payload = run_remote_ocr_vl(
+                raw,
+                include_full_json=full_json,
+                filename=file.filename or "upload.jpg",
+            )
+        else:
+            payload = run_paddleocr_vl(raw, include_full_json=full_json)
     except ValueError as e:
         log_safe_failure(subsystem=sub, method="POST", path=path, http_status=400, detail=str(e))
         raise HTTPException(status_code=400, detail=str(e)) from e
@@ -169,6 +188,57 @@ async def api_ocr_vl(
     return JSONResponse(content=jsonable_encoder(payload))
 
 
+async def _ocr_vl_ktp_response(raw: bytes, *, path: str, sub: str) -> JSONResponse:
+    try:
+        payload = run_paddleocr_vl_ktp(raw)
+    except ValueError as e:
+        log_safe_failure(subsystem=sub, method="POST", path=path, http_status=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except RuntimeError as e:
+        det = {
+            "code": "OCR_VL_KTP_UNAVAILABLE",
+            "message": str(e),
+            "engine": "paddleocr-vl-ktp",
+            "hint": (
+                "Tes KTP tidak memakai deteksi layout. Di Mac tanpa Paddle, set "
+                "OCR_REMOTE_BASE_URL ke server GPU, OCR_VL_SERVER_URL, atau LLM_FALLBACK_BASE_URL."
+            ),
+        }
+        log_safe_failure(subsystem=sub, method="POST", path=path, http_status=503, detail=det)
+        raise HTTPException(status_code=503, detail=det) from e
+    except Exception as e:
+        log_safe_failure(subsystem=sub, method="POST", path=path, http_status=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+    write_last_tuning_log(
+        {
+            "success": True,
+            "subsystem": sub,
+            "method": "POST",
+            "path": path,
+            "input_bytes": len(raw),
+            "result": summarize_text_fields(payload),
+        }
+    )
+    return JSONResponse(content=jsonable_encoder(payload))
+
+
+@router.post("/api/v1/ocr-vl-ktp")
+async def api_ocr_vl_ktp(
+    file: UploadFile = File(..., description="Gambar KTP (JPEG/PNG/WebP)"),
+) -> JSONResponse:
+    """Ekstraksi KTP lewat prompt tetap pada model PaddleOCR-VL."""
+    path = "/systems/ocr/api/v1/ocr-vl-ktp"
+    sub = "ocr_vl_ktp"
+    raw = await file.read()
+    if not raw:
+        log_safe_failure(
+            subsystem=sub, method="POST", path=path, http_status=400, detail="File kosong."
+        )
+        raise HTTPException(status_code=400, detail="File kosong.")
+    return await _ocr_vl_ktp_response(raw, path=path, sub=sub)
+
+
 @router.post("/api/v1/ocr-fast")
 async def api_ocr_fast(
     file: UploadFile = File(..., description="Gambar masukan (JPEG/PNG/WebP, dll.)"),
@@ -191,7 +261,14 @@ async def api_ocr_fast(
         raise HTTPException(status_code=400, detail="File kosong.")
 
     try:
-        payload = run_paddleocr_fast(raw, pp_ocr_tier=pp_ocr_tier.strip() or "medium")
+        if ocr_remote_enabled():
+            payload = run_remote_ocr_fast(
+                raw,
+                pp_ocr_tier=pp_ocr_tier.strip() or "medium",
+                filename=file.filename or "upload.jpg",
+            )
+        else:
+            payload = run_paddleocr_fast(raw, pp_ocr_tier=pp_ocr_tier.strip() or "medium")
     except ValueError as e:
         log_safe_failure(subsystem=sub, method="POST", path=path, http_status=400, detail=str(e))
         raise HTTPException(status_code=400, detail=str(e)) from e
@@ -259,7 +336,10 @@ async def api_ocr_mistral(
         )
 
     try:
-        payload = run_mistral_ocr(raw, table_format=tf)
+        if ocr_remote_enabled() and not tf:
+            payload = run_remote_ocr_mistral(raw, filename=file.filename or "upload.jpg")
+        else:
+            payload = run_mistral_ocr(raw, table_format=tf)
     except ValueError as e:
         log_safe_failure(subsystem=sub, method="POST", path=path, http_status=400, detail=str(e))
         raise HTTPException(status_code=400, detail=str(e)) from e

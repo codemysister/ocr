@@ -86,7 +86,21 @@ def _normalize_ocr_device(raw: str) -> str:
     lowered = device.lower()
     if lowered in ("gpu", "cuda"):
         return "gpu:0"
+    if lowered in ("cpu",):
+        return "cpu"
     return device
+
+
+def _default_requested_device() -> str:
+    raw = (os.environ.get("OCR_DEVICE") or "").strip()
+    if raw:
+        return raw
+    import sys
+
+    # macOS: wheel Paddle hampir selalu CPU; default gpu → Place(undefined:0) di VL.
+    if sys.platform == "darwin":
+        return "cpu"
+    return "gpu"
 
 
 def nvidia_gpu_status() -> dict[str, Any]:
@@ -118,7 +132,7 @@ def paddle_gpu_healthcheck() -> dict[str, Any]:
     """Ringkasan: GPU terdeteksi vs device yang dipakai PaddleOCR."""
     cuda = paddle_cuda_status()
     nvidia = nvidia_gpu_status()
-    requested = _normalize_ocr_device(os.environ.get("OCR_DEVICE") or "gpu")
+    requested = _normalize_ocr_device(_default_requested_device())
     paddle_ok = bool(cuda.get("importable"))
     wants_gpu = requested.lower().startswith("gpu")
     using_gpu = bool(wants_gpu and cuda.get("gpu_ready"))
@@ -195,7 +209,7 @@ def resolve_paddle_device() -> str:
     jika GPU diminta tetapi tidak tersedia.
     """
     global _resolved_paddle_device
-    requested = _normalize_ocr_device(os.environ.get("OCR_DEVICE") or "gpu")
+    requested = _normalize_ocr_device(_default_requested_device())
     if _resolved_paddle_device is not None:
         cached = _resolved_paddle_device
         if str(cached).lower().startswith("gpu") or not requested.lower().startswith("gpu"):
@@ -232,6 +246,31 @@ def resolve_paddle_device() -> str:
         cuda.get("cuda_device_count"),
     )
     return _resolved_paddle_device
+
+
+def apply_paddle_device(device: str | None = None) -> str:
+    """
+    Set place Paddle sebelum inisialisasi pipeline.
+
+    Tanpa ini, PaddleOCR-VL memanggil is_bfloat16_supported(Place(undefined:0))
+    dan gagal (bukan CUDAPlace/CPUPlace).
+    """
+    resolved = (device or "").strip() or resolve_paddle_device()
+    target = "cpu"
+    if str(resolved).lower().startswith("gpu"):
+        target = resolved if ":" in str(resolved) else "gpu:0"
+    try:
+        import paddle
+
+        setter = getattr(paddle, "set_device", None)
+        if setter is None:
+            setter = getattr(paddle.device, "set_device", None)
+        if setter is not None:
+            setter(target)
+        logger.info("paddle.set_device(%s)", target)
+    except Exception as exc:
+        logger.warning("paddle.set_device(%s) gagal: %s", target, exc)
+    return resolved
 
 
 def ocr_fast_unavailable_detail(*, exc: BaseException | None = None) -> dict[str, Any]:

@@ -711,6 +711,175 @@ def test_keterangan_kesehatan_sehat_and_expiry() -> None:
     assert abdullah["health_expiry_pass"] is True
 
 
+def test_format_id_date_for_benchmark() -> None:
+    from systems.validation.skck_validity import format_id_date
+
+    assert format_id_date("2026-05-06") == "6 Mei 2026"
+    assert format_id_date("2026-06-15") == "15 Juni 2026"
+    assert format_id_date(None) is None
+
+
+def test_health_letter_ai_synthetic_ocr_and_url() -> None:
+    from datetime import date
+
+    from systems.validation.keterangan_kesehatan import evaluate_keterangan_kesehatan_gates
+    from systems.validation.keterangan_kesehatan_ai import (
+        _synthetic_ocr,
+        assert_allowed_llm_url,
+        health_letter_user_prompt,
+    )
+
+    blob = _synthetic_ocr(
+        {
+            "holder_name": "Taliyah",
+            "health_conclusion": "sehat",
+            "city": "Cidempet",
+            "issued_date": "2026-05-06",
+            "issued_date_raw": "Cidempet, 06 Mei 2026",
+            "doctor_name": "dr. Aziz",
+            "clinic_name": "Puskesmas Cidempet",
+        }
+    )
+    gate = evaluate_keterangan_kesehatan_gates(
+        blob, profile_id="keterangan_kesehatan", today=date(2026, 6, 20)
+    )
+    assert gate and gate["exam_date"] == "2026-05-06"
+    assert gate["health_status_pass"] is True
+    assert "Taliyah" in health_letter_user_prompt(expected_name="Taliyah")
+    assert assert_allowed_llm_url("http://172.21.13.26:8080/v1").endswith("/v1")
+    try:
+        assert_allowed_llm_url("http://example.com/v1")
+        raise AssertionError("public url must be rejected")
+    except ValueError:
+        pass
+
+    from systems.validation.llm_fallback import _assistant_text
+
+    empty_msg = {"role": "assistant", "content": "", "reasoning_content": '{"holder_name":"Aiga"}'}
+    assert '"holder_name"' in _assistant_text(empty_msg)
+    parts_msg = {"content": [{"type": "text", "text": '{"ok":true}'}]}
+    assert _assistant_text(parts_msg) == '{"ok":true}'
+
+
+def test_pipeline_health_letter_skips_paddle_uses_ornith() -> None:
+    from app import pipeline_runner as pr
+    from systems.validation.keterangan_kesehatan_ai import analyze_health_letter_image as real_ai
+
+    calls = {"ocr_inner": 0}
+
+    def fake_ai(image_bytes, **kwargs):
+        return {
+            "error": None,
+            "extraction": {
+                "is_health_certificate": True,
+                "holder_name": "ANGGUN RAMADHANI",
+                "health_conclusion": "sehat",
+                "issued_date": "2026-06-04",
+                "issued_date_raw": "Bekasi, 04 Juni 2026",
+                "document_type_label": "Surat Keterangan Sehat",
+            },
+            "validation": {
+                "issued_date": "2026-06-04",
+                "synthetic_ocr": (
+                    "SURAT KETERANGAN KESEHATAN\nDokter: dr. A\n"
+                    "Nama: ANGGUN RAMADHANI\n"
+                    "Berdasarkan hasil pemeriksaan, dinyatakan SEHAT.\n"
+                    "Bekasi, 04 Juni 2026\nDokter pemeriksa\n"
+                ),
+                "health_status_pass": True,
+                "health_expiry_pass": True,
+            },
+            "llm": {"model": "ornith-1.5-9b", "base_url": "http://172.21.13.26:8080/v1"},
+            "raw_content": "{}",
+        }
+
+    real_ocr = pr._run_ocr_inner
+
+    def counting_ocr(*args, **kwargs):
+        calls["ocr_inner"] += 1
+        return real_ocr(*args, **kwargs)
+
+    pr.analyze_health_letter_image = fake_ai
+    pr._run_ocr_inner = counting_ocr
+    try:
+        png = (
+            b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+            b"\x08\x02\x00\x00\x00\x90wS\xde\x00\x00\x00\x0cIDATx\x9cc\xf8\x0f\x00"
+            b"\x00\x01\x01\x00\x05\x18\xd8N\x00\x00\x00\x00IEND\xaeB`\x82"
+        )
+        result = pr.run_pipeline_bytes(
+            png,
+            document_type="keterangan_kesehatan",
+            expected_name="ANGGUN RAMADHANI",
+            filename="keterangan kesehatan_ANGGUN RAMADHANI_3275045610060008.jpg",
+        )
+        assert result.ok is True
+        assert result.document_matched is True
+        assert calls["ocr_inner"] == 0
+        assert result.payload["ocr_engine"] == "ornith"
+        assert result.payload["ocr"]["mode"] == "ornith_health_ai"
+        assert result.payload["validation"]["health_exam_date"] == "2026-06-04"
+    finally:
+        pr.analyze_health_letter_image = real_ai
+        pr._run_ocr_inner = real_ocr
+
+
+
+def test_keterangan_kesehatan_reads_ocr_dates() -> None:
+    from systems.validation.keterangan_kesehatan import extract_health_check_dates
+
+    visus = extract_health_check_dates(
+        "Catatan: Visus ODS : 6/6\nBekasi, 11 Juni 2026\nYang memeriksa"
+    )
+    assert visus["exam_date"] == "2026-06-11"
+
+    taliyah = extract_health_check_dates(
+        "Cidempet 06 WE! ..202\nDokter UPTD Puskesmas Cidempet"
+    )
+    assert taliyah["exam_date"] == "2026-05-06"
+
+    tita = extract_health_check_dates(
+        "Bekasi, 15 / 6 / 20 26\nDokter yang memeriksa"
+    )
+    assert tita["exam_date"] == "2026-06-15"
+
+    spaced = extract_health_check_dates("15 16 20 26 Bekasi, Dokter pemeriksa")
+    assert spaced["exam_date"] == "2026-06-15"
+
+    glued = extract_health_check_dates("Pegagan, 221052026 mmHg")
+    assert glued["exam_date"] == "2026-05-22"
+
+    slash = extract_health_check_dates("15 / 06 12026 Bekasi")
+    assert slash["exam_date"] == "2026-06-15"
+
+    taliyah_scattered = extract_health_check_dates(
+        "Demikian surat keterangan ini kami buat.\n"
+        "Catatan :\nWE!\n..202\nCidempet 06\n:55 cm\n"
+        "okter UPTD Puskesmas Cidempet\n"
+    )
+    assert taliyah_scattered["exam_date"] == "2026-05-06"
+
+    tita_scattered = extract_health_check_dates(
+        "Pemeriksaan Khusus\n154\nTinggi Badan\ncm\n15\n16\n"
+        "dr. Elira\n6.9 kg\nBerat Badan\n20\nPenglihatan\n"
+        "Dokter yang memeriksa\n"
+    )
+    assert tita_scattered["exam_date"] == "2026-06-15"
+
+    adinda_glued = extract_health_check_dates(
+        "Berat Badan\nks\n1516\n20\n26\nPenglihatan\nDokter yang memeriksa"
+    )
+    assert adinda_glued["exam_date"] == "2026-06-15"
+
+    putri_106 = extract_health_check_dates("15\n106 1 2026\nBekasi,\nDokter Pemeriksa")
+    assert putri_106["exam_date"] == "2026-06-15"
+
+    jahra_roman = extract_health_check_dates(
+        "NO. SK5-03.\n15\nVI...\n1....2006\nKesimpulan SEHAT\nKUSUHABEDIK2026"
+    )
+    assert jahra_roman["exam_date"] == "2026-06-15"
+
+
 def test_user_error_messages_per_case() -> None:
     rekening_name = validate_document_ocr(
         _LIVIN_NO_NAME,
@@ -1293,6 +1462,7 @@ if __name__ == "__main__":
     test_bpjs_kesanggupan_requires_meterai()
     test_bpjs_kesanggupan_red_meterai_on_dataset_images()
     test_keterangan_kesehatan_sehat_and_expiry()
+    test_keterangan_kesehatan_reads_ocr_dates()
     test_user_error_messages_per_case()
     test_jkn_extracts_aktif_status_without_blocking()
     test_jkn_wrapped_and_pandawa_and_nik_fallback()

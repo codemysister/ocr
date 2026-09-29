@@ -225,11 +225,16 @@
       → OCR (pilihan model di bawah)
       → validasi jenis dokumen &amp; nama
       (<code class="endpoint">POST /systems/validation/api/v1/validate-document</code>).
-      Default: <strong>PP-OCRv6</strong> lokal (<code>ocr_mode=fast</code>). Alternatif: Mistral cloud atau PaddleOCR-VL.
+      Default: <strong>PP-OCRv6</strong> (<code>ocr_mode=fast</code>).
+      Jika server ini memakai <code>OCR_REMOTE_BASE_URL</code> dan <code>OCR_REMOTE_ENABLED=1</code>,
+      <strong>hanya model OCR</strong> yang dipanggil ke server itu;
+      aturan nama, Helper/BELUM KAWIN, dan gate dokumen tetap dijalankan di lokal.
+      Alternatif: PaddleOCR-VL atau Mistral cloud.
       Untuk <strong>foto_profile</strong>: validasi gambar saja (wajah + latar biru) — tanpa OCR.
       Untuk <strong>cv</strong>: ingest ke index pencarian + opsional hybrid search — tanpa validasi dokumen.
     </p>
-    <p class="nav-top"><a href="/">← Beranda platform</a> · <a href="/healthcheck">Healthcheck GPU</a> · <a href="/systems/preprocessing/">Preprocessing saja</a> · <a href="/systems/ocr/">OCR saja</a> · <a href="/systems/validation/">Validasi saja</a></p>
+    <p id="ocrRemoteBanner" class="hint" style="display:none;margin-top:0.5rem;"></p>
+    <p class="nav-top"><a href="/">← Beranda platform</a> · <a href="/dataset-test">Dataset benchmark</a> · <a href="/health-letter-ai">OCR AI surat kesehatan</a> · <a href="/dataset-failures">Data gagal</a> · <a href="/dataset-successes">Data berhasil</a> · <a href="/healthcheck">Healthcheck GPU</a> · <a href="/systems/preprocessing/">Preprocessing saja</a> · <a href="/systems/ocr/">OCR saja</a> · <a href="/systems/validation/">Validasi saja</a></p>
   </header>
   <main>
     <section class="panel">
@@ -263,23 +268,39 @@
       <label class="block" for="expected" id="expectedLabel">Nama referensi (opsional)</label>
       <textarea id="expected" placeholder="Kosongkan bila hanya mengecek keyword profil dokumen."></textarea>
 
+      <div id="jobPositionRow">
+        <label class="block" for="jobPosition" style="margin-top: 0.75rem;">Posisi kerja (KTP)</label>
+        <select id="jobPosition">
+          <option value="">— tidak dicek —</option>
+          <option value="helper">Helper (status perkawinan wajib BELUM KAWIN)</option>
+        </select>
+        <p class="hint" id="jobPositionHint" style="margin-top: 0.35rem;">Khusus KTP: Helper hanya lolos jika status perkawinan BELUM KAWIN.</p>
+      </div>
+
       <div id="bankRow">
-        <label class="block" for="expectedBank" id="expectedBankLabel" style="margin-top: 0.75rem;">Bank (rekening)</label>
+        <label class="block" for="expectedBank" id="expectedBankLabel" style="margin-top: 0.75rem;">Bank (rekening / mutasi)</label>
         <select id="expectedBank" disabled>
           <option value="">— pilih bank —</option>
           <option value="mandiri">Bank Mandiri</option>
           <option value="mas">Bank MAS</option>
         </select>
-        <p class="hint" id="bankHint" style="margin-top: 0.35rem;">Pilih jenis dokumen « Rekening tabungan » di atas untuk mengaktifkan.</p>
+        <p class="hint" id="bankHint" style="margin-top: 0.35rem;">Pilih jenis dokumen Rekening atau Mutasi di atas untuk mengaktifkan.</p>
+      </div>
+      <div id="accountRow">
+        <label class="block" for="expectedAccount" id="expectedAccountLabel" style="margin-top: 0.75rem;">Nomor rekening (mutasi wajib)</label>
+        <input type="text" id="expectedAccount" placeholder="1560027601493" disabled />
       </div>
 
       <div id="ocrSection">
       <label class="block">Engine OCR</label>
       <div class="mode-row" role="radiogroup" aria-label="Engine OCR">
         <label><input type="radio" name="ocrMode" value="mistral" /> Mistral (cloud)</label>
-        <label><input type="radio" name="ocrMode" value="fast" checked /> PP-OCRv6 (lokal, default)</label>
+        <label><input type="radio" name="ocrMode" value="fast" checked /> PP-OCRv6 (default)</label>
         <label><input type="radio" name="ocrMode" value="vl" /> PaddleOCR-VL-1.6</label>
       </div>
+      <p class="hint" id="healthAiHint" style="display:none;margin-top:0.5rem;">
+        Surat keterangan kesehatan memakai Ornith AI (<code>172.21.13.26:8080</code>) sebagai OCR wajib — bukan PP-OCR/Paddle.
+      </p>
       <div id="tierRow" class="row two" style="display: none; margin-top: 0.75rem;">
         <div>
           <label class="block" for="ppOcrTier">Tier PP-OCRv6</label>
@@ -337,7 +358,11 @@
     const docInput = document.getElementById("doc");
     const expectedInputEl = document.getElementById("expected");
     const expectedBankEl = document.getElementById("expectedBank");
+    const expectedAccountEl = document.getElementById("expectedAccount");
+    const jobPositionEl = document.getElementById("jobPosition");
+    const jobPositionRowEl = document.getElementById("jobPositionRow");
     const bankRowEl = document.getElementById("bankRow");
+    const accountRowEl = document.getElementById("accountRow");
     const bankHintEl = document.getElementById("bankHint");
     const runBtn = document.getElementById("run");
     const statusEl = document.getElementById("status");
@@ -352,6 +377,8 @@
     const stIngest = document.getElementById("st-ingest");
     const stCvSearch = document.getElementById("st-cvsearch");
     const tierRow = document.getElementById("tierRow");
+    const healthAiHint = document.getElementById("healthAiHint");
+    const ocrSection = document.getElementById("ocrSection");
     const ppOcrTier = document.getElementById("ppOcrTier");
     const ocrSection = document.getElementById("ocrSection");
     const expectedLabel = document.getElementById("expectedLabel");
@@ -363,8 +390,37 @@
     const fileLabel = document.getElementById("fileLabel");
     const fileInputEl = document.getElementById("file");
 
+    let ocrRemoteEnabled = false;
+
+    fetch("/health")
+      .then((r) => r.json())
+      .then((h) => {
+        const remote = h.ocr_remote_base_url;
+        ocrRemoteEnabled = !!(h.ocr_remote_enabled && remote);
+        const el = document.getElementById("ocrRemoteBanner");
+        if (remote && el) {
+          el.style.display = "block";
+          el.textContent =
+            "Model OCR: " + remote +
+            " — logika validasi (nama, Helper, jenis dokumen) di server lokal ini.";
+        }
+        const mode = h.ocr_default_mode;
+        if (mode === "fast" || mode === "vl" || mode === "mistral") {
+          const radio = document.querySelector('input[name="ocrMode"][value="' + mode + '"]');
+          if (radio) {
+            radio.checked = true;
+            syncTierRow();
+          }
+        }
+      })
+      .catch(() => {});
+
     function isFotoProfile(docType) {
       return (docType || "").trim() === "foto_profile";
+    }
+
+    function isKtpProfile(docType) {
+      return (docType || "").trim() === "ktp";
     }
 
     function isCvProfile(docType) {
@@ -375,24 +431,48 @@
       return (docType || "").trim() === "rekening";
     }
 
+    function isMutasiProfile(docType) {
+      return (docType || "").trim() === "mutasi";
+    }
+
+    function isHealthLetterProfile(docType) {
+      return (docType || "").trim() === "keterangan_kesehatan";
+    }
+
+    function isBankDocProfile(docType) {
+      return isRekeningProfile(docType) || isMutasiProfile(docType);
+    }
+
     function syncUiForDocType() {
       const foto = isFotoProfile(docInput.value);
       const cv = isCvProfile(docInput.value);
       const rekening = isRekeningProfile(docInput.value);
+      const mutasi = isMutasiProfile(docInput.value);
+      const health = isHealthLetterProfile(docInput.value);
+      const bankDoc = isBankDocProfile(docInput.value);
       const special = foto || cv;
+      if (healthAiHint) healthAiHint.style.display = health ? "" : "none";
+      document.querySelectorAll('input[name="ocrMode"]').forEach((el) => {
+        el.disabled = health;
+      });
       ocrSection.classList.toggle("hidden-for-foto", special);
       panelOcr.classList.toggle("hidden-for-foto", special);
       expectedLabel.classList.toggle("hidden-for-foto", foto);
       expectedInputEl.classList.toggle("hidden-for-foto", foto);
-      expectedBankEl.disabled = !rekening;
-      if (rekening) {
-        bankHintEl.textContent = "Pilih bank sesuai data HR (Mandiri atau MAS).";
+      expectedBankEl.disabled = !bankDoc;
+      expectedAccountEl.disabled = !bankDoc;
+      if (bankDoc) {
+        bankHintEl.textContent = mutasi
+          ? "Mutasi: bank + nomor rekening wajib cocok di OCR."
+          : "Rekening: pilih bank; nama atau nomor rekening (salah satu cukup).";
       } else if (cv || foto) {
-        bankHintEl.textContent = "Hanya untuk jenis dokumen Rekening tabungan.";
+        bankHintEl.textContent = "Hanya untuk jenis dokumen Rekening / Mutasi.";
       } else {
-        bankHintEl.textContent = "Pilih jenis dokumen « Rekening tabungan » di atas untuk mengaktifkan.";
+        bankHintEl.textContent = "Pilih jenis dokumen Rekening atau Mutasi di atas untuk mengaktifkan.";
       }
       bankRowEl.style.display = cv || foto ? "none" : "";
+      accountRowEl.style.display = cv || foto ? "none" : "";
+      jobPositionRowEl.style.display = isKtpProfile(docInput.value) ? "" : "none";
       stPrep.style.display = special ? "none" : "";
       stOcr.style.display = special ? "none" : "";
       stVal.style.display = special ? "none" : "";
@@ -408,6 +488,15 @@
           "cv: ingest + match nama / pendidikan / pengalaman (keyword wajib: pendidikan, experience).";
         previewTitle.textContent = "File CV";
         jsonTitle.textContent = "Hasil ingest & match";
+      } else if (mutasi) {
+        fileLabel.textContent = "Gambar / screenshot mutasi";
+        fileInputEl.accept = "image/*";
+        expectedLabel.textContent = "Nama pemilik (opsional, tidak divalidasi)";
+        expectedInputEl.placeholder = "Opsional — mutasi tidak memvalidasi nama.";
+        pipelineHint.textContent =
+          "mutasi: OCR + tabungan & e-statement; bank + nomor rekening wajib.";
+        previewTitle.textContent = "Gambar mutasi";
+        jsonTitle.textContent = "JSON validasi (mentah)";
       } else if (rekening) {
         fileLabel.textContent = "Gambar / screenshot rekening";
         fileInputEl.accept = "image/*";
@@ -416,6 +505,15 @@
         pipelineHint.textContent =
           "rekening: OCR + keyword tabungan; pilih bank Mandiri/MAS untuk validasi bank.";
         previewTitle.textContent = "Gambar rekening";
+        jsonTitle.textContent = "JSON validasi (mentah)";
+      } else if (health) {
+        fileLabel.textContent = "Gambar surat keterangan kesehatan";
+        fileInputEl.accept = "image/*";
+        expectedLabel.textContent = "Nama referensi";
+        expectedInputEl.placeholder = "Nama di surat — divalidasi oleh Ornith AI.";
+        pipelineHint.textContent =
+          "keterangan_kesehatan: OCR wajib Ornith AI (bukan Paddle). Ekstraksi + validasi SEHAT dan tanggal dibuat.";
+        previewTitle.textContent = "Gambar surat";
         jsonTitle.textContent = "JSON validasi (mentah)";
       } else if (foto) {
         fileLabel.textContent = "Gambar dokumen";
@@ -433,6 +531,7 @@
         previewTitle.textContent = "Gambar setelah preprocess";
         jsonTitle.textContent = "JSON validasi (mentah)";
       }
+      syncTierRow();
     }
 
     function selectedMode() {
@@ -441,7 +540,8 @@
     }
 
     function syncTierRow() {
-      tierRow.style.display = selectedMode() === "fast" ? "" : "none";
+      const health = isHealthLetterProfile(docInput.value);
+      tierRow.style.display = !health && selectedMode() === "fast" ? "" : "none";
     }
 
     document.querySelectorAll('input[name="ocrMode"]').forEach((el) => {
@@ -844,36 +944,46 @@
       }
 
       stPrep.classList.add("run");
-      const fdPre = new FormData();
-      fdPre.append("file", f);
-      fdPre.append("document_type", document_type);
+      let ocrFile = f;
+      let preJson = { mime: f.type || "image/jpeg", width: "?", height: "?" };
 
       try {
-        const rPre = await fetch("/api/v1/preprocess?format=json", {
-          method: "POST",
-          body: fdPre,
-        });
-        const preJson = await rPre.json().catch(() => ({}));
-        if (!rPre.ok) {
-          const d = preJson.detail;
-          throw new Error("Preprocess: " + formatApiDetail(d, preJson));
-        }
-        stPrep.classList.remove("run");
-        stPrep.classList.add("done");
+        if (ocrRemoteEnabled) {
+          showPreviewFromBlob(f, "Gambar asli (OCR remote)");
+          stPrep.classList.remove("run");
+          stPrep.classList.add("done");
+        } else {
+          const fdPre = new FormData();
+          fdPre.append("file", f);
+          fdPre.append("document_type", document_type);
 
-        if (preObjectUrl) URL.revokeObjectURL(preObjectUrl);
-        const blob = base64ToBlob(preJson.image_base64, preJson.mime || "image/png");
-        preObjectUrl = URL.createObjectURL(blob);
-        previewPre.innerHTML = "";
-        const img = document.createElement("img");
-        img.src = preObjectUrl;
-        img.alt = "Setelah preprocess";
-        previewPre.appendChild(img);
+          const rPre = await fetch("/api/v1/preprocess?format=json", {
+            method: "POST",
+            body: fdPre,
+          });
+          preJson = await rPre.json().catch(() => ({}));
+          if (!rPre.ok) {
+            const d = preJson.detail;
+            throw new Error("Preprocess: " + formatApiDetail(d, preJson));
+          }
+          stPrep.classList.remove("run");
+          stPrep.classList.add("done");
+
+          if (preObjectUrl) URL.revokeObjectURL(preObjectUrl);
+          const blob = base64ToBlob(preJson.image_base64, preJson.mime || "image/png");
+          preObjectUrl = URL.createObjectURL(blob);
+          previewPre.innerHTML = "";
+          const img = document.createElement("img");
+          img.src = preObjectUrl;
+          img.alt = "Setelah preprocess";
+          previewPre.appendChild(img);
+
+          ocrFile = new File([blob], "preprocessed.png", { type: "image/png" });
+        }
 
         stOcr.classList.add("run");
-        const pngFile = new File([blob], "preprocessed.png", { type: "image/png" });
         const fdOcr = new FormData();
-        fdOcr.append("file", pngFile);
+        fdOcr.append("file", ocrFile);
         const rOcr = await fetch(ocrEndpoint(), { method: "POST", body: fdOcr });
         const ocrData = await rOcr.json().catch(() => ({}));
         if (!rOcr.ok) {
@@ -910,8 +1020,16 @@
         }
         const valBody = { ocr_text, document_type, expected_name };
         const expected_bank = (expectedBankEl.value || "").trim();
+        const expected_account = (expectedAccountEl.value || "").trim();
+        const job_position = (jobPositionEl.value || "").trim();
         if (expected_bank) {
           valBody.expected_bank = expected_bank;
+        }
+        if (expected_account) {
+          valBody.expected_account = expected_account;
+        }
+        if (job_position) {
+          valBody.job_position = job_position;
         }
         if (mistral_annotation && typeof mistral_annotation === "object") {
           valBody.mistral_annotation = mistral_annotation;

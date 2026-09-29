@@ -12,12 +12,16 @@ from typing import Any, Generator
 
 from app.pipeline_runner import OcrMode, PipelineResult, run_pipeline_bytes
 from systems.validation.bank_rekening import (
+    BANK_ACCOUNT_PROFILES,
     normalize_expected_bank,
     parse_account_from_filename,
+    parse_bank_doc_name_from_filename,
     parse_rekening_name_from_filename,
 )
 from systems.validation.document_profiles import profile_label, resolve_keywords
 from systems.validation.fuzzy_compare import parse_nik16_from_filename
+from systems.validation.skck_validity import format_id_date
+from systems.validation.user_errors import pipeline_user_error
 
 _NIK_SUFFIX_RE = re.compile(r"(\d{16})(?:_\d{10,13})?$")
 _REKENING_ACCOUNT_SUFFIX_RE = re.compile(r"_(\d{10,13})$")
@@ -35,7 +39,7 @@ def dataset_root() -> Path:
 def parse_dataset_filename(folder: str, filename: str) -> str | None:
     """
     Ekstrak expected_name dari pola dataset:
-    - rekening: `{folder}_{Nama}_{NoRek}.ext`
+    - rekening / mutasi: `{folder}_{Nama}_{NoRek}.ext`
     - lainnya: `{folder}_{Nama}_{NIK16}.ext`
   """
     stem = Path(filename).stem
@@ -48,8 +52,9 @@ def parse_dataset_filename(folder: str, filename: str) -> str | None:
         return None
 
     resolved = resolve_keywords(folder)
-    if resolved and resolved[0] == "rekening":
-        name = parse_rekening_name_from_filename(filename)
+    profile = resolved[0] if resolved else None
+    if profile in BANK_ACCOUNT_PROFILES:
+        name = parse_bank_doc_name_from_filename(filename, folder_prefix=folder)
         if name:
             return name
         m = _REKENING_ACCOUNT_SUFFIX_RE.search(stem)
@@ -149,7 +154,7 @@ def expected_bank_for_dataset_file(
     if not use_manifest:
         return ""
     resolved = resolve_keywords(folder)
-    if not resolved or resolved[0] != "rekening":
+    if not resolved or resolved[0] not in BANK_ACCOUNT_PROFILES:
         return ""
     acct = parse_account_from_filename(filename)
     if acct:
@@ -169,7 +174,7 @@ def expected_account_for_dataset_file(
     use_manifest: bool,
 ) -> str:
     resolved = resolve_keywords(folder)
-    if not resolved or resolved[0] != "rekening":
+    if not resolved or resolved[0] not in BANK_ACCOUNT_PROFILES:
         return ""
     acct = parse_account_from_filename(filename)
     if acct:
@@ -283,7 +288,8 @@ def _failure_detail(result: PipelineResult) -> tuple[str | None, str | None]:
 
     if not result.ok:
         kind = result.error_kind or "pipeline_error"
-        return kind, result.error or "Pipeline gagal tanpa pesan."
+        pe = pipeline_user_error(kind)
+        return kind, pe["message"]
 
     payload = result.payload or {}
     if payload.get("validation_mode") == "cv":
@@ -304,6 +310,12 @@ def _failure_detail(result: PipelineResult) -> tuple[str | None, str | None]:
     validation = payload.get("validation") or {}
     explanation = validation.get("explanation") or {}
     verdict = validation.get("verdict") or payload.get("verdict") or {}
+
+    user_msg = validation.get("error_message") or payload.get("error_message")
+    user_code = validation.get("error_code") or payload.get("error_code")
+    if isinstance(user_msg, str) and user_msg.strip():
+        suffix = f" [{user_code}]" if user_code else ""
+        return "validation_fail", user_msg.strip() + suffix
 
     parts: list[str] = []
     summary = explanation.get("summary") if isinstance(explanation, dict) else None
@@ -395,6 +407,7 @@ class BenchmarkSelection:
     offset: int = 0
     files: list[str] = field(default_factory=list)
     expected_bank: str | None = None
+    job_position: str | None = None
 
 
 @dataclass
@@ -407,6 +420,7 @@ class BenchmarkConfig:
     use_expected_account: bool = True
     enable_preprocess: bool = False
     skip_passthrough: bool = False
+    job_position: str = ""
 
 
 @dataclass
@@ -526,7 +540,8 @@ def _collect_jobs_for_selection(
 ) -> tuple[list[tuple[str, Path, str | None, str | None, str | None]], list[str]]:
     """
     Kumpulkan job dari selection (file spesifik atau limit/offset).
-    Return (jobs, error_messages) dengan (folder, path, expected_name, expected_bank, expected_account).
+    Return (jobs, error_messages) dengan
+    (folder, path, expected_name, expected_bank, expected_account, job_position).
     """
     jobs: list[tuple[str, Path, str | None, str | None, str | None]] = []
     errors: list[str] = []
@@ -565,7 +580,16 @@ def _collect_jobs_for_selection(
                 fp.name,
                 use_manifest=use_expected_account,
             )
-            jobs.append((job_folder, fp, expected, expected_bank or None, expected_account or None))
+            jobs.append(
+                (
+                    job_folder,
+                    fp,
+                    expected,
+                    expected_bank or None,
+                    expected_account or None,
+                    (sel.job_position or "").strip() or None,
+                )
+            )
         return jobs, errors
 
     if not sel.enabled or sel.limit <= 0:
@@ -591,7 +615,16 @@ def _collect_jobs_for_selection(
             fp.name,
             use_manifest=use_expected_account,
         )
-        jobs.append((sel.folder, fp, expected, expected_bank or None, expected_account or None))
+        jobs.append(
+            (
+                sel.folder,
+                fp,
+                expected,
+                expected_bank or None,
+                expected_account or None,
+                (sel.job_position or "").strip() or None,
+            )
+        )
     return jobs, errors
 
 
@@ -622,15 +655,17 @@ def run_benchmark(config: BenchmarkConfig) -> Generator[str, None, None]:
                 },
                 ensure_ascii=False,
             ) + "\n"
-        for folder, fp, expected, expected_bank, expected_account in batch_jobs:
+        for folder, fp, expected, expected_bank, expected_account, job_position in batch_jobs:
             if folder not in folder_meta:
                 resolved = resolve_keywords(folder)
                 doc_type = resolved[0] if resolved else None
                 folder_meta[folder] = (doc_type, profile_label(doc_type) if doc_type else None)
-            jobs.append((folder, fp, expected, expected_bank, expected_account))
+            jobs.append((folder, fp, expected, expected_bank, expected_account, job_position))
 
     total_jobs = len(jobs)
-    for idx, (folder, file_path, expected_name, expected_bank, expected_account) in enumerate(jobs, start=1):
+    for idx, (folder, file_path, expected_name, expected_bank, expected_account, job_position) in enumerate(
+        jobs, start=1
+    ):
         yield json.dumps(
             {
                 "type": "progress",
@@ -652,6 +687,7 @@ def run_benchmark(config: BenchmarkConfig) -> Generator[str, None, None]:
             expected_name=expected_name or "",
             expected_bank=expected_bank or "",
             expected_account=expected_account or "",
+            job_position=(job_position or config.job_position or "").strip(),
             filename=file_path.name,
             ocr_mode=config.ocr_mode,
             pp_ocr_tier=config.pp_ocr_tier,
@@ -672,20 +708,56 @@ def run_benchmark(config: BenchmarkConfig) -> Generator[str, None, None]:
             "expected_name": expected_name,
             "expected_bank": expected_bank,
             "expected_account": expected_account,
+            "job_position": (job_position or config.job_position or "").strip() or None,
             "pipeline_ok": pipeline_ok,
             "document_matched": matched,
             "timing": result.timing.as_dict(),
         }
         validation = (result.payload or {}).get("validation") if result.payload else None
+        top_payload = result.payload or {}
         if isinstance(validation, dict):
+            if validation.get("error_code"):
+                row["error_code"] = validation.get("error_code")
+                row["error_message"] = validation.get("error_message")
+                row["error_cases"] = validation.get("error_cases") or []
             if validation.get("bank_pass") is not None:
                 row["bank_pass"] = validation.get("bank_pass")
             if validation.get("account_pass") is not None:
                 row["account_pass"] = validation.get("account_pass")
             if validation.get("identity_pass") is not None:
                 row["identity_pass"] = validation.get("identity_pass")
+            ident = validation.get("identity")
+            if isinstance(ident, dict):
+                if ident.get("kk_or_identity") or ident.get("kk_and_identity"):
+                    row["kk_name_pass"] = ident.get("kk_name_pass")
+                    row["kk_nik_pass"] = ident.get("kk_nik_pass")
             if validation.get("identity_or_account_pass") is not None:
                 row["identity_or_account_pass"] = validation.get("identity_or_account_pass")
+            if validation.get("marital_pass") is not None:
+                row["marital_pass"] = validation.get("marital_pass")
+                row["marital_status"] = (validation.get("marital_status") or {}).get("label")
+            if validation.get("skck_expiry_pass") is not None:
+                row["skck_expiry_pass"] = validation.get("skck_expiry_pass")
+                row["skck_valid_until"] = validation.get("skck_valid_until")
+                row["skck_valid_from"] = validation.get("skck_valid_from")
+            if validation.get("jkn_status_label") is not None:
+                row["jkn_status_label"] = validation.get("jkn_status_label")
+                row["jkn_status_display"] = validation.get("jkn_status_display")
+            if validation.get("health_status_pass") is not None:
+                row["health_status_pass"] = validation.get("health_status_pass")
+            if validation.get("health_expiry_pass") is not None:
+                row["health_expiry_pass"] = validation.get("health_expiry_pass")
+                row["health_exam_date"] = validation.get("health_exam_date")
+                row["health_valid_until"] = validation.get("health_valid_until")
+            if validation.get("job_position"):
+                row["job_position"] = validation.get("job_position")
+            if "issued_date" in validation or row.get("health_expiry_pass") is not None or row.get("skck_expiry_pass") is not None:
+                row["issued_date"] = validation.get("issued_date")
+                if row.get("issued_date") is None:
+                    row["issued_date"] = validation.get("health_exam_date") or validation.get("skck_valid_from")
+                row["issued_date_display"] = validation.get("issued_date_display")
+                if row.get("issued_date") and not row.get("issued_date_display"):
+                    row["issued_date_display"] = format_id_date(row["issued_date"])
             bank_detection = validation.get("bank_detection")
             if isinstance(bank_detection, dict) and bank_detection.get("detected_bank"):
                 row["detected_bank"] = bank_detection.get("detected_bank")
@@ -700,8 +772,16 @@ def run_benchmark(config: BenchmarkConfig) -> Generator[str, None, None]:
         elif llm_fb:
             row.update(_review_fields_from_result(result))
         if not result.ok:
+            pe = pipeline_user_error(result.error_kind)
             row["error"] = result.error
             row["error_kind"] = result.error_kind
+            row["error_code"] = pe["code"]
+            row["error_message"] = pe["message"]
+            row["error_cases"] = [pe]
+        elif not row.get("error_code") and isinstance(top_payload, dict) and top_payload.get("error_code"):
+            row["error_code"] = top_payload.get("error_code")
+            row["error_message"] = top_payload.get("error_message")
+            row["error_cases"] = top_payload.get("error_cases") or []
         all_results.append(row)
 
         yield json.dumps(row, ensure_ascii=False) + "\n"
@@ -723,9 +803,26 @@ def run_benchmark(config: BenchmarkConfig) -> Generator[str, None, None]:
             "account_pass": r.get("account_pass"),
             "identity_pass": r.get("identity_pass"),
             "identity_or_account_pass": r.get("identity_or_account_pass"),
+            "marital_pass": r.get("marital_pass"),
+            "marital_status": r.get("marital_status"),
+            "skck_expiry_pass": r.get("skck_expiry_pass"),
+            "skck_valid_until": r.get("skck_valid_until"),
+            "skck_valid_from": r.get("skck_valid_from"),
+            "jkn_status_label": r.get("jkn_status_label"),
+            "jkn_status_display": r.get("jkn_status_display"),
+            "health_status_pass": r.get("health_status_pass"),
+            "health_expiry_pass": r.get("health_expiry_pass"),
+            "health_exam_date": r.get("health_exam_date"),
+            "health_valid_until": r.get("health_valid_until"),
+            "issued_date": r.get("issued_date"),
+            "issued_date_display": r.get("issued_date_display"),
+            "job_position": r.get("job_position"),
             "detected_bank": r.get("detected_bank"),
             "failure_kind": r.get("failure_kind"),
             "failure_reason": r.get("failure_reason") or r.get("error"),
+            "error_code": r.get("error_code"),
+            "error_message": r.get("error_message"),
+            "error_cases": r.get("error_cases"),
             "ocr_text": r.get("ocr_text"),
             "pipeline_response": r.get("pipeline_response"),
             "llm_fallback": r.get("llm_fallback"),

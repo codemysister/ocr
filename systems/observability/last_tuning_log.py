@@ -107,6 +107,10 @@ def summarize_validation_result(payload: dict[str, Any], *, max_keywords: int = 
         "valid",
         "image_validation",
         "validation_mode",
+        "marital_pass",
+        "marital_status",
+        "job_position",
+        "helper_marital_gate",
     )
     out: dict[str, Any] = {k: payload[k] for k in keys if k in payload}
     if "keywords" in payload and isinstance(payload["keywords"], list):

@@ -25,7 +25,7 @@ RUN pip install --upgrade pip setuptools wheel \
     && pip install 'paddleocr[doc-parser]>=3.6.0'
 
 COPY dataset ./dataset
-COPY scripts/verify_ocr_deps.py ./scripts/verify_ocr_deps.py
+COPY scripts/verify_ocr_deps.py scripts/docker_healthcheck.py ./scripts/
 
 ENV OCR_VERIFY_CV=1
 RUN python scripts/verify_ocr_deps.py
@@ -45,4 +45,4 @@ ENV HOST=0.0.0.0 \
 EXPOSE 8001
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
-    CMD curl -sf "http://127.0.0.1:${PORT}/systems/ocr/health" | grep -q '"paddlepaddle_importable": true' || exit 1
+    CMD python3 scripts/docker_healthcheck.py

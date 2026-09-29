@@ -12,6 +12,7 @@ import numpy as np
 from systems.validation.document_profiles import profile_label
 from systems.validation.face_detect import FaceDetectionUnavailable, detect_frontal_faces, face_detection_backend
 from systems.validation.fuzzy_compare import build_document_verdict
+from systems.validation.user_errors import attach_user_errors
 
 # HSV biru pas foto — rentang lebar (cyan–navy, foto HP / flash).
 _BLUE_HSV_LOWER = np.array([82, 22, 28], dtype=np.uint8)
@@ -570,36 +571,38 @@ def _foto_profile_unavailable_result(
         document_matched=False,
         name_extraction=name_extraction,
     )
-    return {
-        "valid": False,
-        "document_type": (document_type or "").strip(),
-        "document_profile_id": profile,
-        "validation_mode": "image",
-        "document_type_pass": False,
-        "document_matched": False,
-        "identity_pass": None,
-        "identity": None,
-        "name_extraction": name_extraction,
-        "image_validation": {
-            "face_pass": False,
-            "face_count": 0,
-            "face_count_pass": False,
-            "face_size_pass": False,
-            "face_centered_pass": False,
-            "blue_background_pass": False,
-            "face_detector_backend": face_detection_backend(),
-            "face_detector_error": error,
-        },
-        "keywords": [],
-        "excluded_keywords": [],
-        "exclusion_violated": False,
-        "explanation": explanation,
-        "document_type_detection": detection,
-        "verdict": verdict,
-        "is_own_document": verdict["is_own_document"],
-        "document_type_current": verdict["document_type_current"],
-        "document_type_current_label": verdict["document_type_current_label"],
-    }
+    return attach_user_errors(
+        {
+            "valid": False,
+            "document_type": (document_type or "").strip(),
+            "document_profile_id": profile,
+            "validation_mode": "image",
+            "document_type_pass": False,
+            "document_matched": False,
+            "identity_pass": None,
+            "identity": None,
+            "name_extraction": name_extraction,
+            "image_validation": {
+                "face_pass": False,
+                "face_count": 0,
+                "face_count_pass": False,
+                "face_size_pass": False,
+                "face_centered_pass": False,
+                "blue_background_pass": False,
+                "face_detector_backend": face_detection_backend(),
+                "face_detector_error": error,
+            },
+            "keywords": [],
+            "excluded_keywords": [],
+            "exclusion_violated": False,
+            "explanation": explanation,
+            "document_type_detection": detection,
+            "verdict": verdict,
+            "is_own_document": verdict["is_own_document"],
+            "document_type_current": verdict["document_type_current"],
+            "document_type_current_label": verdict["document_type_current_label"],
+        }
+    )
 
 
 def validate_foto_profile(
@@ -798,25 +801,27 @@ def validate_foto_profile(
         **analysis.crop_meta,
     }
 
-    return {
-        "valid": document_matched,
-        "_analysis_bgr": analysis.bgr,
-        "document_type": (document_type or "").strip(),
-        "document_profile_id": profile,
-        "validation_mode": "image",
-        "document_type_pass": document_type_pass,
-        "document_matched": document_matched,
-        "identity_pass": None,
-        "identity": None,
-        "name_extraction": name_extraction,
-        "image_validation": image_validation,
-        "keywords": [],
-        "excluded_keywords": [],
-        "exclusion_violated": False,
-        "explanation": explanation,
-        "document_type_detection": detection,
-        "verdict": verdict,
-        "is_own_document": verdict["is_own_document"],
-        "document_type_current": verdict["document_type_current"],
-        "document_type_current_label": verdict["document_type_current_label"],
-    }
+    return attach_user_errors(
+        {
+            "valid": document_matched,
+            "_analysis_bgr": analysis.bgr,
+            "document_type": (document_type or "").strip(),
+            "document_profile_id": profile,
+            "validation_mode": "image",
+            "document_type_pass": document_type_pass,
+            "document_matched": document_matched,
+            "identity_pass": None,
+            "identity": None,
+            "name_extraction": name_extraction,
+            "image_validation": image_validation,
+            "keywords": [],
+            "excluded_keywords": [],
+            "exclusion_violated": False,
+            "explanation": explanation,
+            "document_type_detection": detection,
+            "verdict": verdict,
+            "is_own_document": verdict["is_own_document"],
+            "document_type_current": verdict["document_type_current"],
+            "document_type_current_label": verdict["document_type_current_label"],
+        }
+    )

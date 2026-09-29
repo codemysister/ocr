@@ -28,7 +28,7 @@ Read the document visually from the image and return ONLY a JSON object with key
 - holder_name (string): full legal name of the person on the document
 - identity_number (string): NIK or NPWP if visible (digits only)
 - document_type_matches_expected (boolean): true if the image is the expected document type
-- identity_matches_reference (boolean): true if holder_name matches the reference name (allow minor OCR/spelling variants)
+- identity_matches_reference (boolean): true only if holder_name is the same person as the reference name (allow minor OCR/spelling variants and word-order swaps). Sharing a single given name is NOT a match (e.g. Anggun Ramadhani ≠ Rahmalia Anggun Agustin).
 - confidence (number 0-100): your confidence in this validation
 - notes (string): brief reason in Indonesian
 
@@ -43,7 +43,11 @@ def _env_bool(name: str, *, default: bool = False) -> bool:
 
 
 def is_llm_fallback_enabled() -> bool:
-    if not _env_bool("LLM_FALLBACK_ENABLED", default=True):
+    from systems.ocr.remote_client import ocr_remote_enabled
+
+    # Mode hybrid: model OCR di server remote, keputusan validasi tetap di kode lokal.
+    default = False if ocr_remote_enabled() else True
+    if not _env_bool("LLM_FALLBACK_ENABLED", default=default):
         return False
     return bool(_base_url())
 
@@ -100,6 +104,30 @@ def _extract_json_object(text: str) -> dict[str, Any] | None:
     return obj if isinstance(obj, dict) else None
 
 
+def _assistant_text(message: Any) -> str:
+    """Ambil teks jawaban: content string, content parts, atau reasoning_content."""
+    if not isinstance(message, dict):
+        return ""
+    content = message.get("content")
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, str) and item.strip():
+                parts.append(item)
+            elif isinstance(item, dict):
+                text = item.get("text")
+                if isinstance(text, str) and text.strip():
+                    parts.append(text)
+        content = "\n".join(parts)
+    if isinstance(content, str) and content.strip():
+        return content
+    for key in ("reasoning_content", "reasoning"):
+        val = message.get(key)
+        if isinstance(val, str) and val.strip():
+            return val
+    return content.strip() if isinstance(content, str) else ""
+
+
 def _normalize_mime(mime: str) -> str:
     m = (mime or "image/png").strip().casefold()
     if m in {"image/jpg", "image/jpeg"}:
@@ -130,17 +158,22 @@ def _vision_user_prompt(
     return "\n".join(lines)
 
 
-def _chat_completions(payload: dict[str, Any]) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+def _chat_completions(
+    payload: dict[str, Any],
+    *,
+    base_url: str | None = None,
+    timeout_s: float | None = None,
+) -> tuple[dict[str, Any] | None, dict[str, Any]]:
     meta: dict[str, Any] = {
         "attempted": True,
         "success": False,
         "mode": "vision",
-        "model": _model(),
-        "base_url": _base_url(),
+        "model": payload.get("model") or _model(),
+        "base_url": (base_url or _base_url()).strip().rstrip("/"),
         "latency_s": None,
         "error": None,
     }
-    url = f"{_base_url()}/chat/completions"
+    url = f"{meta['base_url']}/chat/completions"
     headers = {"Content-Type": "application/json"}
     api_key = _api_key()
     if api_key:
@@ -154,7 +187,7 @@ def _chat_completions(payload: dict[str, Any]) -> tuple[dict[str, Any] | None, d
     )
     t0 = time.perf_counter()
     try:
-        with urllib.request.urlopen(req, timeout=_timeout_s()) as resp:
+        with urllib.request.urlopen(req, timeout=timeout_s if timeout_s is not None else _timeout_s()) as resp:
             raw = json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         meta["latency_s"] = round(time.perf_counter() - t0, 3)
@@ -173,11 +206,80 @@ def _chat_completions(payload: dict[str, Any]) -> tuple[dict[str, Any] | None, d
 
     meta["latency_s"] = round(time.perf_counter() - t0, 3)
     try:
-        content = raw["choices"][0]["message"]["content"]
+        choice0 = raw["choices"][0]
+        message = choice0.get("message") if isinstance(choice0, dict) else None
+        content = _assistant_text(message)
+        if isinstance(choice0, dict) and choice0.get("finish_reason"):
+            meta["finish_reason"] = choice0.get("finish_reason")
     except (KeyError, IndexError, TypeError) as e:
         meta["error"] = f"bad_response: {e}"
         return None, meta
     return {"content": content, "raw": raw}, meta
+
+
+def complete_vision(
+    image_bytes: bytes,
+    user_text: str,
+    *,
+    image_mime: str = "image/jpeg",
+    system_text: str | None = None,
+    max_tokens: int | None = None,
+    temperature: float = 0.0,
+    base_url: str | None = None,
+    model: str | None = None,
+    timeout_s: float | None = None,
+    extra: dict[str, Any] | None = None,
+) -> tuple[str | None, dict[str, Any]]:
+    """Kirim gambar + teks ke endpoint OpenAI-compatible `/chat/completions`."""
+    meta: dict[str, Any] = {
+        "attempted": False,
+        "success": False,
+        "mode": "vision",
+        "model": (model or _model()).strip(),
+        "base_url": (base_url or _base_url()).strip().rstrip("/"),
+        "latency_s": None,
+        "error": None,
+    }
+    if not image_bytes:
+        meta["error"] = "empty_image"
+        return None, meta
+    if not meta["base_url"]:
+        meta["error"] = "missing_base_url"
+        return None, meta
+
+    mime = _normalize_mime(image_mime)
+    b64 = base64.b64encode(image_bytes).decode("ascii")
+    data_url = f"data:{mime};base64,{b64}"
+    user_content: list[dict[str, Any]] = [
+        {"type": "text", "text": user_text},
+        {"type": "image_url", "image_url": {"url": data_url}},
+    ]
+    messages: list[dict[str, Any]] = []
+    if system_text:
+        messages.append({"role": "system", "content": system_text})
+    messages.append({"role": "user", "content": user_content})
+
+    payload = {
+        "model": meta["model"],
+        "messages": messages,
+        "max_tokens": max_tokens if max_tokens is not None else _max_tokens(),
+        "temperature": temperature,
+    }
+    if extra:
+        payload.update(extra)
+    meta["attempted"] = True
+    parsed_resp, call_meta = _chat_completions(
+        payload, base_url=meta["base_url"], timeout_s=timeout_s
+    )
+    meta.update({k: v for k, v in call_meta.items() if k != "attempted"})
+    if not parsed_resp:
+        return None, meta
+    content = parsed_resp.get("content")
+    if not isinstance(content, str) or not content.strip():
+        meta["error"] = "empty_content"
+        return None, meta
+    meta["success"] = True
+    return content, meta
 
 
 def validate_document_via_llm_vision(
@@ -267,15 +369,50 @@ def validate_document_via_llm_vision(
 
     exp_nik = re.sub(r"\D", "", expected_nik or "")
     llm_nik = re.sub(r"\D", "", str(parsed.get("identity_number") or ann.get("identity_number") or ""))
-    if len(exp_nik) == 16 and llm_nik and llm_nik != exp_nik:
-        identity_ok = False
+
+    if profile in {"npwp", "pemadanan_npwp"}:
+        from systems.validation.fuzzy_compare import npwp_id_matches_expected
+
+        want_identity = len(exp_nik) == 16
+        if want_identity:
+            identity_ok = bool(
+                npwp_id_matches_expected(llm_nik, exp_nik)
+                or llm_nik == exp_nik
+            )
+        else:
+            identity_ok = True
+    elif profile == "kk":
+        from systems.validation.fuzzy_compare import compare_extracted_identity_scores
+
+        want_identity = bool(expected_name.strip()) or len(exp_nik) == 16
+        holder_name = str(parsed.get("holder_name") or ann.get("holder_name") or "")
+        name_ok = False
+        if expected_name.strip() and holder_name.strip():
+            identity_scores = compare_extracted_identity_scores(holder_name, expected_name)
+            name_ok = float(identity_scores.get("identity_combined_score") or 0.0) >= 65.0 and bool(
+                identity_scores.get("token_gate_pass", True)
+            )
+        nik_ok = len(exp_nik) == 16 and bool(llm_nik) and llm_nik == exp_nik
+        identity_ok = name_ok or nik_ok
+    else:
+        if len(exp_nik) == 16 and llm_nik and llm_nik != exp_nik:
+            identity_ok = False
+
+        want_identity = bool(expected_name.strip())
+        holder_name = str(parsed.get("holder_name") or ann.get("holder_name") or "")
+        if want_identity and holder_name.strip():
+            from systems.validation.fuzzy_compare import compare_extracted_identity_scores
+
+            identity_scores = compare_extracted_identity_scores(holder_name, expected_name)
+            identity_ok = float(identity_scores.get("identity_combined_score") or 0.0) >= 65.0 and bool(
+                identity_scores.get("token_gate_pass", True)
+            )
 
     min_conf = _min_confidence()
     if confidence < min_conf:
         doc_type_ok = False
         identity_ok = False
 
-    want_identity = bool(expected_name.strip())
     document_matched = doc_type_ok and (identity_ok if want_identity else True)
 
     result: dict[str, Any] = {
@@ -290,6 +427,9 @@ def validate_document_via_llm_vision(
         "document_type_pass": doc_type_ok,
         "identity_pass": identity_ok if want_identity else None,
     }
+    if profile == "kk":
+        result["kk_name_pass"] = name_ok
+        result["kk_nik_pass"] = nik_ok
 
     if not (result["holder_name"] or result["document_type_label"]):
         meta["error"] = "empty_extraction"
@@ -329,7 +469,7 @@ def merge_llm_vision_into_validation(
 
     holder = (ann.get("holder_name") or "").strip()
     if holder:
-        from systems.validation.fuzzy_compare import _normalize_name
+        from systems.validation.fuzzy_compare import _normalize_name, compare_extracted_identity_scores
 
         out["name_extraction"] = {
             "candidate_raw": holder,
@@ -337,9 +477,30 @@ def merge_llm_vision_into_validation(
             "method": "llm_vision_validation",
         }
         if expected_name.strip():
-            from systems.validation.fuzzy_compare import compare_extracted_identity_scores
-
-            out["identity"] = compare_extracted_identity_scores(holder, expected_name)
+            identity = compare_extracted_identity_scores(holder, expected_name)
+            out["identity"] = identity
+            try:
+                id_min = float(out.get("identity_min_score") or 65.0)
+            except (TypeError, ValueError):
+                id_min = 65.0
+            identity_ok = float(identity.get("identity_combined_score") or 0.0) >= id_min and bool(
+                identity.get("token_gate_pass", True)
+            )
+            profile = str(out.get("document_profile_id") or "").strip().casefold()
+            if profile == "kk":
+                name_ok = identity_ok
+                nik_ok = bool(llm_result.get("kk_nik_pass"))
+                identity_ok = bool(name_ok) or nik_ok
+                identity["kk_or_identity"] = True
+                identity["kk_name_pass"] = bool(name_ok)
+                identity["kk_nik_pass"] = nik_ok
+            out["identity_pass"] = identity_ok
+            out["document_matched"] = bool(out.get("document_type_pass")) and identity_ok
+            llm_val = dict(out.get("llm_validation") or llm_result)
+            llm_val["identity_pass"] = identity_ok
+            llm_val["identity_matches_reference"] = identity_ok
+            llm_val["document_matched"] = out["document_matched"]
+            out["llm_validation"] = llm_val
 
     notes = (llm_result.get("notes") or "").strip()
     conf = llm_result.get("confidence")

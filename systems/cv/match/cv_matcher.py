@@ -172,7 +172,9 @@ def _best_name_line_for_expected(text: str, expected: str) -> tuple[str | None, 
         line = re.sub(r"^[-•*|]+\s*", "", (line or "").strip()).strip()
         if not _looks_like_cv_name_line(line, expected_name=expected):
             continue
-        sc = float(fuzz.WRatio(_norm(line), exp_n))
+        sc = float(
+            compare_extracted_identity_scores(line, expected).get("identity_combined_score") or 0.0
+        )
         if sc > best_score:
             best_score = sc
             best_line = line
@@ -241,20 +243,10 @@ def _name_dimension(
                 identity = alt_identity
                 score = alt_score
 
-    if score < NAME_MIN_SCORE and doc_text:
-        exp_n = _norm(expected)
-        doc_n = _norm(_cv_normalize_spaced_text(doc_text))
-        presence = float(fuzz.partial_ratio(exp_n, doc_n))
-        if presence >= NAME_MIN_SCORE:
-            if best_line:
-                extracted, method = best_line, best_method or "cv_document_presence"
-            else:
-                method = "cv_document_presence"
-            score = max(score, presence)
-
+    token_ok = bool(identity.get("token_gate_pass", True))
     return {
         "percent": round(score, 1),
-        "pass": score >= NAME_MIN_SCORE,
+        "pass": score >= NAME_MIN_SCORE and token_ok,
         "skipped": False,
         "expected": expected,
         "extracted": extracted,

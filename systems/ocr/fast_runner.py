@@ -16,7 +16,7 @@ from typing import Any
 import cv2
 import numpy as np
 
-from systems.ocr.runtime_hint import resolve_paddle_device
+from systems.ocr.runtime_hint import apply_paddle_device, resolve_paddle_device
 
 logger = logging.getLogger(__name__)
 
@@ -104,7 +104,7 @@ def _get_paddle_ocr(*, pp_ocr_tier: str | None = None) -> Any:
     mod_flags = paddle_fast_module_flags()
     lim = (os.environ.get("OCR_FAST_DET_LIMIT_SIDE_LEN") or "").strip()
     mkldnn = paddle_mkldnn_enabled()
-    device = resolve_paddle_device()
+    device = apply_paddle_device()
     cache_key = (
         f"{lang}|{det}|{rec}|ori={int(mod_flags['use_doc_orientation_classify'])}"
         f"|unwarp={int(mod_flags['use_doc_unwarping'])}"

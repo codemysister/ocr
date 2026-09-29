@@ -7,6 +7,6 @@ FROM ${BASE_IMAGE}
 
 COPY app ./app
 COPY systems ./systems
-COPY scripts/verify_ocr_deps.py ./scripts/verify_ocr_deps.py
+COPY scripts/verify_ocr_deps.py scripts/docker_healthcheck.py ./scripts/
 
 CMD ["sh", "-c", "exec uvicorn app.main:app --host ${HOST} --port ${PORT}"]

@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, RedirectResponse
 
 from app.api_routes import router as public_api_router
+from systems.ocr.remote_client import default_ocr_mode, ocr_remote_base_url, ocr_remote_enabled
 from systems.ocr.routes import router as ocr_router
 from systems.validation.routes import router as validation_router
 from systems.preprocessing.routes import api_router as preprocessing_api_router
@@ -26,8 +27,12 @@ except ImportError:
 HUB_PATH = Path(__file__).resolve().parent / "static" / "hub.html"
 PIPELINE_PATH = Path(__file__).resolve().parent / "static" / "pipeline.html"
 DATASET_TEST_PATH = Path(__file__).resolve().parent / "static" / "dataset_test.html"
+DATASET_FAILURES_PATH = Path(__file__).resolve().parent / "static" / "dataset_failures.html"
+DATASET_SUCCESSES_PATH = Path(__file__).resolve().parent / "static" / "dataset_successes.html"
 HEALTHCHECK_PATH = Path(__file__).resolve().parent / "static" / "healthcheck.html"
 LLM_FALLBACK_LOG_PATH = Path(__file__).resolve().parent / "static" / "llm_fallback_log.html"
+PADDLE_VL_PATH = Path(__file__).resolve().parent / "static" / "paddle_vl.html"
+HEALTH_LETTER_AI_PATH = Path(__file__).resolve().parent / "static" / "health_letter_ai.html"
 
 
 def _cors_origins() -> list[str]:
@@ -48,7 +53,13 @@ _cors_origins_list, _allow_credentials = _cors_settings()
 
 app = FastAPI(
     title="OCR Platform",
-    description="Preprocessing, OCR, dan validasi nama (RapidFuzzy) dalam satu proses.",
+    description=(
+        "Preprocessing, OCR, dan validasi dokumen.\n\n"
+        "**Frontend:** pada `POST /api/v1/pipeline`, HTTP 200 berarti proses selesai "
+        "(bukan otomatis lolos). Baca `document_matched`. Jika `false`, tampilkan "
+        "`error_message` (kode: `error_code`, daftar: `error_cases`). "
+        "Katalog: `GET /systems/validation/api/v1/error-catalog`."
+    ),
     version="1.0.0",
 )
 
@@ -76,7 +87,13 @@ def health() -> dict:
         "api": "/api/v1",
         "docs": "/docs",
         "cors_origins": _cors_origins_list,
-        "pipeline_ocr": "default fast (PP-OCRv6); query ocr_mode=fast|mistral|vl, pp_ocr_tier untuk fast",
+        "pipeline_ocr": (
+            f"default {default_ocr_mode()} "
+            "(ocr_mode=fast|mistral|vl; pp_ocr_tier hanya untuk fast)"
+        ),
+        "ocr_default_mode": default_ocr_mode(),
+        "ocr_remote_base_url": ocr_remote_base_url() if ocr_remote_enabled() else None,
+        "ocr_remote_enabled": ocr_remote_enabled(),
         "systems": {
             "preprocessing": "/systems/preprocessing/health",
             "ocr": "/systems/ocr/health",
@@ -126,6 +143,26 @@ def dataset_test_page() -> FileResponse:
     )
 
 
+@app.get("/dataset-failures")
+def dataset_failures_page() -> FileResponse:
+    if not DATASET_FAILURES_PATH.is_file():
+        raise HTTPException(404, "dataset_failures.html tidak ditemukan.")
+    return FileResponse(
+        DATASET_FAILURES_PATH,
+        headers={"Cache-Control": "no-store, max-age=0"},
+    )
+
+
+@app.get("/dataset-successes")
+def dataset_successes_page() -> FileResponse:
+    if not DATASET_SUCCESSES_PATH.is_file():
+        raise HTTPException(404, "dataset_successes.html tidak ditemukan.")
+    return FileResponse(
+        DATASET_SUCCESSES_PATH,
+        headers={"Cache-Control": "no-store, max-age=0"},
+    )
+
+
 @app.get("/healthcheck")
 def healthcheck_page() -> FileResponse:
     if not HEALTHCHECK_PATH.is_file():
@@ -133,6 +170,29 @@ def healthcheck_page() -> FileResponse:
     return FileResponse(
         HEALTHCHECK_PATH,
         headers={"Cache-Control": "no-store, max-age=0"},
+    )
+
+
+@app.get("/paddle-vl")
+def paddle_vl_page() -> FileResponse:
+    if not PADDLE_VL_PATH.is_file():
+        raise HTTPException(404, "paddle_vl.html tidak ditemukan.")
+    return FileResponse(
+        PADDLE_VL_PATH,
+        headers={
+            "Cache-Control": "no-store, max-age=0, must-revalidate",
+            "Pragma": "no-cache",
+        },
+    )
+
+
+@app.get("/health-letter-ai")
+def health_letter_ai_page() -> FileResponse:
+    if not HEALTH_LETTER_AI_PATH.is_file():
+        raise HTTPException(404, "health_letter_ai.html tidak ditemukan.")
+    return FileResponse(
+        HEALTH_LETTER_AI_PATH,
+        headers={"Cache-Control": "no-store, max-age=0, must-revalidate"},
     )
 
 

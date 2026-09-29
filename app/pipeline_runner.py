@@ -59,6 +59,10 @@ from systems.validation.skck_validity import apply_skck_expiry_gate
 from systems.validation.bpjs_kesanggupan_stamp import apply_bpjs_kesanggupan_stamp_gate
 from systems.validation.jkn_status import apply_jkn_status_extract
 from systems.validation.keterangan_kesehatan import apply_keterangan_kesehatan_gates
+from systems.validation.keterangan_kesehatan_ai import (
+    analyze_health_letter_image,
+    overlay_health_ai_on_validation,
+)
 from systems.validation.llm_fallback import (
     is_llm_fallback_enabled,
     merge_llm_vision_into_validation,
@@ -108,7 +112,7 @@ class PipelineResult:
             return 503
         if self.error_kind == "opencv_unavailable":
             return 503
-        if self.error_kind in ("ocr_unavailable", "mistral_unavailable"):
+        if self.error_kind in ("ocr_unavailable", "mistral_unavailable", "health_ai_unavailable"):
             return 503
         if self.error_kind == "empty_ocr":
             return 400
@@ -440,6 +444,122 @@ def _run_pipeline_bytes_impl(
         return PipelineResult(ok=False, error=str(e), error_kind="preprocess_error", timing=timing)
     timing.preprocess_s = time.perf_counter() - t_pre0
 
+    expected_nik = parse_nik16_from_filename(filename) or ""
+    if canonical_id == "keterangan_kesehatan":
+        t_ocr0 = time.perf_counter()
+        try:
+            ai_out = analyze_health_letter_image(
+                raw,
+                image_mime="image/jpeg",
+                expected_name=name_ref,
+                expected_nik=expected_nik,
+            )
+        except ValueError as e:
+            timing.total_s = time.perf_counter() - t_total0
+            return PipelineResult(ok=False, error=str(e), error_kind="ocr_value_error", timing=timing)
+        except Exception as e:
+            timing.total_s = time.perf_counter() - t_total0
+            return PipelineResult(ok=False, error=str(e), error_kind="health_ai_unavailable", timing=timing)
+        timing.ocr_s = time.perf_counter() - t_ocr0
+        if ai_out.get("error") or not ai_out.get("extraction"):
+            err = str(ai_out.get("error") or "empty_extraction")
+            llm_err = (ai_out.get("llm") or {}).get("error")
+            timing.total_s = time.perf_counter() - t_total0
+            return PipelineResult(
+                ok=False,
+                error=f"OCR AI surat kesehatan gagal: {llm_err or err}",
+                error_kind="health_ai_unavailable",
+                timing=timing,
+            )
+        ocr_text = str((ai_out.get("validation") or {}).get("synthetic_ocr") or "").strip()
+        ocr_payload = {
+            "success": True,
+            "mode": "ornith_health_ai",
+            "model": (ai_out.get("llm") or {}).get("model"),
+            "text": ocr_text,
+            "markdown": ocr_text,
+            "extraction": ai_out.get("extraction"),
+            "raw_content": ai_out.get("raw_content"),
+            "timing": {"total_wall_s": round(timing.ocr_s, 3)},
+        }
+        image_mime = pre_meta.get("mime") if isinstance(pre_meta.get("mime"), str) else "image/png"
+        expected_acct = (expected_account or "").strip() or parse_account_from_filename(filename) or ""
+        t_val0 = time.perf_counter()
+        validation_detail = validate_document_ocr(
+            ocr_text,
+            document_type=doc_type,
+            document_profile_id=canonical_id,
+            keywords=keywords,
+            expected_name=name_ref,
+            expected_nik=expected_nik,
+            expected_bank=expected_bank,
+            expected_account=expected_acct,
+            job_position=job_position,
+            mistral_annotation=None,
+        )
+        validation_detail = apply_keterangan_kesehatan_gates(
+            apply_jkn_status_extract(
+                apply_bpjs_kesanggupan_stamp_gate(
+                    apply_skck_expiry_gate(
+                        apply_ktp_helper_marital_gate(
+                            validation_detail,
+                            ocr_text=ocr_text,
+                            job_position=job_position,
+                            profile_id=canonical_id,
+                        ),
+                        ocr_text=ocr_text,
+                        profile_id=canonical_id,
+                    ),
+                    ocr_text=ocr_text,
+                    profile_id=canonical_id,
+                    image=png_bytes,
+                ),
+                ocr_text=ocr_text,
+                profile_id=canonical_id,
+                expected_name=name_ref,
+            ),
+            ocr_text=ocr_text,
+            profile_id=canonical_id,
+        )
+        validation_detail = overlay_health_ai_on_validation(validation_detail, ai_out)
+        validation_detail = attach_user_errors(validation_detail)
+        matched = bool(validation_detail.get("document_matched"))
+        timing.validation_s = time.perf_counter() - t_val0
+        timing.total_s = time.perf_counter() - t_total0
+        payload = {
+            "success": True,
+            "ocr_mode": "ornith",
+            "ocr_engine": "ornith",
+            "pp_ocr_tier": None,
+            "preprocess": pre_meta,
+            "ocr": ocr_payload,
+            "validation": {
+                "document_profile_id": canonical_id,
+                "keywords_from_profile": keywords,
+                **validation_detail,
+            },
+            "verdict": validation_detail.get("verdict"),
+            "is_own_document": validation_detail.get("is_own_document"),
+            "document_type_current": validation_detail.get("document_type_current"),
+            "document_type_current_label": validation_detail.get("document_type_current_label"),
+            "error_code": validation_detail.get("error_code"),
+            "error_message": validation_detail.get("error_message"),
+            "error_cases": validation_detail.get("error_cases") or [],
+            "timing": timing.as_dict(),
+        }
+        if include_preprocessed_image:
+            preview_mime = pre_meta.get("mime") if isinstance(pre_meta.get("mime"), str) else "image/png"
+            payload["preprocessed_image"] = {
+                "mime": preview_mime,
+                "image_base64": base64.b64encode(png_bytes).decode("ascii"),
+            }
+        return PipelineResult(
+            ok=True,
+            payload=payload,
+            timing=timing,
+            document_matched=matched,
+        )
+
     tier_arg = pp_ocr_tier if ocr_mode == "fast" else None
     t_ocr0 = time.perf_counter()
     try:
@@ -752,7 +872,7 @@ def _run_pipeline_bytes_impl(
 
     matched = bool(validation_detail.get("document_matched"))
     paddle_detail = validation_detail
-    if not matched:
+    if canonical_id != "keterangan_kesehatan" and not matched:
         validation_detail, matched = _try_llm_vision_fallback(
             validation_detail,
             image_bytes=png_bytes,

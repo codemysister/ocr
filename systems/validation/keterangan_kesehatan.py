@@ -10,6 +10,7 @@ from typing import Any
 from systems.validation.skck_validity import (
     _FROM_LABEL_RE,
     _parse_text_dates,
+    format_id_date,
 )
 
 # Tanggal kadaluarsa hanya dihitung bila surat menulis durasi/tanggal sampai.
@@ -63,16 +64,16 @@ _CITIES_RE = (
     r"(?:kota\s+|kabupaten[\s\-]?)?(?:bekasi|cikarang|jakarta|depok|karawang|"
     r"tangerang|bogor|bandung|tasikmalaya|darangdan|cilamaya|medansatria|"
     r"bekas[li]|pejuang|tegal|tambun|cibitung|surabaya|serang|brebes|"
-    r"indramayu|senen|pegagan|cidempet|cikeusal|jababeka)"
+    r"indramayu|senen|pegagan|cidempet|cikeusal|jababeka|semarang)"
 )
 _MONTH_OCR: dict[str, int] = {
     "januari": 1, "january": 1, "jan": 1,
     "februari": 2, "february": 2, "feb": 2,
     "maret": 3, "march": 3, "mar": 3,
     "april": 4, "apr": 4,
-    "mei": 5, "may": 5, "mel": 5,
+    "mei": 5, "may": 5, "mel": 5, "wei": 5,
     "juni": 6, "june": 6, "jun": 6, "juri": 6, "funi": 6, "junl": 6,
-    "jumi": 6, "suni": 6, "jomi": 6, "juai": 6,
+    "jumi": 6, "suni": 6, "jomi": 6, "juai": 6, "jusi": 6,
     "juli": 7, "july": 7, "jul": 7,
     "agustus": 8, "august": 8, "agu": 8, "aug": 8,
     "september": 9, "sept": 9, "sep": 9,
@@ -82,7 +83,7 @@ _MONTH_OCR: dict[str, int] = {
 }
 _MONTH_ALT_OCR = "|".join(sorted(_MONTH_OCR, key=len, reverse=True))
 _PLACE_TEXT_DATE_RE = re.compile(
-    rf"(?:{_CITIES_RE}|[a-z]{{3,20}})\s*[,.\-]?\s*(\d{{1,2}})\s+({_MONTH_ALT_OCR})\s+(20\d{{2}}|\d{{2}})",
+    rf"(?:{_CITIES_RE}|[a-z]{{3,20}})\s*[,.\-]?\s*(\d{{1,2}})\s+({_MONTH_ALT_OCR})\s*[.\-]*\s*(20\d{{2}}|20\d|\d{{2}})",
     re.I,
 )
 _GLUED_PLACE_DATE_RE = re.compile(
@@ -90,7 +91,7 @@ _GLUED_PLACE_DATE_RE = re.compile(
     re.I,
 )
 _PLACE_NUM_DATE_RE = re.compile(
-    rf"(?:{_CITIES_RE})\s*[,.]?\s*(\d{{1,2}})[/\-](\d{{1,2}})(?:[/\-.](\d{{2,4}}))?",
+    rf"(?:{_CITIES_RE})\s*[,.\-]*\s*(\d{{1,2}})[/\-](\d{{1,2}})(?:[/\-.](\d{{2,4}}))?",
     re.I,
 )
 _DATE_BEFORE_PLACE_RE = re.compile(
@@ -139,6 +140,26 @@ _MONTH_DAY_YEAR_RE = re.compile(
 )
 _COMPACT_DMY_RE = re.compile(
     r"(?<!\d)(\d{2})(\d{2})(20[2-3]\d)(?!\d)"
+)
+_LOOSE_SLASH_YEAR_RE = re.compile(
+    r"\b(\d{1,2})\s*[/\-]\s*(\d{1,2})\s+(20\d{2}|\d{2})\b"
+)
+_SPACED_DMY_PARTS_RE = re.compile(
+    r"\b(\d{1,2})\s+(\d{1,2})\s+20(?:\s*(\d{2}))?\b"
+)
+_GAP_DMY_RE = re.compile(
+    r"\b(\d{1,2})\s+(1[0-2]|0?[1-9]|16)\b.{0,96}?\b20(?:\s*(\d{2}))?\b",
+    re.I,
+)
+_ROMAN_MONTH_RE = re.compile(
+    r"\b(\d{1,2})\s+(viii|vii|xii|xi|ix|vi|iv)\b",
+    re.I,
+)
+_ROMAN_MONTH = {
+    "iv": 4, "vi": 6, "vii": 7, "viii": 8, "ix": 9, "xi": 11, "xii": 12,
+}
+_GLUED_DMY_FLEX_RE = re.compile(
+    r"(?<!\d)(\d{2})[01]?(\d{2})(20[2-3]\d)(?!\d)"
 )
 
 
@@ -199,10 +220,20 @@ def _validity_days(ocr_text: str) -> int | None:
 
 def _normalize_health_ocr(ocr_text: str) -> str:
     t = (ocr_text or "").casefold()
+    t = t.replace("we!", "mei")
+    t = re.sub(r"\b(\d{2})(\d{2})\s+20\s+(\d{2})\b", r"\1/\2/20\3", t)
+    t = re.sub(r"(?<!\d)20[.\s]{2,}(\d)\b", r"202\1", t)
     t = re.sub(r"\b20[\s.]+([2-3]\d)\b", r"20\1", t)
+    t = re.sub(r"\b20[.\s]*([2-3])[.\s]+(\d)\b", r"20\1\2", t)
+    t = re.sub(r"\.{2,}(20\d{0,2})\b", r" \1", t)
     t = re.sub(r"\b20\s+26\b", "2026", t)
+    t = re.sub(r"\b(\d{1,2})\s+106\s+\d?\s*(20[2-3]\d)\b", r"\1 06 \2", t)
     t = re.sub(r"\b2[oa]([6-9])\b", r"202\1", t)
     t = re.sub(r"\b1202\b", "2026", t)
+    t = re.sub(r"(\d{1,2}\s*[/\-]\s*\d{1,2}\s+)1(20[2-3]\d)\b", r"\1\2", t)
+    t = re.sub(r"(\d{1,2})[/\-]0/+?(20[2-3]\d)", r"\1/06/\2", t)
+    t = re.sub(r"\bo(\d)\b", r"0\1", t)
+    t = re.sub(r"\b(\d{1,2})\s*[\-./]\s*(\d{1,2})\s*[\-./]\s*20[69]\b", r"\1/\2/2026", t)
     # Jam cetak "11 Juni 2026, 20.01" / "15/06/26, 13.13" bukan tanggal.
     t = re.sub(r"(?:,\s*)?(?:[01]?\d|2[0-3])[.:][0-5]\d\b", " ", t)
     for bad, good in (
@@ -214,12 +245,14 @@ def _normalize_health_ocr(ocr_text: str) -> str:
         ("juri", "juni"),
         ("jumi", "juni"),
         ("junl", "juni"),
+        ("jusi", "juni"),
     ):
         t = t.replace(bad, good)
     t = re.sub(rf"(?<=\d)({_MONTH_SPLIT_FIX})", r" \1", t, flags=re.I)
     t = re.sub(rf"({_MONTH_SPLIT_FIX})(?=\d)", r"\1 ", t, flags=re.I)
     t = re.sub(r"\bmel\b", "mei", t)
     t = re.sub(r"\bmer\b", "mei", t)
+    t = re.sub(r"\bwei\b", "mei", t)
     return " ".join(t.split())
 
 
@@ -235,6 +268,8 @@ def _coerce_exam_year(raw: str, ocr_n: str) -> int | None:
         return 2000 + y
     if 226 <= y <= 229:
         return 2000 + (y - 200)
+    if y in {202, 206, 209}:
+        return 2026
     if y == 20:
         found = [int(x) for x in re.findall(r"20[2-3]\d", ocr_n)]
         recent = [x for x in found if x >= 2025]
@@ -270,9 +305,11 @@ def _near_noise(ocr_n: str, pos: int, end: int | None = None) -> bool:
     a = max(0, pos - 28)
     b = min(len(ocr_n), (end if end is not None else pos) + 36)
     chunk = ocr_n[a:b]
-    if _SIP_NEAR_RE.search(chunk):
+    named = _has_month_name(ocr_n, pos)
+    has_year = bool(re.search(r"20[2-3]\d", ocr_n[pos : min(len(ocr_n), pos + 28)]))
+    if _SIP_NEAR_RE.search(chunk) and not named:
         return True
-    if re.search(r"\b(?:visus|ods?|od|os)\b", chunk):
+    if re.search(r"\b(?:visus|ods?)\b", chunk) and not named and not has_year:
         return True
     return False
 
@@ -294,12 +331,54 @@ def _year_near(ocr_n: str, pos: int, end: int | None = None) -> int | None:
         if m.group(1):
             return _coerce_exam_year("20" + m.group(1), ocr_n)
         return _coerce_exam_year("202" + m.group(2), ocr_n)
-    found = re.findall(r"20[2-3]\d", chunk)
+    found = re.findall(r"20[2-3]\d|20[269]", chunk)
     if found:
         return _coerce_exam_year(found[-1], ocr_n)
     if pos >= int(len(ocr_n) * 0.42):
         return _doc_year(ocr_n)
     return None
+
+
+def _dates_from_city_windows(
+    ocr_n: str,
+    dated: list[tuple[int, date]],
+    seen: set[tuple[int, str]],
+) -> None:
+    city_re = re.compile(_CITIES_RE, re.I)
+    month_re = re.compile(rf"\b({_MONTH_ALT_OCR})\b", re.I)
+    for cm in city_re.finditer(ocr_n):
+        a = max(0, cm.start() - 56)
+        b = min(len(ocr_n), cm.end() + 80)
+        win = ocr_n[a:b]
+        mmatch = month_re.search(win)
+        if not mmatch:
+            continue
+        month = _MONTH_OCR.get(mmatch.group(1).casefold())
+        if not month:
+            continue
+        year = None
+        for tok in re.findall(r"20[2-3]\d|20[269]", win):
+            year = _coerce_exam_year(tok, ocr_n) or year
+        if year is None:
+            year = _year_near(ocr_n, cm.start(), cm.end())
+        if year is None:
+            continue
+        after = ocr_n[cm.end() : cm.end() + 16]
+        dm = re.search(r"^\s*[,.\-]?\s*(\d{1,2})\b", after)
+        day: int | None = None
+        if dm and 1 <= int(dm.group(1)) <= 31:
+            day = int(dm.group(1))
+        else:
+            before = ocr_n[max(0, cm.start() - 16) : cm.start()]
+            dm2 = re.search(r"\b(\d{1,2})\s*$", before)
+            if dm2 and 1 <= int(dm2.group(1)) <= 31:
+                day = int(dm2.group(1))
+        if day is None:
+            continue
+        _append_dated(
+            dated, seen, cm.start(),
+            _safe_health_date(year, month, day),
+        )
 
 
 def _parse_health_dates(ocr_n: str) -> list[tuple[int, date]]:
@@ -310,9 +389,12 @@ def _parse_health_dates(ocr_n: str) -> list[tuple[int, date]]:
         year = _coerce_exam_year(m.group(3), ocr_n)
         if year is None:
             continue
+        month = int(m.group(2))
+        if month == 16:
+            month = 6
         _append_dated(
             dated, seen, m.start(),
-            _safe_health_date(year, int(m.group(2)), int(m.group(1))),
+            _safe_health_date(year, month, int(m.group(1))),
         )
     for m in _SPACED_NUM_DATE_RE.finditer(ocr_n):
         year = _coerce_exam_year(m.group(3), ocr_n)
@@ -377,15 +459,21 @@ def _parse_health_dates(ocr_n: str) -> list[tuple[int, date]]:
             _safe_health_date(year, month, int(m.group(1))),
         )
     for m in _PLACE_NUM_DATE_RE.finditer(ocr_n):
+        day = int(m.group(1))
+        month = int(m.group(2))
         year_raw = m.group(3)
         year = _coerce_exam_year(year_raw, ocr_n) if year_raw else _year_near(
             ocr_n, m.start(), m.end()
         )
-        if year is None:
+        if month > 12:
+            year = _coerce_exam_year(str(month), ocr_n) or year
+            if 1 <= day <= 12:
+                month = day
+        if year is None or month < 1 or month > 12:
             continue
         _append_dated(
             dated, seen, m.start(1),
-            _safe_health_date(year, int(m.group(2)), int(m.group(1))),
+            _safe_health_date(year, month, day),
         )
     for m in _DATE_BEFORE_PLACE_RE.finditer(ocr_n):
         month = int(m.group(2))
@@ -398,6 +486,9 @@ def _parse_health_dates(ocr_n: str) -> list[tuple[int, date]]:
             else _year_near(ocr_n, m.start(), m.end())
         )
         if year is None:
+            continue
+        day = int(m.group(1))
+        if (day, month) in _VISUS_PAIRS:
             continue
         _append_dated(
             dated, seen, m.start(),
@@ -482,6 +573,82 @@ def _parse_health_dates(ocr_n: str) -> list[tuple[int, date]]:
         _append_dated(
             dated, seen, m.start(),
             _safe_health_date(year, month, day),
+        )
+    for m in _LOOSE_SLASH_YEAR_RE.finditer(ocr_n):
+        month = int(m.group(2))
+        day = int(m.group(1))
+        if month == 16:
+            month = 6
+        if month < 1 or month > 12 or day < 1 or day > 31:
+            continue
+        if (day, month) in _VISUS_PAIRS:
+            continue
+        year = _coerce_exam_year(m.group(3), ocr_n)
+        if year is None:
+            continue
+        _append_dated(
+            dated, seen, m.start(),
+            _safe_health_date(year, month, day),
+        )
+    for m in _SPACED_DMY_PARTS_RE.finditer(ocr_n):
+        month = int(m.group(2))
+        day = int(m.group(1))
+        if month == 16:
+            month = 6
+        if month < 1 or month > 12 or day < 1 or day > 31:
+            continue
+        if (day, month) in _VISUS_PAIRS:
+            continue
+        year_tok = ("20" + m.group(3)) if m.group(3) else "20"
+        year = _coerce_exam_year(year_tok, ocr_n)
+        if year is None:
+            continue
+        _append_dated(
+            dated, seen, m.start(),
+            _safe_health_date(year, month, day),
+        )
+    for m in _GAP_DMY_RE.finditer(ocr_n):
+        month = int(m.group(2))
+        day = int(m.group(1))
+        if month == 16:
+            month = 6
+        if month < 1 or month > 12 or day < 1 or day > 31:
+            continue
+        if (day, month) in _VISUS_PAIRS:
+            continue
+        if _near_noise(ocr_n, m.start(), m.start() + 8):
+            continue
+        year_tok = ("20" + m.group(3)) if m.group(3) else "20"
+        year = _coerce_exam_year(year_tok, ocr_n)
+        if year is None:
+            continue
+        _append_dated(
+            dated, seen, m.start(),
+            _safe_health_date(year, month, day),
+        )
+    for m in _ROMAN_MONTH_RE.finditer(ocr_n):
+        month = _ROMAN_MONTH.get(m.group(2).casefold())
+        if not month:
+            continue
+        year = _year_near(ocr_n, m.start(), m.end()) or _doc_year(ocr_n)
+        if year is None:
+            continue
+        _append_dated(
+            dated, seen, m.start(),
+            _safe_health_date(year, month, int(m.group(1))),
+        )
+    _dates_from_city_windows(ocr_n, dated, seen)
+    for m in _GLUED_DMY_FLEX_RE.finditer(ocr_n):
+        if _near_noise(ocr_n, m.start(), m.end()):
+            continue
+        month = int(m.group(2))
+        if month == 16:
+            month = 6
+        if month < 1 or month > 12:
+            continue
+        _append_dated(
+            dated, seen, m.start(),
+            _safe_health_date(int(m.group(3)), month, int(m.group(1))),
         )
     dated.sort(key=lambda t: t[0])
     return dated
@@ -576,6 +743,18 @@ def extract_health_check_dates(ocr_text: str) -> dict[str, Any]:
         exam = sign_hits[-1][1]
     elif exam_hits:
         exam = exam_hits[-1][1]
+    if exam is None:
+        named = [
+            (p, d)
+            for p, d in dated
+            if 2024 <= d.year <= 2029 and _has_month_name(ocr_n, p)
+        ]
+        if named:
+            exam = named[-1][1]
+        else:
+            recent = [(p, d) for p, d in dated if 2024 <= d.year <= 2029]
+            if recent:
+                exam = recent[-1][1]
 
     if exam is not None and until is not None and exam == until and exam_hits:
         earlier = [dt for _, dt in exam_hits if dt < until]
@@ -733,6 +912,8 @@ def apply_keterangan_kesehatan_gates(
     out["health_expiry_pass"] = gate["health_expiry_pass"]
     out["health_exam_date"] = gate["exam_date"]
     out["health_valid_until"] = gate["valid_until"]
+    out["issued_date"] = gate["exam_date"]
+    out["issued_date_display"] = format_id_date(gate["exam_date"])
 
     explanation = dict(out.get("explanation") or {})
     details = [

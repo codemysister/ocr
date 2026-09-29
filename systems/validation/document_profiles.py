@@ -19,7 +19,7 @@ CANONICAL_KEYWORDS: Final[dict[str, list[str]]] = {
     "npwp": ["npwp", "pajak", "kantor pelayanan", "pratama"],
     "kk": ["kartu keluarga", "kepala keluarga", "nik"],
     # Rekening: hanya tabungan; e-statement dilarang (lihat PROFILE_EXCLUDED_KEYWORDS).
-    "rekening": ["tabungan"],
+    "rekening": ["tabungan", "rekening", "livin"],
     # Mutasi: tabungan + e-statement wajib keduanya.
     "mutasi": ["tabungan", "e-statement"],
     "skck": ["skck", "kepolisian"],
@@ -70,7 +70,7 @@ SCREEN_CAPTURE_PROFILES: Final[frozenset[str]] = frozenset(
 
 # Minimal satu keyword per grup harus lolos fuzzy (OR dalam grup, AND antar grup).
 PROFILE_ANY_KEYWORD_GROUPS: Final[dict[str, list[list[str]]]] = {
-    "jkn": [["info peserta", "faskes"]],
+    "jkn": [["info peserta", "faskes", "nama peserta", "status peserta", "pandawa", "kartu indonesia sehat"]],
     "bpjs_tk": [
         ["kartu peserta"],
         ["ketenagakerjaan", "bpjs ketenagakerjaan"],
@@ -160,7 +160,7 @@ PROFILES_WITHOUT_IDENTITY: Final[frozenset[str]] = frozenset({"mutasi"})
 # Keyword yang membuat profil gagal bila terdeteksi di OCR (fuzzy).
 PROFILE_EXCLUDED_KEYWORDS: Final[dict[str, list[str]]] = {
     "rekening": ["e-statement"],
-    "jkn": ["info iuran", "total tagihan", "tidak memiliki tagihan pribadi", "kartu indonesia sehat", "bpjs ketenagakerjaan"],
+    "jkn": ["info iuran", "total tagihan", "tidak memiliki tagihan pribadi", "bpjs ketenagakerjaan"],
     "iuran": ["faskes 1", "kepesertaan terdaftar", "jenis tampilan"],
     "bpjs": ["info iuran", "kepesertaan terdaftar", "kartu vaksinasi covid", "vaksin booster", "bpjs ketenagakerjaan", "ketenagakerjaan"],
     "bpjs_tk": ["syarat dan ketentuan", "faskes tingkat", "info iuran", "kepesertaan terdaftar"],
@@ -259,6 +259,7 @@ ALIASES: Final[dict[str, str]] = {
     "pemadanan npwp": "pemadanan_npwp",
     "keterangan kesehatan": "keterangan_kesehatan",
     "surat keterangan kesehatan": "keterangan_kesehatan",
+    "surat sehat": "keterangan_kesehatan",
     "foto profil": "foto_profile",
     "foto profile": "foto_profile",
     "pas foto": "foto_profile",

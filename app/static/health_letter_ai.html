@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OCR AI — Surat kesehatan</title>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --surface: #1a222d;
+      --border: #2d3a4d;
+      --text: #e8eef5;
+      --muted: #8b9cb3;
+      --accent: #3d9cf5;
+      --ok: #6ee7b7;
+      --err: #f87171;
+      --warn: #fbbf24;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "DM Sans", system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }
+    header {
+      padding: 1.5rem clamp(1rem, 4vw, 2.5rem);
+      border-bottom: 1px solid var(--border);
+      background: linear-gradient(180deg, #151c26 0%, var(--bg) 100%);
+    }
+    header h1 { margin: 0; font-size: clamp(1.15rem, 2.5vw, 1.5rem); font-weight: 600; }
+    header p { margin: 0.35rem 0 0; color: var(--muted); font-size: 0.9rem; max-width: 56rem; }
+    .nav-top { margin-top: 0.75rem; }
+    .nav-top a { color: var(--accent); font-size: 0.875rem; }
+    main { padding: clamp(1rem, 3vw, 2rem); max-width: 1400px; margin: 0 auto; }
+    .layout {
+      display: grid;
+      gap: 1rem;
+      grid-template-columns: 1fr;
+    }
+    @media (min-width: 980px) {
+      .layout { grid-template-columns: minmax(320px, 0.95fr) minmax(360px, 1.05fr); }
+    }
+    .panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.25rem;
+    }
+    .panel h2 {
+      margin: 0 0 1rem;
+      font-size: 0.8rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--muted);
+    }
+    label.block {
+      display: block;
+      font-size: 0.78rem;
+      font-weight: 600;
+      color: var(--muted);
+      margin: 0.75rem 0 0.3rem;
+    }
+    input[type="text"], input[type="file"], textarea, select {
+      width: 100%;
+      font: inherit;
+      font-size: 0.85rem;
+      color: var(--text);
+      background: #0a0e14;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.5rem 0.65rem;
+    }
+    textarea { min-height: 9rem; resize: vertical; font-family: ui-monospace, Menlo, monospace; font-size: 0.75rem; }
+    textarea.system { min-height: 7rem; }
+    button {
+      font-family: inherit;
+      font-size: 0.85rem;
+      font-weight: 600;
+      padding: 0.5rem 0.9rem;
+      border-radius: 8px;
+      border: 1px solid var(--accent);
+      background: var(--accent);
+      color: #041018;
+      cursor: pointer;
+      margin-top: 1rem;
+    }
+    button.secondary {
+      background: transparent;
+      color: var(--text);
+      border-color: var(--border);
+      margin-left: 0.4rem;
+    }
+    button:disabled { opacity: 0.45; cursor: not-allowed; }
+    .preview {
+      margin-top: 1rem;
+      min-height: 220px;
+      max-height: 48vh;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: #0a0e14;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: auto;
+      padding: 0.6rem;
+    }
+    .preview img { max-width: 100%; height: auto; border-radius: 4px; }
+    .muted { color: var(--muted); font-size: 0.85rem; }
+    .status { margin-top: 0.75rem; font-size: 0.85rem; min-height: 1.2rem; }
+    .status.ok { color: var(--ok); }
+    .status.err { color: var(--err); }
+    .gates { display: grid; gap: 0.5rem; grid-template-columns: 1fr 1fr; margin-bottom: 1rem; }
+    .gate {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.65rem 0.75rem;
+      background: #121821;
+    }
+    .gate .k { font-size: 0.72rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+    .gate .v { font-weight: 600; margin-top: 0.15rem; }
+    .gate.pass { border-color: #14532d; }
+    .gate.fail { border-color: #7f1d1d; }
+    pre {
+      margin: 0;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-family: ui-monospace, Menlo, monospace;
+      font-size: 0.75rem;
+      background: #0a0e14;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.8rem;
+      max-height: 42vh;
+      overflow: auto;
+    }
+    .hint { font-size: 0.78rem; color: var(--muted); margin: 0 0 0.5rem; }
+    code { font-size: 0.78rem; background: #0a0e14; padding: 0.1rem 0.35rem; border-radius: 4px; }
+  </style>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;600&display=swap" rel="stylesheet" />
+</head>
+<body>
+  <header>
+    <h1>OCR AI — surat keterangan kesehatan</h1>
+    <p>
+      Kirim foto langsung ke server Ornith lokal
+      (<code>172.21.13.26:8080</code>). Prompt meminta ekstraksi field dan validasi
+      (jenis surat, nama, SEHAT, tanggal dibuat).
+    </p>
+    <p class="nav-top">
+      <a href="/">← Beranda</a> ·
+      <a href="/dataset-test">Dataset benchmark</a> ·
+      <a href="/pipeline">Pipeline Paddle</a>
+    </p>
+  </header>
+  <main>
+    <div class="layout">
+      <section class="panel">
+        <h2>Input</h2>
+        <label class="block">Gambar</label>
+        <input type="file" id="file" accept="image/*" />
+        <label class="block">Nama referensi</label>
+        <input type="text" id="expectedName" placeholder="mis. Taliyah" />
+        <label class="block">NIK referensi (opsional)</label>
+        <input type="text" id="expectedNik" placeholder="16 digit" />
+        <label class="block">Base URL LLM</label>
+        <input type="text" id="llmUrl" />
+        <label class="block">Model</label>
+        <input type="text" id="llmModel" list="modelList" />
+        <datalist id="modelList"></datalist>
+        <label class="block">System prompt</label>
+        <textarea id="systemPrompt" class="system" readonly></textarea>
+        <label class="block">User prompt (bisa diubah)</label>
+        <textarea id="userPrompt"></textarea>
+        <button type="button" id="btnRun">Jalankan tes AI</button>
+        <button type="button" class="secondary" id="btnReset">Reset prompt</button>
+        <div class="preview" id="preview"><span class="muted">Pilih foto surat kesehatan.</span></div>
+        <div class="status" id="status"></div>
+      </section>
+      <section class="panel">
+        <h2>Hasil validasi</h2>
+        <p class="hint" id="llmMeta">Belum ada panggilan ke server AI.</p>
+        <div class="gates" id="gates"></div>
+        <p class="hint">Ekstraksi JSON</p>
+        <pre id="jsonOut">Belum ada hasil.</pre>
+        <p class="hint" style="margin-top:1rem">Jawaban mentah model</p>
+        <pre id="rawOut">—</pre>
+      </section>
+    </div>
+  </main>
+  <script>
+    const fileEl = document.getElementById("file");
+    const preview = document.getElementById("preview");
+    const statusEl = document.getElementById("status");
+    const btnRun = document.getElementById("btnRun");
+    const btnReset = document.getElementById("btnReset");
+    const llmUrl = document.getElementById("llmUrl");
+    const llmModel = document.getElementById("llmModel");
+    const systemPrompt = document.getElementById("systemPrompt");
+    const userPrompt = document.getElementById("userPrompt");
+    const expectedName = document.getElementById("expectedName");
+    const expectedNik = document.getElementById("expectedNik");
+    const gatesEl = document.getElementById("gates");
+    const jsonOut = document.getElementById("jsonOut");
+    const rawOut = document.getElementById("rawOut");
+    const llmMeta = document.getElementById("llmMeta");
+    const modelList = document.getElementById("modelList");
+    let defaultUser = "";
+    let objectUrl = "";
+
+    function setStatus(text, kind) {
+      statusEl.textContent = text || "";
+      statusEl.className = "status" + (kind ? " " + kind : "");
+    }
+
+    function gateCard(label, pass, detail) {
+      const cls = pass === true ? "pass" : pass === false ? "fail" : "";
+      const v = pass === true ? "Lolos" : pass === false ? "Gagal" : "—";
+      return `<div class="gate ${cls}"><div class="k">${label}</div><div class="v">${v}</div><div class="muted">${detail || ""}</div></div>`;
+    }
+
+    function fillUserPrompt() {
+      const name = expectedName.value.trim();
+      const nik = expectedNik.value.trim();
+      let text = defaultUser.replace("{expected_name}", name || "(kosong)").replace("{expected_nik}", nik || "(kosong)");
+      if (!defaultUser.includes("{expected_name}")) {
+        text = defaultUser;
+        if (name) text += (text.endsWith("\n") ? "" : "\n") + "Nama referensi pemegang: " + name;
+        if (nik) text += "\nNIK referensi: " + nik;
+      }
+      userPrompt.value = text;
+    }
+
+    async function loadConfig() {
+      try {
+        const res = await fetch("/api/v1/health-letter-ai/config");
+        const cfg = await res.json();
+        llmUrl.value = cfg.base_url || "http://172.21.13.26:8080/v1";
+        llmModel.value = cfg.model || "ornith-1.5-9b";
+        systemPrompt.value = cfg.system_prompt || "";
+        defaultUser = cfg.user_prompt_template || "";
+        fillUserPrompt();
+        modelList.innerHTML = (cfg.models || []).map((id) => `<option value="${id.replace(/"/g, "")}"></option>`).join("");
+        if (cfg.models && cfg.models.length && !cfg.models.includes(llmModel.value)) {
+          llmModel.value = cfg.models[0];
+        }
+        if (cfg.url_error) setStatus("Config LLM: " + cfg.url_error, "err");
+        else if ((cfg.models || []).length) setStatus("Server AI merespons. Model: " + cfg.models.join(", "), "ok");
+        else setStatus("Config dimuat. Jika model kosong, server mungkin belum reachable dari mesin ini.", "");
+      } catch (e) {
+        llmUrl.value = "http://172.21.13.26:8080/v1";
+        llmModel.value = "ornith-1.5-9b";
+        setStatus("Gagal memuat config: " + e.message, "err");
+      }
+    }
+
+    fileEl.addEventListener("change", () => {
+      const f = fileEl.files && fileEl.files[0];
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+      if (!f) {
+        preview.innerHTML = '<span class="muted">Pilih foto surat kesehatan.</span>';
+        return;
+      }
+      objectUrl = URL.createObjectURL(f);
+      preview.innerHTML = '<img alt="preview" src="' + objectUrl + '" />';
+    });
+    expectedName.addEventListener("change", fillUserPrompt);
+    expectedNik.addEventListener("change", fillUserPrompt);
+    btnReset.addEventListener("click", fillUserPrompt);
+
+    btnRun.addEventListener("click", async () => {
+      const f = fileEl.files && fileEl.files[0];
+      if (!f) {
+        setStatus("Pilih gambar dulu.", "err");
+        return;
+      }
+      btnRun.disabled = true;
+      setStatus("Mengirim ke Ornith…", "");
+      jsonOut.textContent = "Memproses…";
+      rawOut.textContent = "—";
+      gatesEl.innerHTML = "";
+      const body = new FormData();
+      body.append("file", f);
+      body.append("expected_name", expectedName.value.trim());
+      body.append("expected_nik", expectedNik.value.trim());
+      body.append("llm_base_url", llmUrl.value.trim());
+      body.append("llm_model", llmModel.value.trim());
+      body.append("user_prompt", userPrompt.value);
+      try {
+        const res = await fetch("/api/v1/health-letter-ai", { method: "POST", body });
+        const data = await res.json();
+        if (!res.ok) {
+          const detail = data.detail;
+          const msg = typeof detail === "string" ? detail : (detail && detail.error_message) || JSON.stringify(data);
+          throw new Error(msg);
+        }
+        const v = data.validation || {};
+        const ext = data.extraction || {};
+        llmMeta.textContent = [
+          data.llm && data.llm.base_url,
+          data.llm && data.llm.model,
+          data.llm && data.llm.latency_s != null ? data.llm.latency_s + "s" : "",
+          data.document_matched ? "MATCH" : "TIDAK MATCH",
+        ].filter(Boolean).join(" · ");
+        gatesEl.innerHTML = [
+          gateCard("Jenis surat", v.document_type_pass, ext.document_type_label || ""),
+          gateCard("Nama", v.identity_pass, ext.holder_name || "tanpa referensi"),
+          gateCard("SEHAT", v.health_status_pass, v.health_conclusion || ""),
+          gateCard("Tanggal dibuat", Boolean(v.issued_date), v.issued_date_display || v.issued_date || "tidak terbaca"),
+        ].join("");
+        jsonOut.textContent = JSON.stringify({ extraction: ext, validation: v, document_matched: data.document_matched }, null, 2);
+        rawOut.textContent = data.raw_content || data.error || "—";
+        setStatus(v.summary || (data.error ? "Gagal: " + data.error : "Selesai"), data.document_matched ? "ok" : "err");
+      } catch (e) {
+        setStatus(e.message || String(e), "err");
+        jsonOut.textContent = "Gagal.";
+      } finally {
+        btnRun.disabled = false;
+      }
+    });
+
+    loadConfig();
+  </script>
+</body>
+</html>

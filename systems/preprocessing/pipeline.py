@@ -8,6 +8,9 @@ from typing import Final
 
 import cv2
 import numpy as np
+from PIL import Image, ImageFile, ImageOps
+
+ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 from systems.preprocessing.auto_image_rotator import maybe_auto_image_rotator_bgr
 from systems.preprocessing.npwp_dual_crop import (
@@ -29,12 +32,39 @@ _BLUR_SCORE_HEAVY: Final[float] = 160.0
 _DETAIL_ENHANCE_MAX_BLUR_SCORE: Final[float] = 55.0
 
 
-def _decode_image(data: bytes) -> np.ndarray:
+def _cv2_imdecode_bgr(data: bytes) -> np.ndarray | None:
     buf = np.frombuffer(data, dtype=np.uint8)
     img = cv2.imdecode(buf, cv2.IMREAD_COLOR)
-    if img is None:
-        raise ValueError("Gagal membaca gambar. Pastikan format didukung (JPEG, PNG, WebP, dll.).")
     return img
+
+
+def _pillow_decode_bgr(data: bytes) -> np.ndarray:
+    """Dekode via Pillow, termasuk JPEG terpotong (tanpa EOI) yang ditolak OpenCV."""
+    im = Image.open(io.BytesIO(data))
+    im = ImageOps.exif_transpose(im)
+    if im.mode in ("RGBA", "LA") or ("transparency" in getattr(im, "info", {})):
+        im = im.convert("RGBA")
+        bg = Image.new("RGB", im.size, (255, 255, 255))
+        bg.paste(im, mask=im.split()[-1])
+        im = bg
+    elif im.mode != "RGB":
+        im = im.convert("RGB")
+    arr = np.asarray(im)
+    if arr.ndim != 3 or arr.shape[2] != 3:
+        raise ValueError("Gambar tidak bisa dikonversi ke RGB.")
+    return cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
+
+
+def _decode_image(data: bytes) -> np.ndarray:
+    img = _cv2_imdecode_bgr(data)
+    if img is not None:
+        return img
+    try:
+        return _pillow_decode_bgr(data)
+    except Exception as e:
+        raise ValueError(
+            "Gagal membaca gambar. Pastikan format didukung (JPEG, PNG, WebP, dll.)."
+        ) from e
 
 
 def _decode_image_with_exif(data: bytes) -> tuple[np.ndarray, dict]:
@@ -44,21 +74,11 @@ def _decode_image_with_exif(data: bytes) -> tuple[np.ndarray, dict]:
     """
     meta: dict = {"exif_decode": "opencv", "exif_transpose_applied": False}
     try:
-        from PIL import Image, ImageOps
-
-        im = Image.open(io.BytesIO(data))
-        im = ImageOps.exif_transpose(im)
-        if im.mode in ("RGBA", "LA") or ("transparency" in getattr(im, "info", {})):
-            im = im.convert("RGBA")
-            bg = Image.new("RGB", im.size, (255, 255, 255))
-            bg.paste(im, mask=im.split()[-1])
-            im = bg
-        elif im.mode != "RGB":
-            im = im.convert("RGB")
-        arr = np.asarray(im)
-        bgr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
+        bgr = _pillow_decode_bgr(data)
         meta["exif_decode"] = "pillow"
         meta["exif_transpose_applied"] = True
+        if _cv2_imdecode_bgr(data) is None:
+            meta["truncated_repaired"] = True
         return bgr, meta
     except Exception:
         return _decode_image(data), meta
@@ -1905,16 +1925,134 @@ def _sniff_image_mime(data: bytes) -> str:
     return "application/octet-stream"
 
 
+def _remote_max_long_side(default: int = 1920) -> int:
+    raw = (os.environ.get("OCR_REMOTE_MAX_LONG_SIDE") or str(default)).strip()
+    try:
+        val = int(raw)
+    except ValueError:
+        return default
+    return max(640, min(val, 4096))
+
+
+def encode_image_bytes_for_ocr_remote_safe(
+    data: bytes,
+    *,
+    max_long_side: int | None = None,
+) -> tuple[bytes, dict]:
+    """
+    Kirim bytes asli bila sisi terpanjang ≤ cap.
+    Hanya foto oversized yang di-decode, di-resize, lalu JPEG (hindari crash GPU 12MP).
+    """
+    if not data:
+        raise ValueError("File kosong.")
+    cap = int(max_long_side) if max_long_side else _remote_max_long_side()
+    probe = _cv2_imdecode_bgr(data)
+    decode_meta: dict = {}
+    repaired = False
+    if probe is None:
+        try:
+            probe, decode_meta = _decode_image_with_exif(data)
+            repaired = True
+        except Exception as e:
+            raise ValueError(
+                "Gagal membaca gambar. Gunakan JPEG, PNG, WebP, atau format umum lainnya."
+            ) from e
+    ph, pw = probe.shape[:2]
+    mime = _sniff_image_mime(data)
+    channels = int(probe.shape[2]) if probe.ndim == 3 else 1
+    if not repaired and max(ph, pw) <= cap:
+        return data, {
+            "skipped": True,
+            "reason": "direct_upload_bytes",
+            "enable_preprocess": False,
+            "skip_passthrough": True,
+            "encoding": "raw_upload_bytes",
+            "mime": mime,
+            "input_bytes": len(data),
+            "width": int(pw),
+            "height": int(ph),
+            "channels": channels,
+            "remote_max_long_side": cap,
+            "remote_resize_applied": False,
+            "remote_resize_scale": 1.0,
+            "source_hw": {"width": int(pw), "height": int(ph)},
+        }
+
+    if repaired:
+        bgr = probe
+    else:
+        bgr, decode_meta = _decode_image_with_exif(data)
+    h, w = bgr.shape[:2]
+    long_side = max(h, w)
+    scale = cap / float(long_side) if long_side > cap else 1.0
+    if scale < 1.0:
+        bgr = cv2.resize(
+            bgr,
+            (max(1, int(w * scale)), max(1, int(h * scale))),
+            interpolation=cv2.INTER_AREA,
+        )
+    ok, encoded = cv2.imencode(".jpg", bgr, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
+    if not ok:
+        raise ValueError("Gagal mengenkode JPEG untuk OCR remote.")
+    out = encoded.tobytes()
+    oh, ow = bgr.shape[:2]
+    meta: dict[str, object] = {
+        **decode_meta,
+        "skipped": True,
+        "reason": "remote_safe_jpeg",
+        "enable_preprocess": False,
+        "encoding": "jpeg_remote_safe",
+        "mime": "image/jpeg",
+        "input_bytes": len(data),
+        "output_bytes": len(out),
+        "width": int(ow),
+        "height": int(oh),
+        "channels": int(bgr.shape[2]) if bgr.ndim == 3 else 1,
+        "remote_max_long_side": cap,
+        "remote_resize_applied": scale < 1.0,
+        "remote_resize_scale": round(scale, 4),
+        "source_hw": {"width": int(w), "height": int(h)},
+        "truncated_repaired": repaired,
+    }
+    return out, meta
+
+
 def encode_image_bytes_for_ocr_direct(data: bytes) -> tuple[bytes, dict]:
     """Teruskan bytes upload apa adanya ke OCR — tanpa resize/grayscale/EXIF."""
     if not data:
         raise ValueError("File kosong.")
-    buf = np.frombuffer(data, dtype=np.uint8)
-    probe = cv2.imdecode(buf, cv2.IMREAD_COLOR)
+    probe = _cv2_imdecode_bgr(data)
+    repaired = False
+    decode_meta: dict = {}
     if probe is None:
-        raise ValueError(
-            "Gagal membaca gambar. Gunakan JPEG, PNG, WebP, atau format umum lainnya."
-        )
+        try:
+            probe, decode_meta = _decode_image_with_exif(data)
+            repaired = True
+        except Exception as e:
+            raise ValueError(
+                "Gagal membaca gambar. Gunakan JPEG, PNG, WebP, atau format umum lainnya."
+            ) from e
+    if repaired:
+        ok, encoded = cv2.imencode(".jpg", probe, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
+        if not ok:
+            raise ValueError("Gagal mengenkode JPEG untuk OCR.")
+        out = encoded.tobytes()
+        channels = int(probe.shape[2]) if probe.ndim == 3 else 1
+        return out, {
+            **decode_meta,
+            "skipped": True,
+            "reason": "truncated_jpeg_repaired",
+            "enable_preprocess": False,
+            "skip_passthrough": True,
+            "encoding": "jpeg_truncated_repaired",
+            "mime": "image/jpeg",
+            "input_bytes": len(data),
+            "output_bytes": len(out),
+            "width": int(probe.shape[1]),
+            "height": int(probe.shape[0]),
+            "channels": channels,
+            "truncated_repaired": True,
+        }
     channels = int(probe.shape[2]) if probe.ndim == 3 else 1
     meta: dict[str, object] = {
         "skipped": True,
@@ -1939,6 +2077,171 @@ def encode_image_bytes_for_ocr_passthrough(data: bytes) -> tuple[bytes, dict]:
     if not ok:
         raise ValueError("Gagal mengenkode gambar untuk OCR.")
     return encoded.tobytes(), {**decode_meta, **passthrough_meta, "mime": "image/png"}
+
+
+def _encode_ktp_region_png(
+    data: bytes,
+    *,
+    y0_frac: float,
+    y1_frac: float,
+    x1_frac: float,
+    kind: str,
+) -> tuple[bytes | None, dict]:
+    bgr, decode_meta = _decode_image_with_exif(data)
+    h, w = bgr.shape[:2]
+    if h < 40 or w < 40:
+        return None, {**decode_meta, kind: False, "reason": "image_too_small"}
+    y0, y1 = int(h * y0_frac), min(h, int(h * y1_frac))
+    x0, x1 = 0, max(int(w * x1_frac), 1)
+    if (y1 - y0) < 20 or (x1 - x0) < 40:
+        return None, {**decode_meta, kind: False, "reason": "band_too_small"}
+    crop = bgr[y0:y1, x0:x1]
+    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if crop.ndim == 3 else crop
+    ch, cw = gray.shape[:2]
+    min_side = min(ch, cw)
+    if min_side < 320:
+        scale = 320.0 / max(min_side, 1)
+        gray = cv2.resize(
+            gray,
+            (max(1, int(cw * scale)), max(1, int(ch * scale))),
+            interpolation=cv2.INTER_CUBIC,
+        )
+    enhanced = _enhance_grayscale_for_ocr(gray)
+    ok, encoded = cv2.imencode(".png", enhanced)
+    if not ok:
+        return None, {**decode_meta, kind: False, "reason": "encode_failed"}
+    return encoded.tobytes(), {
+        **decode_meta,
+        kind: True,
+        "band_box": [x0, y0, x1, y1],
+        "band_width": int(enhanced.shape[1]),
+        "band_height": int(enhanced.shape[0]),
+        "mime": "image/png",
+        "encoding": f"grayscale_8bit_{kind}",
+    }
+
+
+def encode_ktp_status_band_png(data: bytes) -> tuple[bytes | None, dict]:
+    """
+    Potong pita field kiri-bawah KTP (Agama / Status Perkawinan / Pekerjaan),
+    CLAHE ringan, lalu PNG grayscale. Dipakai OCR ulang bila baris BELUM KAWIN hilang.
+    """
+    return _encode_ktp_region_png(
+        data, y0_frac=0.40, y1_frac=0.92, x1_frac=0.78, kind="ktp_status_band"
+    )
+
+
+def encode_ktp_name_band_png(data: bytes) -> tuple[bytes | None, dict]:
+    """
+    Potong pita NIK + Nama + TTL (kiri-atas, tanpa foto).
+    Dipakai OCR ulang bila nama tidak terbaca di full-frame.
+    """
+    return _encode_ktp_region_png(
+        data, y0_frac=0.06, y1_frac=0.50, x1_frac=0.74, kind="ktp_name_band"
+    )
+
+
+def _encode_stacked_bands_png(
+    data: bytes,
+    *,
+    bands: tuple[tuple[float, float], ...],
+    kind: str,
+) -> tuple[bytes | None, dict]:
+    bgr, decode_meta = _decode_image_with_exif(data)
+    h, w = bgr.shape[:2]
+    if h < 80 or w < 80:
+        return None, {**decode_meta, kind: False, "reason": "image_too_small"}
+    strips: list[np.ndarray] = []
+    boxes: list[list[int]] = []
+    for y0_frac, y1_frac in bands:
+        y0, y1 = int(h * y0_frac), min(h, int(h * y1_frac))
+        if (y1 - y0) < 24:
+            continue
+        strips.append(bgr[y0:y1, 0:w])
+        boxes.append([0, y0, w, y1])
+    if not strips:
+        return None, {**decode_meta, kind: False, "reason": "band_too_small"}
+    target_w = max(int(s.shape[1]) for s in strips)
+    aligned: list[np.ndarray] = []
+    for strip in strips:
+        sh, sw = strip.shape[:2]
+        if sw != target_w:
+            nh = max(1, int(round(sh * target_w / max(sw, 1))))
+            strip = cv2.resize(strip, (target_w, nh), interpolation=cv2.INTER_CUBIC)
+        aligned.append(strip)
+    stacked = np.vstack(aligned)
+    gray = cv2.cvtColor(stacked, cv2.COLOR_BGR2GRAY) if stacked.ndim == 3 else stacked
+    ch, cw = gray.shape[:2]
+    min_side = min(ch, cw)
+    if min_side < 520:
+        scale = 520.0 / max(min_side, 1)
+        gray = cv2.resize(
+            gray,
+            (max(1, int(cw * scale)), max(1, int(ch * scale))),
+            interpolation=cv2.INTER_CUBIC,
+        )
+    cap = 2800
+    ch, cw = gray.shape[:2]
+    long_side = max(ch, cw)
+    if long_side > cap:
+        scale = cap / long_side
+        gray = cv2.resize(
+            gray,
+            (max(1, int(cw * scale)), max(1, int(ch * scale))),
+            interpolation=cv2.INTER_AREA,
+        )
+    enhanced = _enhance_grayscale_for_ocr(gray)
+    ok, encoded = cv2.imencode(".png", enhanced)
+    if not ok:
+        return None, {**decode_meta, kind: False, "reason": "encode_failed"}
+    return encoded.tobytes(), {
+        **decode_meta,
+        kind: True,
+        "band_boxes": boxes,
+        "band_width": int(enhanced.shape[1]),
+        "band_height": int(enhanced.shape[0]),
+        "mime": "image/png",
+        "encoding": f"grayscale_8bit_{kind}",
+    }
+
+
+def encode_kk_member_table_png(data: bytes) -> tuple[bytes | None, dict]:
+    """
+    Potong dua pita tabel anggota KK (atas + tengah), susun vertikal, upscale.
+    Dipakai OCR ulang bila nama/NIK anggota hilang di full-frame (huruf kecil / tabel terbalik).
+    """
+    return _encode_stacked_bands_png(
+        data,
+        bands=((0.14, 0.46), (0.36, 0.66)),
+        kind="kk_member_table",
+    )
+
+
+def encode_rekening_detail_png(data: bytes) -> tuple[bytes | None, dict]:
+    """
+    Potong pita atas Livin (norek + nama) dan pita bawah (Daftar Kartu / nama di Visa),
+    susun vertikal, upscale. OCR ulang bila full-frame hanya menangkap kartu tengah.
+    """
+    return _encode_stacked_bands_png(
+        data,
+        bands=((0.04, 0.36), (0.52, 0.90)),
+        kind="rekening_detail",
+    )
+
+
+def encode_npwp_id_band_png(data: bytes) -> tuple[bytes | None, dict]:
+    """
+    Potong pita nomor 16 digit + nama kartu NPWP (depan saja bila foto dual).
+    Dipakai OCR ulang bila full-frame hanya menangkap logo/tanggal.
+    """
+    bgr, decode_meta = _decode_image_with_exif(data)
+    h, w = bgr.shape[:2]
+    if h < 40 or w < 40:
+        return None, {**decode_meta, "npwp_id_band": False, "reason": "image_too_small"}
+    x1_frac = 0.52 if (w / max(h, 1)) >= 1.85 else 1.0
+    return _encode_ktp_region_png(
+        data, y0_frac=0.10, y1_frac=0.78, x1_frac=x1_frac, kind="npwp_id_band"
+    )
 
 
 def preprocess_image_bytes(

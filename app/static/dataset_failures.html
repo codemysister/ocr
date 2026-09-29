@@ -1,0 +1,705 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Data gagal — OCR Platform</title>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --surface: #1a222d;
+      --border: #2d3a4d;
+      --text: #e8eef5;
+      --muted: #8b9cb3;
+      --accent: #3d9cf5;
+      --ok: #6ee7b7;
+      --err: #f87171;
+      --warn: #fbbf24;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "DM Sans", system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }
+    header {
+      padding: 1.25rem clamp(1rem, 4vw, 2rem);
+      border-bottom: 1px solid var(--border);
+      background: linear-gradient(180deg, #151c26 0%, var(--bg) 100%);
+    }
+    header h1 { margin: 0; font-size: clamp(1.15rem, 2.5vw, 1.4rem); font-weight: 600; }
+    header p { margin: 0.35rem 0 0; color: var(--muted); font-size: 0.85rem; }
+    .nav-top { margin-top: 0.6rem; }
+    .nav-top a { color: var(--accent); font-size: 0.875rem; margin-right: 1rem; }
+    .wrap {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 1rem clamp(1rem, 3vw, 1.5rem) 2rem;
+    }
+    .stats {
+      display: grid;
+      gap: 0.65rem;
+      grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+      margin-bottom: 1rem;
+    }
+    .stat {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 0.75rem;
+    }
+    .stat .val { font-size: 1.35rem; font-weight: 700; }
+    .stat .lbl { font-size: 0.72rem; color: var(--muted); margin-top: 0.15rem; }
+    .stat.ok .val { color: var(--ok); }
+    .stat.err .val { color: var(--err); }
+    .stat.warn .val { color: var(--warn); }
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+      align-items: center;
+      margin-bottom: 1rem;
+    }
+    button, .filter-btn {
+      font-family: inherit;
+      font-size: 0.85rem;
+      font-weight: 600;
+      padding: 0.5rem 0.85rem;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--text);
+      cursor: pointer;
+    }
+    button.primary { background: var(--accent); color: #061018; border-color: transparent; }
+    button.danger { color: var(--err); border-color: rgba(248,113,113,0.4); }
+    button:hover, .filter-btn:hover { border-color: var(--accent); }
+    .filter-btn.active { border-color: var(--accent); background: rgba(61,156,245,0.12); color: var(--accent); }
+    .status { font-size: 0.8rem; color: var(--muted); }
+    .status.err { color: var(--err); }
+    .empty {
+      text-align: center;
+      padding: 3rem 1rem;
+      color: var(--muted);
+      border: 1px dashed var(--border);
+      border-radius: 12px;
+    }
+    .fail-cards { display: flex; flex-direction: column; gap: 1rem; }
+    .fail-card {
+      background: #0a0e14;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      overflow: hidden;
+    }
+    .fail-card-head {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: flex-start;
+      gap: 0.75rem 1rem;
+      padding: 0.85rem 1rem;
+      border-bottom: 1px solid var(--border);
+      background: rgba(248, 113, 113, 0.04);
+    }
+    .fail-card-meta { flex: 1; min-width: 200px; }
+    .fail-card-meta .fname {
+      font-family: ui-monospace, monospace;
+      font-size: 0.8rem;
+      word-break: break-all;
+      margin: 0.25rem 0 0.5rem;
+    }
+    .fail-card-meta .reason {
+      font-size: 0.8rem;
+      color: var(--muted);
+      line-height: 1.45;
+      margin: 0;
+    }
+    .fail-card.preview-only .fail-card-head {
+      flex-direction: column;
+      border-bottom: none;
+      padding-bottom: 0.5rem;
+    }
+    .fail-card.preview-only .fail-card-meta { width: 100%; }
+    .fail-card-meta .expected {
+      font-size: 0.75rem;
+      color: var(--muted);
+      margin-top: 0.35rem;
+    }
+    .fail-preview {
+      flex-shrink: 0;
+      width: 140px;
+      height: 100px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: #151c26;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+    }
+    .fail-preview.large {
+      width: 100%;
+      height: auto;
+      min-height: 200px;
+      max-height: min(420px, 55vh);
+    }
+    .fail-preview.large img {
+      width: 100%;
+      height: auto;
+      max-height: min(420px, 55vh);
+      object-fit: contain;
+    }
+    .fail-preview img {
+      max-width: 100%;
+      max-height: 100%;
+      object-fit: contain;
+      display: block;
+      cursor: zoom-in;
+    }
+    .img-zoom-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 80;
+      display: none;
+      flex-direction: column;
+      background: rgba(6, 8, 12, 0.94);
+    }
+    .img-zoom-overlay.open { display: flex; }
+    .img-zoom-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
+      padding: 0.65rem 0.9rem;
+      border-bottom: 1px solid var(--border);
+      background: #121820;
+      flex-shrink: 0;
+    }
+    .img-zoom-caption {
+      font-size: 0.8rem;
+      color: var(--muted);
+      word-break: break-all;
+      min-width: 0;
+    }
+    .img-zoom-actions { display: flex; gap: 0.4rem; flex-shrink: 0; }
+    .img-zoom-actions button {
+      font-size: 0.8rem;
+      font-weight: 600;
+      padding: 0.32rem 0.65rem;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--text);
+      cursor: pointer;
+    }
+    .img-zoom-actions button:hover { border-color: var(--accent); color: var(--accent); }
+    .img-zoom-stage {
+      flex: 1;
+      position: relative;
+      overflow: hidden;
+      cursor: grab;
+      touch-action: none;
+    }
+    .img-zoom-stage.dragging { cursor: grabbing; }
+    .img-zoom-stage img {
+      position: absolute;
+      left: 0;
+      top: 0;
+      max-width: none;
+      transform-origin: 0 0;
+      user-select: none;
+      pointer-events: none;
+    }
+    .img-zoom-hint {
+      margin: 0;
+      padding: 0.4rem 0.9rem 0.55rem;
+      font-size: 0.72rem;
+      color: var(--muted);
+      flex-shrink: 0;
+    }
+    .fail-preview a { color: var(--accent); font-size: 0.7rem; }
+    .fail-ocr { padding: 0.85rem 1rem; }
+    .fail-section-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.5rem;
+      margin-bottom: 0.4rem;
+    }
+    .fail-ocr label, .fail-section-head label {
+      display: block;
+      font-size: 0.7rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--muted);
+      margin: 0;
+    }
+    .fail-ocr pre {
+      margin: 0;
+      padding: 0.65rem 0.75rem;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      font-family: ui-monospace, monospace;
+      font-size: 0.75rem;
+      line-height: 1.45;
+      white-space: pre-wrap;
+      word-break: break-word;
+      max-height: 220px;
+      overflow: auto;
+    }
+    .fail-preview-wrap { position: relative; width: 100%; }
+    .fail-preview-wrap .copy-img-btn {
+      position: absolute;
+      top: 0.5rem;
+      right: 0.5rem;
+      z-index: 2;
+    }
+    button.copy-btn {
+      font-size: 0.7rem;
+      font-weight: 600;
+      padding: 0.28rem 0.55rem;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--text);
+      cursor: pointer;
+    }
+    button.copy-btn:hover { border-color: var(--accent); color: var(--accent); }
+    button.copy-btn.copied { border-color: var(--ok); color: var(--ok); }
+    .tag {
+      display: inline-block;
+      font-size: 0.65rem;
+      font-weight: 600;
+      padding: 0.12rem 0.4rem;
+      border-radius: 4px;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+    }
+    .tag.pipeline { background: rgba(251, 191, 36, 0.15); color: var(--warn); }
+    .tag.validation { background: rgba(248, 113, 113, 0.15); color: var(--err); }
+    .meta-time { font-size: 0.72rem; color: var(--muted); margin-left: 0.35rem; }
+  </style>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;600&display=swap" rel="stylesheet" />
+</head>
+<body>
+  <header>
+    <h1>Data gagal</h1>
+    <p>Dokumen yang tidak lolos validasi atau error pipeline. Format kartu sama seperti di Dataset benchmark. Bisa dihapus dari halaman ini.</p>
+    <div class="nav-top">
+      <a href="/">← Beranda</a>
+      <a href="/dataset-test">Dataset benchmark</a>
+      <a href="/dataset-successes">Data berhasil</a>
+      <a href="/pipeline">Pipeline</a>
+      <a href="/llm-fallback-log">Log fallback AI</a>
+    </div>
+  </header>
+
+  <div class="wrap">
+    <div class="stats" id="stats"></div>
+    <div class="toolbar">
+      <button type="button" class="filter-btn active" data-filter="">Semua</button>
+      <button type="button" class="filter-btn" data-filter="validation_fail">Validasi</button>
+      <button type="button" class="filter-btn" data-filter="pipeline_error">Pipeline</button>
+      <button type="button" class="primary" id="btnRefresh">Muat ulang</button>
+      <button type="button" class="danger" id="btnClear">Hapus data</button>
+      <span class="status" id="status">Memuat…</span>
+    </div>
+    <div id="content"></div>
+  </div>
+
+  <script>
+    const statsEl = document.getElementById("stats");
+    const contentEl = document.getElementById("content");
+    const statusEl = document.getElementById("status");
+    const btnRefresh = document.getElementById("btnRefresh");
+    const btnClear = document.getElementById("btnClear");
+    const filterBtns = document.querySelectorAll(".filter-btn");
+
+    let filter = "";
+    let lastFailures = [];
+
+    function esc(s) {
+      return String(s ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    function issuedDateExpected(f) {
+      const hasHealth = f.health_expiry_pass != null;
+      const hasSkck = f.skck_expiry_pass != null;
+      const iso = f.issued_date || f.health_exam_date || f.skck_valid_from || "";
+      const display = f.issued_date_display || "";
+      if (!hasHealth && !hasSkck && !iso && !display) return "";
+      const label = display || iso || "tidak terbaca";
+      const isoHint = iso && display ? ` <span>(${esc(iso)})</span>` : "";
+      return `<div class="expected">Tanggal dibuat: <strong>${esc(label)}</strong>${isoHint}</div>`;
+    }
+
+    function fmtTime(iso) {
+      if (!iso) return "";
+      try {
+        return new Date(iso).toLocaleString("id-ID");
+      } catch {
+        return iso;
+      }
+    }
+
+    function failureKindLabel(kind) {
+      if (!kind || kind === "validation_fail") return { text: "Validasi", cls: "validation" };
+      return { text: "Pipeline", cls: "pipeline" };
+    }
+
+    function datasetFileUrl(folder, file) {
+      return `/api/v1/dataset/file?folder=${encodeURIComponent(folder || "")}&file=${encodeURIComponent(file || "")}`;
+    }
+
+    function isImageFile(name) {
+      return /\.(jpe?g|png|webp)$/i.test(name || "");
+    }
+
+    function isPreviewOnlyFailure(f) {
+      if (f.document_type === "foto_profile") return true;
+      if (!f.ocr_text && isImageFile(f.file)) return true;
+      return false;
+    }
+
+    function renderFailurePreview(f, large, idx) {
+      if (!f.folder || !f.file) return "";
+      const url = datasetFileUrl(f.folder, f.file);
+      const cls = large ? "fail-preview large" : "fail-preview";
+      const copyImgBtn = isImageFile(f.file)
+        ? `<button type="button" class="copy-btn copy-img-btn" data-copy="image" data-idx="${idx}" title="Copy gambar ke clipboard">Copy gambar</button>`
+        : "";
+      if (isImageFile(f.file)) {
+        return `<div class="fail-preview-wrap">${copyImgBtn}<div class="${cls}"><img src="${url}" alt="${esc(f.file)}" loading="lazy" title="Klik untuk perbesar" /></div></div>`;
+      }
+      return `<div class="${cls}"><a href="${url}" target="_blank" rel="noopener">Buka file</a></div>`;
+    }
+
+    function pipelineResponseText(f) {
+      if (!f.pipeline_response) return "";
+      try {
+        return JSON.stringify(f.pipeline_response, null, 2);
+      } catch {
+        return "";
+      }
+    }
+
+    function flashCopyBtn(btn, label) {
+      if (!btn) return;
+      const orig = btn.textContent;
+      btn.textContent = label || "Tersalin!";
+      btn.classList.add("copied");
+      setTimeout(() => {
+        btn.textContent = orig;
+        btn.classList.remove("copied");
+      }, 1600);
+    }
+
+    async function copyTextToClipboard(text) {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+        return;
+      }
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      document.body.removeChild(ta);
+    }
+
+    async function copyImageFromUrl(url) {
+      const res = await fetch(url);
+      const blob = await res.blob();
+      if (navigator.clipboard?.write) {
+        await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]);
+      }
+    }
+
+    function renderStats(stats) {
+      statsEl.innerHTML = [
+        { lbl: "Total gagal", val: stats?.total ?? 0, cls: "err" },
+        { lbl: "Validasi", val: stats?.validation_fail ?? 0, cls: "err" },
+        { lbl: "Error pipeline", val: stats?.pipeline_error ?? 0, cls: "warn" },
+      ].map((c) =>
+        `<div class="stat ${c.cls}"><div class="val">${esc(c.val)}</div><div class="lbl">${esc(c.lbl)}</div></div>`
+      ).join("");
+    }
+
+    function renderFailures(list) {
+      lastFailures = list || [];
+      if (!lastFailures.length) {
+        contentEl.innerHTML = '<div class="empty">Tidak ada data gagal.<br>Jalankan tes di Dataset benchmark atau pipeline; kegagalan akan muncul di sini.</div>';
+        return;
+      }
+      contentEl.innerHTML = `<div class="fail-cards">${lastFailures.map((f, idx) => {
+        const tag = failureKindLabel(f.failure_kind);
+        const previewOnly = isPreviewOnlyFailure(f);
+        const responseText = pipelineResponseText(f);
+        const ocrBlock = f.ocr_text
+          ? `<div class="fail-ocr">
+              <div class="fail-section-head">
+                <label>Raw text OCR</label>
+                <button type="button" class="copy-btn" data-copy="ocr" data-idx="${idx}">Copy teks</button>
+              </div>
+              <pre>${esc(f.ocr_text)}</pre>
+            </div>`
+          : "";
+        const responseBlock = responseText
+          ? `<div class="fail-ocr">
+              <div class="fail-section-head">
+                <label>Respons pipeline (diolah)</label>
+                <button type="button" class="copy-btn" data-copy="response" data-idx="${idx}">Copy JSON</button>
+              </div>
+              <pre>${esc(responseText)}</pre>
+            </div>`
+          : "";
+        const expected = [
+          f.expected_name ? `<div class="expected">Expected name: <strong>${esc(f.expected_name)}</strong></div>` : "",
+          f.extracted_name ? `<div class="expected">Nama OCR: <strong>${esc(f.extracted_name)}</strong></div>` : "",
+          f.expected_bank ? `<div class="expected">Expected bank: <strong>${esc(f.expected_bank)}</strong></div>` : "",
+          f.expected_account ? `<div class="expected">Expected rekening: <strong>${esc(f.expected_account)}</strong></div>` : "",
+          f.job_position ? `<div class="expected">Jabatan: <strong>${esc(f.job_position)}</strong></div>` : "",
+          f.marital_pass != null
+            ? `<div class="expected">Helper / perkawinan: ${f.marital_pass ? "<strong>lolos ✓</strong>" : "<strong>gagal ✗</strong>"}${f.marital_status ? ` <span>(${esc(f.marital_status)})</span>` : ""}</div>`
+            : "",
+          f.skck_expiry_pass != null
+            ? `<div class="expected">SKCK kadaluarsa: ${f.skck_expiry_pass ? "<strong>masih aktif ✓</strong>" : "<strong>tidak aktif ✗</strong>"}${f.skck_valid_until ? ` <span>(sampai ${esc(f.skck_valid_until)})</span>` : ""}</div>`
+            : "",
+          f.health_status_pass != null
+            ? `<div class="expected">Kondisi sehat: ${f.health_status_pass ? "<strong>tertera SEHAT ✓</strong>" : "<strong>tidak tertera ✗</strong>"}</div>`
+            : "",
+          issuedDateExpected(f),
+          f.health_expiry_pass != null
+            ? `<div class="expected">Masa berlaku: ${f.health_expiry_pass ? "<strong>masih berlaku ✓</strong>" : "<strong>kadaluarsa/tidak terbaca ✗</strong>"}${f.health_valid_until ? ` <span>(sampai ${esc(f.health_valid_until)})</span>` : ""}</div>`
+            : "",
+          typeof f.timing?.total === "number"
+            ? `<div class="expected">Waktu: <strong>${Number(f.timing.total).toFixed(2)}s</strong></div>`
+            : "",
+        ].join("");
+        return `<article class="fail-card${previewOnly ? " preview-only" : ""}">
+          <div class="fail-card-head">
+            ${renderFailurePreview(f, previewOnly, idx)}
+            <div class="fail-card-meta">
+              <span class="tag ${tag.cls}">${esc(tag.text)}</span>
+              <span style="margin-left:0.5rem;color:var(--muted);font-size:0.75rem;">${esc(f.folder || "—")}</span>
+              <span class="meta-time">${esc(fmtTime(f.logged_at))}</span>
+              <div class="fname">${esc(f.file)}</div>
+              <p class="reason">${esc(f.error_message || f.failure_reason || "—")}</p>
+              ${f.error_code ? `<div class="expected">Kode: <code>${esc(f.error_code)}</code></div>` : ""}
+              ${expected}
+            </div>
+          </div>
+          ${ocrBlock}
+          ${responseBlock}
+        </article>`;
+      }).join("")}</div>`;
+    }
+
+    contentEl.addEventListener("click", async (ev) => {
+      const btn = ev.target.closest("[data-copy]");
+      if (!btn) return;
+      const idx = Number(btn.dataset.idx);
+      const f = lastFailures[idx];
+      if (!f) return;
+      try {
+        if (btn.dataset.copy === "ocr") {
+          await copyTextToClipboard(f.ocr_text || "");
+          flashCopyBtn(btn);
+        } else if (btn.dataset.copy === "response") {
+          await copyTextToClipboard(pipelineResponseText(f));
+          flashCopyBtn(btn);
+        } else if (btn.dataset.copy === "image" && f.folder && f.file) {
+          await copyImageFromUrl(datasetFileUrl(f.folder, f.file));
+          flashCopyBtn(btn);
+        }
+      } catch (e) {
+        flashCopyBtn(btn, "Gagal");
+      }
+    });
+
+    async function loadData() {
+      statusEl.textContent = "Memuat…";
+      statusEl.className = "status";
+      try {
+        const p = new URLSearchParams({ limit: "2000", offset: "0" });
+        if (filter) p.set("kind", filter);
+        const res = await fetch("/api/v1/validation-failures?" + p.toString());
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        const data = await res.json();
+        renderStats(data.stats);
+        renderFailures(data.entries || []);
+        statusEl.textContent = `Menampilkan ${data.filtered_count ?? 0} dari ${data.total ?? 0} entri`;
+      } catch (e) {
+        statusEl.textContent = "Gagal memuat: " + e.message;
+        statusEl.className = "status err";
+      }
+    }
+
+    filterBtns.forEach((btn) => {
+      btn.addEventListener("click", () => {
+        filterBtns.forEach((b) => b.classList.remove("active"));
+        btn.classList.add("active");
+        filter = btn.dataset.filter || "";
+        loadData();
+      });
+    });
+
+    btnRefresh.addEventListener("click", loadData);
+    btnClear.addEventListener("click", async () => {
+      if (!confirm("Hapus semua data gagal di halaman ini?")) return;
+      try {
+        const res = await fetch("/api/v1/validation-failures", { method: "DELETE" });
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        const data = await res.json();
+        statusEl.textContent = `Dihapus ${data.cleared ?? 0} entri.`;
+        loadData();
+      } catch (e) {
+        alert("Gagal hapus: " + e.message);
+      }
+    });
+
+    (function installFailImageZoom() {
+      const overlay = document.createElement("div");
+      overlay.className = "img-zoom-overlay";
+      overlay.innerHTML =
+        '<div class="img-zoom-bar">' +
+        '<span class="img-zoom-caption" data-zoom-caption></span>' +
+        '<div class="img-zoom-actions">' +
+        '<button type="button" data-zoom-act="out">−</button>' +
+        '<button type="button" data-zoom-act="in">+</button>' +
+        '<button type="button" data-zoom-act="fit">Fit</button>' +
+        '<button type="button" data-zoom-act="close">Tutup</button>' +
+        "</div></div>" +
+        '<div class="img-zoom-stage" data-zoom-stage><img alt="" /></div>' +
+        '<p class="img-zoom-hint">Scroll untuk zoom · drag untuk geser · Esc untuk tutup</p>';
+      document.body.appendChild(overlay);
+      const stage = overlay.querySelector("[data-zoom-stage]");
+      const img = stage.querySelector("img");
+      const caption = overlay.querySelector("[data-zoom-caption]");
+      let scale = 1, tx = 0, ty = 0, dragging = false, lastX = 0, lastY = 0, moved = false;
+      let pinchDist = 0, pinchScale = 1;
+
+      function apply() {
+        img.style.transform = "translate(" + tx + "px," + ty + "px) scale(" + scale + ")";
+      }
+      function fit() {
+        const nw = img.naturalWidth || 1;
+        const nh = img.naturalHeight || 1;
+        const rw = stage.clientWidth || 1;
+        const rh = stage.clientHeight || 1;
+        scale = Math.min(rw / nw, rh / nh, 4);
+        tx = (rw - nw * scale) / 2;
+        ty = (rh - nh * scale) / 2;
+        apply();
+      }
+      function zoomAt(mx, my, factor) {
+        const next = Math.min(12, Math.max(0.15, scale * factor));
+        tx = mx - (mx - tx) * (next / scale);
+        ty = my - (my - ty) * (next / scale);
+        scale = next;
+        apply();
+      }
+      function openZoom(src, alt) {
+        caption.textContent = alt || "";
+        img.alt = alt || "";
+        img.src = src;
+        overlay.classList.add("open");
+        document.body.style.overflow = "hidden";
+        if (img.complete && img.naturalWidth) fit();
+        else img.onload = fit;
+      }
+      function closeZoom() {
+        overlay.classList.remove("open");
+        img.removeAttribute("src");
+        document.body.style.overflow = "";
+      }
+
+      overlay.querySelector("[data-zoom-act='close']").addEventListener("click", closeZoom);
+      overlay.querySelector("[data-zoom-act='fit']").addEventListener("click", fit);
+      overlay.querySelector("[data-zoom-act='in']").addEventListener("click", () => {
+        zoomAt(stage.clientWidth / 2, stage.clientHeight / 2, 1.25);
+      });
+      overlay.querySelector("[data-zoom-act='out']").addEventListener("click", () => {
+        zoomAt(stage.clientWidth / 2, stage.clientHeight / 2, 0.8);
+      });
+      document.addEventListener("keydown", (ev) => {
+        if (ev.key === "Escape" && overlay.classList.contains("open")) closeZoom();
+      });
+      stage.addEventListener("wheel", (ev) => {
+        ev.preventDefault();
+        const rect = stage.getBoundingClientRect();
+        zoomAt(ev.clientX - rect.left, ev.clientY - rect.top, ev.deltaY < 0 ? 1.12 : 1 / 1.12);
+      }, { passive: false });
+      stage.addEventListener("pointerdown", (ev) => {
+        if (ev.button !== 0) return;
+        dragging = true;
+        moved = false;
+        lastX = ev.clientX;
+        lastY = ev.clientY;
+        stage.classList.add("dragging");
+        stage.setPointerCapture(ev.pointerId);
+      });
+      stage.addEventListener("pointermove", (ev) => {
+        if (!dragging) return;
+        const dx = ev.clientX - lastX;
+        const dy = ev.clientY - lastY;
+        if (Math.abs(dx) + Math.abs(dy) > 2) moved = true;
+        lastX = ev.clientX;
+        lastY = ev.clientY;
+        tx += dx;
+        ty += dy;
+        apply();
+      });
+      stage.addEventListener("pointerup", () => {
+        dragging = false;
+        stage.classList.remove("dragging");
+      });
+      stage.addEventListener("dblclick", (ev) => {
+        const rect = stage.getBoundingClientRect();
+        if (scale > (Math.min(stage.clientWidth / (img.naturalWidth || 1), stage.clientHeight / (img.naturalHeight || 1)) * 1.05)) {
+          fit();
+        } else {
+          zoomAt(ev.clientX - rect.left, ev.clientY - rect.top, 2);
+        }
+      });
+      stage.addEventListener("touchstart", (ev) => {
+        if (ev.touches.length === 2) {
+          const a = ev.touches[0], b = ev.touches[1];
+          pinchDist = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+          pinchScale = scale;
+        }
+      }, { passive: true });
+      stage.addEventListener("touchmove", (ev) => {
+        if (ev.touches.length !== 2 || !pinchDist) return;
+        ev.preventDefault();
+        const a = ev.touches[0], b = ev.touches[1];
+        const dist = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+        const rect = stage.getBoundingClientRect();
+        zoomAt(
+          (a.clientX + b.clientX) / 2 - rect.left,
+          (a.clientY + b.clientY) / 2 - rect.top,
+          (dist / pinchDist) * pinchScale / scale
+        );
+      }, { passive: false });
+
+      document.addEventListener("click", (ev) => {
+        if (ev.target.closest("[data-copy], .copy-img-btn, .img-zoom-overlay")) return;
+        const thumb = ev.target.closest(".fail-preview img");
+        if (!thumb) return;
+        ev.preventDefault();
+        openZoom(thumb.currentSrc || thumb.src, thumb.alt);
+      });
+    })();
+
+    loadData();
+  </script>
+</body>
+</html>

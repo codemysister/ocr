@@ -24,6 +24,13 @@ from systems.observability.last_tuning_log import (
     summarize_validation_result,
     write_last_tuning_log,
 )
+from systems.validation.user_errors import (
+    ErrorCatalogResponse,
+    HttpUserErrorBody,
+    PipelineFrontendResponse,
+    error_catalog_for_api,
+    user_error_http_detail,
+)
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -37,7 +44,7 @@ class CompareNamesBody(BaseModel):
         85.0,
         ge=0.0,
         le=100.0,
-        description="Ambang skor 0–100; matched jika best_score >= threshold",
+        description="Ambang skor identitas 0–100; matched jika skor gabungan ≥ threshold dan cakupan kata lolos",
     )
 
 
@@ -66,8 +73,8 @@ class ValidateDocumentBody(BaseModel):
         ge=0.0,
         le=100.0,
         description=(
-            "Minimal skor identitas 0–100: nama diekstrak dari OCR vs nama referensi, "
-            "rata-rata(token_sort_ratio, WRatio, partial_ratio) pada dua string pendek. "
+            "Minimal skor identitas 0–100: nama diekstrak dari OCR vs nama referensi "
+            "(token_sort_ratio + cakupan kata; nama yang hanya berbagi satu token tidak lolos). "
             "Hanya dipakai jika expected_name tidak kosong. Default 65."
         ),
     )
@@ -84,7 +91,11 @@ class ValidateDocumentBody(BaseModel):
     )
     expected_account: str = Field(
         "",
-        description="Profil rekening: nomor rekening referensi (nama atau rekening: salah satu harus cocok)",
+        description="Profil rekening: nomor rekening referensi (nama DAN rekening harus cocok)",
+    )
+    job_position: str = Field(
+        "",
+        description="Posisi kerja. Untuk KTP + Helper: status perkawinan harus BELUM KAWIN.",
     )
 
     @field_validator("document_type")
@@ -107,14 +118,19 @@ def validation_health() -> dict:
             "/systems/validation/api/v1/compare-names",
             "/systems/validation/api/v1/validate-document",
             "/systems/validation/api/v1/validate-foto-profile",
+            "/systems/validation/api/v1/error-catalog",
         ],
         "validate_document_response": (
-            "Respons validate-document menyertakan `verdict` (is_own_document, document_type_current, "
-            "document_type_current_label, summary), `explanation` (id), dan field gate lama."
+            "HTTP 200. Baca `document_matched`. Jika false, tampilkan `error_message` "
+            "(kode di `error_code`, daftar di `error_cases`). Jangan pakai explanation.summary."
         ),
         "validate_document_note": (
             "document_matched = document_type_pass AND (tanpa nama referensi | identity_pass). "
-            "Profil rekening: bank wajib + (nama ATAU nomor rekening). "
+            "Profil rekening: bank wajib + nama lengkap DAN nomor rekening. "
+            "Profil mutasi: bank + nomor rekening wajib. "
+            "Profil SKCK: nama + tanggal kadaluarsa (Sampai dengan) belum terlewati. "
+            "Profil JKN: nama (jika diisi); status AKTIF/TIDAK AKTIF diekstrak, tidak memblokir. "
+            "KTP + job_position=helper: status perkawinan wajib BELUM KAWIN. "
             "Default aggregate_min_pass_ratio=0.7, identity_min_score=65 (opsional di body JSON)."
         ),
         "last_tuning_log": {
@@ -122,6 +138,17 @@ def validation_health() -> dict:
             "env_override": "LAST_TUNING_LOG_PATH",
         },
     }
+
+
+@router.get(
+    "/api/v1/error-catalog",
+    response_model=ErrorCatalogResponse,
+    summary="Katalog error frontend",
+    responses={200: {"description": "Map error_code → pesan + grouping per dokumen + usage."}},
+)
+def api_error_catalog() -> dict:
+    """Katalog `error_code` + `error_message` tetap. Frontend fetch sekali lalu cache."""
+    return {"success": True, **error_catalog_for_api()}
 
 
 @router.get("/")
@@ -180,7 +207,17 @@ def api_compare_names(body: CompareNamesBody) -> JSONResponse:
     return JSONResponse(content=jsonable_encoder(payload))
 
 
-@router.post("/api/v1/validate-document")
+@router.post(
+    "/api/v1/validate-document",
+    response_description="HTTP 200. Jika document_matched=false, tampilkan error_message.",
+    responses={
+        200: {
+            "model": PipelineFrontendResponse,
+            "description": "Validasi selesai. Tampilkan error_message jika document_matched=false.",
+        },
+        400: {"model": HttpUserErrorBody},
+    },
+)
 def api_validate_document(body: ValidateDocumentBody) -> JSONResponse:
     path = "/systems/validation/api/v1/validate-document"
     sub = "validation_document"
@@ -188,15 +225,20 @@ def api_validate_document(body: ValidateDocumentBody) -> JSONResponse:
         log_safe_failure(
             subsystem=sub, method="POST", path=path, http_status=400, detail="ocr_text kosong."
         )
-        raise HTTPException(status_code=400, detail="ocr_text tidak boleh kosong.")
+        raise HTTPException(
+            status_code=400,
+            detail=user_error_http_detail("pipeline.missing_ocr_text"),
+        )
 
     resolved = resolve_keywords(body.document_type)
     if not resolved:
-        detail = {
-            "message": "Jenis dokumen tidak dikenal.",
-            "document_type": body.document_type,
-            "supported": list_supported_document_types(),
-        }
+        detail = user_error_http_detail(
+            "pipeline.unknown_document_type",
+            extra={
+                "document_type": body.document_type,
+                "supported": list_supported_document_types(),
+            },
+        )
         log_safe_failure(
             subsystem=sub, method="POST", path=path, http_status=400, detail=detail
         )
@@ -208,19 +250,39 @@ def api_validate_document(body: ValidateDocumentBody) -> JSONResponse:
     canonical_id, keywords = resolved
     if canonical_id == "rekening":
         if not normalize_expected_bank(body.expected_bank):
-            detail = {
-                "message": "expected_bank wajib untuk dokumen rekening (mandiri | mas).",
-                "expected_bank": body.expected_bank.strip(),
-                "supported": list_supported_banks(),
-            }
+            detail = user_error_http_detail(
+                "pipeline.missing_expected_bank",
+                extra={
+                    "expected_bank": body.expected_bank.strip(),
+                    "supported": list_supported_banks(),
+                },
+            )
             log_safe_failure(
                 subsystem=sub, method="POST", path=path, http_status=400, detail=detail
             )
             raise HTTPException(status_code=400, detail=detail)
         if not body.expected_name.strip() and not body.expected_account.strip():
-            detail = {
-                "message": "Untuk rekening, isi expected_name dan/atau expected_account.",
-            }
+            detail = user_error_http_detail("pipeline.missing_expected_identity")
+            log_safe_failure(
+                subsystem=sub, method="POST", path=path, http_status=400, detail=detail
+            )
+            raise HTTPException(status_code=400, detail=detail)
+
+    if canonical_id == "mutasi":
+        if not normalize_expected_bank(body.expected_bank):
+            detail = user_error_http_detail(
+                "pipeline.missing_expected_bank",
+                extra={
+                    "expected_bank": body.expected_bank.strip(),
+                    "supported": list_supported_banks(),
+                },
+            )
+            log_safe_failure(
+                subsystem=sub, method="POST", path=path, http_status=400, detail=detail
+            )
+            raise HTTPException(status_code=400, detail=detail)
+        if not body.expected_account.strip():
+            detail = user_error_http_detail("pipeline.missing_expected_account")
             log_safe_failure(
                 subsystem=sub, method="POST", path=path, http_status=400, detail=detail
             )
@@ -234,6 +296,7 @@ def api_validate_document(body: ValidateDocumentBody) -> JSONResponse:
         expected_name=body.expected_name,
         expected_bank=body.expected_bank,
         expected_account=body.expected_account,
+        job_position=body.job_position,
         aggregate_min_pass_ratio=body.aggregate_min_pass_ratio,
         identity_min_score=body.identity_min_score,
         mistral_annotation=body.mistral_annotation,
@@ -263,7 +326,16 @@ def api_validate_document(body: ValidateDocumentBody) -> JSONResponse:
     return JSONResponse(content=jsonable_encoder(payload))
 
 
-@router.post("/api/v1/validate-foto-profile")
+@router.post(
+    "/api/v1/validate-foto-profile",
+    responses={
+        200: {
+            "model": PipelineFrontendResponse,
+            "description": "Baca valid / document_matched. Jika false, tampilkan error_message.",
+        },
+        400: {"model": HttpUserErrorBody},
+    },
+)
 async def api_validate_foto_profile(
     file: UploadFile = File(..., description="Gambar foto profil"),
     document_type: str = Form(
@@ -279,25 +351,30 @@ async def api_validate_foto_profile(
 
     if not raw:
         log_safe_failure(subsystem=sub, method="POST", path=path, http_status=400, detail="File kosong.")
-        raise HTTPException(status_code=400, detail="File kosong.")
+        raise HTTPException(status_code=400, detail=user_error_http_detail("pipeline.empty_file"))
 
     resolved = resolve_keywords(doc_type)
     if not resolved:
-        detail = {
-            "message": "Jenis dokumen tidak dikenal.",
-            "document_type": doc_type,
-            "supported": list_supported_document_types(),
-        }
+        detail = user_error_http_detail(
+            "pipeline.unknown_document_type",
+            extra={
+                "document_type": doc_type,
+                "supported": list_supported_document_types(),
+            },
+        )
         log_safe_failure(subsystem=sub, method="POST", path=path, http_status=400, detail=detail)
         raise HTTPException(status_code=400, detail=detail)
 
     canonical_id, keywords = resolved
     if not is_image_only_profile(canonical_id):
-        detail = {
-            "message": "Endpoint ini hanya untuk profil gambar (foto_profile).",
-            "document_type": doc_type,
-            "document_profile_id": canonical_id,
-        }
+        detail = user_error_http_detail(
+            "pipeline.unknown_document_type",
+            extra={
+                "message": "Endpoint ini hanya untuk profil gambar (foto_profile).",
+                "document_type": doc_type,
+                "document_profile_id": canonical_id,
+            },
+        )
         log_safe_failure(subsystem=sub, method="POST", path=path, http_status=400, detail=detail)
         raise HTTPException(status_code=400, detail=detail)
 
@@ -305,7 +382,13 @@ async def api_validate_foto_profile(
         bgr, decode_meta = decode_image_bytes_bgr(raw)
     except Exception as e:
         log_safe_failure(subsystem=sub, method="POST", path=path, http_status=400, detail=str(e))
-        raise HTTPException(status_code=400, detail=str(e)) from e
+        raise HTTPException(
+            status_code=400,
+            detail=user_error_http_detail(
+                "pipeline.unreadable_image",
+                extra={"message": str(e)},
+            ),
+        ) from e
 
     detail = validate_foto_profile(
         bgr,

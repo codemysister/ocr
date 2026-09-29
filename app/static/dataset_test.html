@@ -109,6 +109,7 @@
       margin-bottom: 0.3rem;
     }
     input[type="number"],
+    input[type="text"],
     select,
     textarea {
       width: 100%;
@@ -217,11 +218,14 @@
       text-align: right;
       color: var(--muted);
     }
-    th.bank-col, td.bank-cell {
-      min-width: 8.5rem;
-      width: 8.5rem;
+    th.bank-col, td.bank-cell,
+    th.param-col, td.param-cell {
+      min-width: 10.5rem;
+      width: 10.5rem;
     }
-    td.bank-cell select {
+    td.bank-cell select,
+    td.param-cell select,
+    td.param-cell input.row-job {
       width: 100%;
       padding: 0.4rem 0.35rem;
       font-size: 0.8rem;
@@ -229,8 +233,10 @@
       border: 1px solid var(--border);
       background: var(--bg);
       color: var(--text);
+      box-sizing: border-box;
     }
-    td.bank-cell .bank-na {
+    td.bank-cell .bank-na,
+    td.param-cell .param-na {
       color: var(--muted);
       font-size: 0.8rem;
     }
@@ -357,6 +363,22 @@
     .status { font-size: 0.8rem; color: var(--muted); }
     .status.error { color: var(--err); }
     .status.ok { color: var(--ok); }
+
+    .live-log {
+      margin-top: 0.75rem;
+      max-height: 280px;
+      overflow: auto;
+      background: #0a0e14;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.45rem 0.6rem;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 0.72rem;
+      line-height: 1.45;
+    }
+    .live-log .ok { color: var(--ok); }
+    .live-log .err { color: var(--err); }
+    .live-log .warn { color: var(--warn); }
 
     .stats-grid {
       display: grid;
@@ -488,6 +510,68 @@
       max-height: 100%;
       object-fit: contain;
       display: block;
+      cursor: zoom-in;
+    }
+    .img-zoom-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 80;
+      display: none;
+      flex-direction: column;
+      background: rgba(6, 8, 12, 0.94);
+    }
+    .img-zoom-overlay.open { display: flex; }
+    .img-zoom-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
+      padding: 0.65rem 0.9rem;
+      border-bottom: 1px solid var(--border);
+      background: #121820;
+      flex-shrink: 0;
+    }
+    .img-zoom-caption {
+      font-size: 0.8rem;
+      color: var(--muted);
+      word-break: break-all;
+      min-width: 0;
+    }
+    .img-zoom-actions { display: flex; gap: 0.4rem; flex-shrink: 0; }
+    .img-zoom-actions button {
+      font-size: 0.8rem;
+      font-weight: 600;
+      padding: 0.32rem 0.65rem;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--text);
+      cursor: pointer;
+    }
+    .img-zoom-actions button:hover { border-color: var(--accent); color: var(--accent); }
+    .img-zoom-stage {
+      flex: 1;
+      position: relative;
+      overflow: hidden;
+      cursor: grab;
+      touch-action: none;
+    }
+    .img-zoom-stage.dragging { cursor: grabbing; }
+    .img-zoom-stage img {
+      position: absolute;
+      left: 0;
+      top: 0;
+      max-width: none;
+      transform-origin: 0 0;
+      user-select: none;
+      pointer-events: none;
+    }
+    .img-zoom-hint {
+      margin: 0;
+      padding: 0.4rem 0.9rem 0.55rem;
+      font-size: 0.72rem;
+      color: var(--muted);
+      flex-shrink: 0;
     }
     .fail-preview .pdf-label {
       font-size: 0.7rem;
@@ -630,6 +714,9 @@
     <div class="nav-top">
       <a href="/">← Beranda</a>
       <a href="/pipeline">Pipeline manual</a>
+      <a href="/health-letter-ai">OCR AI surat kesehatan</a>
+      <a href="/dataset-failures">Data gagal</a>
+      <a href="/dataset-successes">Data berhasil</a>
       <a href="/llm-fallback-log">Log fallback AI</a>
       <a href="/healthcheck">Healthcheck GPU</a>
     </div>
@@ -645,8 +732,8 @@
             <label class="block" for="ocrMode">Engine OCR</label>
             <select id="ocrMode">
               <option value="fast" selected>fast (PP-OCRv6)</option>
-              <option value="mistral">mistral (cloud)</option>
               <option value="vl">vl (PaddleOCR-VL)</option>
+              <option value="mistral">mistral (cloud)</option>
             </select>
           </div>
           <div>
@@ -682,7 +769,7 @@
               Pakai nomor rekening dari filename / <code>manifest.json</code>
             </label>
           </div>
-          <p class="hint full" style="margin:0;">Folder <strong>rekening bank</strong>: pilih bank Mandiri / MAS di tabel batch atau di mode file spesifik.</p>
+          <p class="hint full" style="margin:0;">Param per folder di tabel: <strong>KTP</strong> = jabatan (Helper wajib BELUM KAWIN). <strong>Rekening / mutasi</strong> = bank Mandiri / MAS.</p>
         </div>
         <p class="hint" id="datasetRootHint">Memuat daftar folder…</p>
       </section>
@@ -730,7 +817,7 @@
                   <th style="width:2.25rem;"></th>
                   <th>Folder</th>
                   <th style="width:3.5rem;">File</th>
-                  <th class="bank-col">Bank</th>
+                  <th class="param-col">Param</th>
                   <th class="limit-col">Limit</th>
                   <th class="offset-col">Offset</th>
                 </tr>
@@ -738,6 +825,9 @@
               <tbody id="folderTable"></tbody>
             </table>
           </div>
+          <datalist id="jobPositionHints">
+            <option value="helper"></option>
+          </datalist>
         </div>
 
         <div class="mode-panel hidden" id="modeSpecific">
@@ -751,8 +841,12 @@
                 <option value="">— pilih folder —</option>
               </select>
             </div>
+            <div class="full rekening-bank-row hidden" id="specificJobPositionRow">
+              <label class="block" for="specificJobPosition">Jabatan (KTP)</label>
+              <input id="specificJobPosition" type="text" list="jobPositionHints" placeholder="kosong = tidak dicek, mis. helper" autocomplete="off" />
+            </div>
             <div class="full rekening-bank-row hidden" id="specificRekeningBankRow">
-              <label class="block" for="specificRekeningBank">Bank (rekening)</label>
+              <label class="block" for="specificRekeningBank" id="specificRekeningBankLabel">Bank (rekening / mutasi)</label>
               <select id="specificRekeningBank">
                 <option value="">— pilih bank —</option>
                 <option value="mandiri">Bank Mandiri</option>
@@ -781,6 +875,7 @@
         <h2>Progress</h2>
         <div class="progress-wrap"><div class="progress-bar" id="progressBar"></div></div>
         <div class="status" id="progressStatus">Menunggu…</div>
+        <div class="live-log hidden" id="liveLog" aria-live="polite"></div>
       </section>
 
       <section class="panel hidden" id="resultsPanel">
@@ -831,6 +926,7 @@
     const progressPanel = document.getElementById("progressPanel");
     const progressBar = document.getElementById("progressBar");
     const progressStatus = document.getElementById("progressStatus");
+    const liveLog = document.getElementById("liveLog");
     const resultsPanel = document.getElementById("resultsPanel");
     const globalStats = document.getElementById("globalStats");
     const globalTiming = document.getElementById("globalTiming");
@@ -841,6 +937,8 @@
     const btnRun = document.getElementById("btnRun");
     const btnDownload = document.getElementById("btnDownload");
     const specificFolder = document.getElementById("specificFolder");
+    const specificJobPositionRow = document.getElementById("specificJobPositionRow");
+    const specificJobPosition = document.getElementById("specificJobPosition");
     const specificRekeningBankRow = document.getElementById("specificRekeningBankRow");
     const specificRekeningBank = document.getElementById("specificRekeningBank");
     const specificFiles = document.getElementById("specificFiles");
@@ -961,13 +1059,48 @@
         .replace(/"/g, "&quot;");
     }
 
+    function issuedDateExpected(f, mutedStyle) {
+      const hasHealth = f.health_expiry_pass != null;
+      const hasSkck = f.skck_expiry_pass != null;
+      const iso = f.issued_date || f.health_exam_date || f.skck_valid_from || "";
+      const display = f.issued_date_display || "";
+      if (!hasHealth && !hasSkck && !iso && !display) return "";
+      const label = display || iso || "tidak terbaca";
+      const isoHint = iso && display
+        ? (mutedStyle
+          ? ` <span style="color:var(--muted)">(${esc(iso)})</span>`
+          : ` <span>(${esc(iso)})</span>`)
+        : "";
+      return `<div class="expected">Tanggal dibuat: <strong>${esc(label)}</strong>${isoHint}</div>`;
+    }
+
     function pct(ratio) {
       if (typeof ratio !== "number") return "—";
       return (ratio * 100).toFixed(1) + "%";
     }
 
-    function isRekeningRow(row) {
-      return row && row.document_type === "rekening";
+    function isBankValidationRow(row) {
+      return row && (row.document_type === "rekening" || row.document_type === "mutasi");
+    }
+
+    function isKtpRow(row) {
+      return row && row.document_type === "ktp";
+    }
+
+    function jobInputHtml(value, { disabled = false } = {}) {
+      const dis = disabled ? "disabled" : "";
+      const val = esc(value || "");
+      return `<input type="text" class="row-job" list="jobPositionHints" placeholder="jabatan, mis. helper" value="${val}" ${dis} autocomplete="off" />`;
+    }
+
+    function paramCellHtml(row) {
+      if (isKtpRow(row)) {
+        return `<td class="param-cell">${jobInputHtml("", { disabled: !row.supported })}</td>`;
+      }
+      if (isBankValidationRow(row)) {
+        return `<td class="param-cell">${bankSelectHtml("", { disabled: !row.supported })}</td>`;
+      }
+      return `<td class="param-cell"><span class="param-na">—</span></td>`;
     }
 
     function bankSelectHtml(selected, { disabled = false } = {}) {
@@ -988,12 +1121,22 @@
       return { expected_bank: "", valid: false };
     }
 
-    function updateSpecificRekeningBankUI() {
+    function updateSpecificParamUI() {
       const folder = specificFolder.value.trim();
       const row = folderRows.find((r) => r.folder === folder);
-      const show = isRekeningRow(row);
-      specificRekeningBankRow.classList.toggle("hidden", !show);
-      if (!show) specificRekeningBank.value = "";
+      const showBank = isBankValidationRow(row);
+      const showJob = isKtpRow(row);
+      specificRekeningBankRow.classList.toggle("hidden", !showBank);
+      specificJobPositionRow.classList.toggle("hidden", !showJob);
+      if (showBank) {
+        document.getElementById("specificRekeningBankLabel").textContent =
+          row.document_type === "mutasi" ? "Bank (mutasi)" : "Bank (rekening)";
+      } else {
+        specificRekeningBank.value = "";
+      }
+      if (!showJob) {
+        specificJobPosition.value = "";
+      }
     }
 
     function renderFolderTable() {
@@ -1007,14 +1150,11 @@
         const title = row.document_type
           ? `${row.document_type} — ${row.label}`
           : "belum didukung";
-        const bankCell = isRekeningRow(row)
-          ? `<td class="bank-cell">${bankSelectHtml("", { disabled: !row.supported })}</td>`
-          : `<td class="bank-cell"><span class="bank-na">—</span></td>`;
         return `<tr class="${cls}" data-idx="${i}" title="${esc(title)}">
           <td><input type="checkbox" class="row-enable" ${row.supported ? "" : "disabled"} /></td>
           <td class="folder-name">${esc(row.folder)}</td>
           <td class="file-count-cell">${row.file_count}</td>
-          ${bankCell}
+          ${paramCellHtml(row)}
           <td class="limit-cell"><input type="number" class="row-limit" value="20" min="0" max="500" ${row.supported ? "" : "disabled"} /></td>
           <td class="offset-cell"><input type="number" class="row-offset" value="0" min="0" max="10000" ${row.supported ? "" : "disabled"} /></td>
         </tr>`;
@@ -1034,7 +1174,7 @@
       } else if (supported.length === 1) {
         specificFolder.value = supported[0].folder;
       }
-      updateSpecificRekeningBankUI();
+      updateSpecificParamUI();
     }
 
     function parseSpecificFileLines(text) {
@@ -1062,7 +1202,10 @@
         files,
         ...(() => {
           const row = folderRows.find((r) => r.folder === (folder || files[0].split("/")[0]));
-          if (!isRekeningRow(row)) return {};
+          if (isKtpRow(row)) {
+            return { job_position: (specificJobPosition.value || "").trim() };
+          }
+          if (!isBankValidationRow(row)) return {};
           const bank = readBankFromSelect(specificRekeningBank);
           return {
             expected_bank: bank.expected_bank,
@@ -1075,7 +1218,7 @@
     function validateRekeningBankSelections(selections) {
       for (const sel of selections) {
         const row = folderRows.find((r) => r.folder === sel.folder);
-        if (!isRekeningRow(row)) continue;
+        if (!isBankValidationRow(row)) continue;
         if (sel._rekeningBankMissing) {
           return `Folder «${sel.folder}»: pilih Bank Mandiri, MAS, atau Dari manifest.`;
         }
@@ -1110,7 +1253,10 @@
         const limit = Number(tr.querySelector(".row-limit").value) || 0;
         const offset = Number(tr.querySelector(".row-offset").value) || 0;
         const item = { folder: row.folder, enabled, limit, offset };
-        if (isRekeningRow(row)) {
+        if (isKtpRow(row)) {
+          item.job_position = (tr.querySelector(".row-job")?.value || "").trim();
+        }
+        if (isBankValidationRow(row)) {
           const bank = readBankFromSelect(tr.querySelector(".row-bank"));
           item.expected_bank = bank.expected_bank;
           if (enabled && limit > 0 && !bank.valid) {
@@ -1142,6 +1288,7 @@
       document.getElementById("btnSelectAll").disabled = running;
       document.getElementById("btnSelectNone").disabled = running;
       specificFolder.disabled = running;
+      specificJobPosition.disabled = running;
       specificRekeningBank.disabled = running;
       specificFiles.disabled = running;
       testModeInputs.forEach((el) => { el.disabled = running; });
@@ -1150,7 +1297,7 @@
         const unsupported = tr?.classList.contains("unsupported");
         if (el.classList.contains("row-limit") || el.classList.contains("row-offset")) {
           el.disabled = running || unsupported;
-        } else if (el.classList.contains("row-bank")) {
+        } else if (el.classList.contains("row-bank") || el.classList.contains("row-job")) {
           el.disabled = running || unsupported;
         } else if (el.classList.contains("row-enable")) {
           el.disabled = running || unsupported;
@@ -1169,6 +1316,7 @@
         use_expected_account: document.getElementById("useExpectedAccount").checked,
         enable_preprocess: document.getElementById("enablePreprocess").checked,
         skip_passthrough: document.getElementById("skipPassthrough").checked,
+        job_position: "",
       };
     }
 
@@ -1193,6 +1341,8 @@
             const pctDone = ev.total ? (ev.index / ev.total) * 100 : 0;
             progressBar.style.width = pctDone + "%";
             progressStatus.textContent = `[${ev.index}/${ev.total}] ${ev.folder} — ${ev.file}`;
+          } else if (ev.type === "result") {
+            appendLiveRow(ev);
           } else if (ev.type === "summary") {
             lastSummary = ev;
             renderSummary(ev.stats);
@@ -1213,6 +1363,8 @@
       progressBar.style.width = "0%";
       progressStatus.textContent = "Memulai…";
       progressStatus.className = "status";
+      liveLog.innerHTML = "";
+      liveLog.classList.remove("hidden");
       lastSummary = null;
 
       try {
@@ -1232,6 +1384,43 @@
       } finally {
         setRunning(false);
       }
+    }
+
+    function appendLiveRow(ev) {
+      if (!liveLog) return;
+      liveLog.classList.remove("hidden");
+      const ok = ev.pipeline_ok !== false && ev.document_matched === true;
+      const err = ev.pipeline_ok === false;
+      const label = err ? "error" : ok ? "lolos" : "gagal";
+      const cls = err ? "warn" : ok ? "ok" : "err";
+      const t = ev.timing && typeof ev.timing.total === "number"
+        ? `${ev.timing.total.toFixed(2)}s`
+        : "";
+      const extra = [];
+      if (ev.identity_pass === true || ev.identity_pass === false) {
+        extra.push(`id ${ev.identity_pass ? "✓" : "✗"}`);
+      }
+      if (ev.kk_name_pass === true || ev.kk_name_pass === false) {
+        extra.push(`nama ${ev.kk_name_pass ? "✓" : "✗"}`);
+      }
+      if (ev.kk_nik_pass === true || ev.kk_nik_pass === false) {
+        extra.push(`nik ${ev.kk_nik_pass ? "✓" : "✗"}`);
+      }
+      if (ev.health_expiry_pass != null || ev.skck_expiry_pass != null || ev.issued_date || ev.issued_date_display) {
+        extra.push("dibuat " + (ev.issued_date_display || ev.issued_date || "tidak terbaca"));
+      }
+      if (ev.error_message) extra.push(ev.error_message);
+      else if (ev.failure_kind) extra.push(ev.failure_kind);
+      const line = document.createElement("div");
+      line.className = cls;
+      line.textContent = [
+        label,
+        `${ev.folder || ""}/${ev.file || ""}`.replace(/^\/+/, ""),
+        t,
+        extra.join(" · "),
+      ].filter(Boolean).join("  ");
+      liveLog.appendChild(line);
+      liveLog.scrollTop = liveLog.scrollHeight;
     }
 
     function showRunningState() {
@@ -1268,7 +1457,7 @@
         ? `<button type="button" class="copy-btn copy-img-btn" data-copy="image" data-idx="${idx}" title="Copy gambar ke clipboard">Copy gambar</button>`
         : "";
       if (isImageFile(f.file)) {
-        return `<div class="fail-preview-wrap">${copyImgBtn}<div class="${cls}"><img src="${url}" alt="${esc(f.file)}" loading="lazy" draggable="true" /></div></div>`;
+        return `<div class="fail-preview-wrap">${copyImgBtn}<div class="${cls}"><img src="${url}" alt="${esc(f.file)}" loading="lazy" draggable="false" title="Klik untuk perbesar" /></div></div>`;
       }
       if (/\.pdf$/i.test(f.file || "")) {
         return `<div class="${cls}"><div class="pdf-label">PDF<br><a href="${url}" target="_blank" rel="noopener">Buka file</a></div></div>`;
@@ -1397,8 +1586,27 @@
               f.expected_account
                 ? `<div class="expected">Expected rekening: <strong>${esc(f.expected_account)}</strong>${f.account_pass === false ? " ✗" : f.account_pass === true ? " ✓" : ""}</div>`
                 : "",
-              f.identity_or_account_pass != null
-                ? `<div class="expected">Nama/rekening (OR): ${f.identity_or_account_pass ? "<strong>lolos ✓</strong>" : "<strong>gagal ✗</strong>"}${f.identity_pass === true ? " <span style=\"color:var(--muted)\">(nama ✓)</span>" : ""}${f.account_pass === true ? " <span style=\"color:var(--muted)\">(rekening ✓)</span>" : ""}</div>`
+                    f.identity_or_account_pass != null
+                ? `<div class="expected">Nama + rekening (AND): ${f.identity_or_account_pass ? "<strong>lolos ✓</strong>" : "<strong>gagal ✗</strong>"}${f.identity_pass === true ? " <span style=\"color:var(--muted)\">(nama ✓)</span>" : f.identity_pass === false ? " <span style=\"color:var(--muted)\">(nama ✗)</span>" : ""}${f.account_pass === true ? " <span style=\"color:var(--muted)\">(rekening ✓)</span>" : f.account_pass === false ? " <span style=\"color:var(--muted)\">(rekening ✗)</span>" : ""}</div>`
+                : "",
+              f.job_position
+                ? `<div class="expected">Jabatan: <strong>${esc(f.job_position)}</strong></div>`
+                : "",
+              f.marital_pass != null
+                ? `<div class="expected">Helper / perkawinan: ${f.marital_pass ? "<strong>lolos ✓</strong>" : "<strong>gagal ✗</strong>"}${f.marital_status ? ` <span style="color:var(--muted)">(${esc(f.marital_status)})</span>` : ""}</div>`
+                : "",
+              f.skck_expiry_pass != null
+                ? `<div class="expected">SKCK kadaluarsa: ${f.skck_expiry_pass ? "<strong>masih aktif ✓</strong>" : "<strong>tidak aktif ✗</strong>"}${f.skck_valid_until ? ` <span style="color:var(--muted)">(sampai ${esc(f.skck_valid_until)})</span>` : ""}</div>`
+                : "",
+              f.jkn_status_label || f.jkn_status_display
+                ? `<div class="expected">JKN status: <strong>${esc(f.jkn_status_display || f.jkn_status_label)}</strong></div>`
+                : "",
+              f.health_status_pass != null
+                ? `<div class="expected">Kondisi sehat: ${f.health_status_pass ? "<strong>tertera SEHAT ✓</strong>" : "<strong>tidak tertera ✗</strong>"}</div>`
+                : "",
+              issuedDateExpected(f, true),
+              f.health_expiry_pass != null
+                ? `<div class="expected">Masa berlaku: ${f.health_expiry_pass ? "<strong>masih berlaku ✓</strong>" : "<strong>kadaluarsa/tidak terbaca ✗</strong>"}${f.health_valid_until ? ` <span style="color:var(--muted)">(sampai ${esc(f.health_valid_until)})</span>` : ""}</div>`
                 : "",
             ].join("");
             return `<article class="fail-card${previewOnly ? " preview-only" : ""}">
@@ -1408,7 +1616,11 @@
                   <span class="tag ${tag.cls}">${esc(tag.text)}</span>
                   <span style="margin-left:0.5rem;color:var(--muted);font-size:0.75rem;">${esc(f.folder)}</span>
                   <div class="fname">${esc(f.file)}</div>
-                  <p class="reason">${esc(f.failure_reason || "—")}</p>
+                  <p class="reason">${esc(f.error_message || f.failure_reason || "—")}</p>
+                  ${Array.isArray(f.error_cases) && f.error_cases.length > 1
+                    ? `<ul class="expected">${f.error_cases.map((c) => `<li>${esc(c.message || c.code || "")}</li>`).join("")}</ul>`
+                    : ""}
+                  ${f.error_code ? `<div class="expected">Kode: <code>${esc(f.error_code)}</code></div>` : ""}
                   ${expected}
                 </div>
               </div>
@@ -1511,12 +1723,16 @@
             if (bankEl) {
               bankEl.value = sel.expected_bank || "manifest";
             }
+            const jobEl = tr.querySelector(".row-job");
+            if (jobEl) {
+              jobEl.value = sel.job_position || "";
+            }
           }
         });
       }
     }
 
-    specificFolder.addEventListener("change", updateSpecificRekeningBankUI);
+    specificFolder.addEventListener("change", updateSpecificParamUI);
 
     document.getElementById("btnApplyLimit").addEventListener("click", () => {
       const v = Number(document.getElementById("globalLimit").value) || 0;
@@ -1563,10 +1779,154 @@
       URL.revokeObjectURL(a.href);
     });
 
+    (function installFailImageZoom() {
+      const overlay = document.createElement("div");
+      overlay.className = "img-zoom-overlay";
+      overlay.innerHTML =
+        '<div class="img-zoom-bar">' +
+        '<span class="img-zoom-caption" data-zoom-caption></span>' +
+        '<div class="img-zoom-actions">' +
+        '<button type="button" data-zoom-act="out">−</button>' +
+        '<button type="button" data-zoom-act="in">+</button>' +
+        '<button type="button" data-zoom-act="fit">Fit</button>' +
+        '<button type="button" data-zoom-act="close">Tutup</button>' +
+        "</div></div>" +
+        '<div class="img-zoom-stage" data-zoom-stage><img alt="" /></div>' +
+        '<p class="img-zoom-hint">Scroll untuk zoom · drag untuk geser · Esc untuk tutup</p>';
+      document.body.appendChild(overlay);
+      const stage = overlay.querySelector("[data-zoom-stage]");
+      const img = stage.querySelector("img");
+      const caption = overlay.querySelector("[data-zoom-caption]");
+      let scale = 1, tx = 0, ty = 0, dragging = false, lastX = 0, lastY = 0;
+      let pinchDist = 0, pinchScale = 1;
+
+      function apply() {
+        img.style.transform = "translate(" + tx + "px," + ty + "px) scale(" + scale + ")";
+      }
+      function fit() {
+        const nw = img.naturalWidth || 1;
+        const nh = img.naturalHeight || 1;
+        const rw = stage.clientWidth || 1;
+        const rh = stage.clientHeight || 1;
+        scale = Math.min(rw / nw, rh / nh, 4);
+        tx = (rw - nw * scale) / 2;
+        ty = (rh - nh * scale) / 2;
+        apply();
+      }
+      function zoomAt(mx, my, factor) {
+        const next = Math.min(12, Math.max(0.15, scale * factor));
+        tx = mx - (mx - tx) * (next / scale);
+        ty = my - (my - ty) * (next / scale);
+        scale = next;
+        apply();
+      }
+      function openZoom(src, alt) {
+        caption.textContent = alt || "";
+        img.alt = alt || "";
+        img.src = src;
+        overlay.classList.add("open");
+        document.body.style.overflow = "hidden";
+        if (img.complete && img.naturalWidth) fit();
+        else img.onload = fit;
+      }
+      function closeZoom() {
+        overlay.classList.remove("open");
+        img.removeAttribute("src");
+        document.body.style.overflow = "";
+      }
+
+      overlay.querySelector("[data-zoom-act='close']").addEventListener("click", closeZoom);
+      overlay.querySelector("[data-zoom-act='fit']").addEventListener("click", fit);
+      overlay.querySelector("[data-zoom-act='in']").addEventListener("click", () => {
+        zoomAt(stage.clientWidth / 2, stage.clientHeight / 2, 1.25);
+      });
+      overlay.querySelector("[data-zoom-act='out']").addEventListener("click", () => {
+        zoomAt(stage.clientWidth / 2, stage.clientHeight / 2, 0.8);
+      });
+      document.addEventListener("keydown", (ev) => {
+        if (ev.key === "Escape" && overlay.classList.contains("open")) closeZoom();
+      });
+      stage.addEventListener("wheel", (ev) => {
+        ev.preventDefault();
+        const rect = stage.getBoundingClientRect();
+        zoomAt(ev.clientX - rect.left, ev.clientY - rect.top, ev.deltaY < 0 ? 1.12 : 1 / 1.12);
+      }, { passive: false });
+      stage.addEventListener("pointerdown", (ev) => {
+        if (ev.button !== 0) return;
+        dragging = true;
+        lastX = ev.clientX;
+        lastY = ev.clientY;
+        stage.classList.add("dragging");
+        stage.setPointerCapture(ev.pointerId);
+      });
+      stage.addEventListener("pointermove", (ev) => {
+        if (!dragging) return;
+        tx += ev.clientX - lastX;
+        ty += ev.clientY - lastY;
+        lastX = ev.clientX;
+        lastY = ev.clientY;
+        apply();
+      });
+      stage.addEventListener("pointerup", () => {
+        dragging = false;
+        stage.classList.remove("dragging");
+      });
+      stage.addEventListener("dblclick", (ev) => {
+        const rect = stage.getBoundingClientRect();
+        const fitScale = Math.min(stage.clientWidth / (img.naturalWidth || 1), stage.clientHeight / (img.naturalHeight || 1));
+        if (scale > fitScale * 1.05) fit();
+        else zoomAt(ev.clientX - rect.left, ev.clientY - rect.top, 2);
+      });
+      stage.addEventListener("touchstart", (ev) => {
+        if (ev.touches.length === 2) {
+          const a = ev.touches[0], b = ev.touches[1];
+          pinchDist = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+          pinchScale = scale;
+        }
+      }, { passive: true });
+      stage.addEventListener("touchmove", (ev) => {
+        if (ev.touches.length !== 2 || !pinchDist) return;
+        ev.preventDefault();
+        const a = ev.touches[0], b = ev.touches[1];
+        const dist = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+        const rect = stage.getBoundingClientRect();
+        zoomAt(
+          (a.clientX + b.clientX) / 2 - rect.left,
+          (a.clientY + b.clientY) / 2 - rect.top,
+          (dist / pinchDist) * pinchScale / scale
+        );
+      }, { passive: false });
+
+      document.addEventListener("click", (ev) => {
+        if (ev.target.closest("[data-copy], .copy-img-btn, .img-zoom-overlay")) return;
+        const thumb = ev.target.closest(".fail-preview img");
+        if (!thumb) return;
+        ev.preventDefault();
+        openZoom(thumb.currentSrc || thumb.src, thumb.alt);
+      });
+    })();
+
     loadTypes().catch((e) => {
       datasetRootHint.textContent = "Error: " + e.message;
       datasetRootHint.style.color = "var(--err)";
     });
+    fetch("/health")
+      .then((r) => r.json())
+      .then((h) => {
+        const mode = h.ocr_default_mode;
+        const sel = document.getElementById("ocrMode");
+        if (sel && (mode === "vl" || mode === "fast" || mode === "mistral")) {
+          sel.value = mode;
+        }
+        if (h.ocr_remote_enabled && h.ocr_remote_base_url) {
+          const skip = document.getElementById("skipPassthrough");
+          const pre = document.getElementById("enablePreprocess");
+          if (skip && pre && !pre.checked) {
+            skip.checked = true;
+          }
+        }
+      })
+      .catch(() => {});
   </script>
 </body>
 </html>

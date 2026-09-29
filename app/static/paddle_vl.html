@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PaddleOCR-VL</title>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --surface: #1a222d;
+      --border: #2d3a4d;
+      --text: #e8eef5;
+      --muted: #8b9cb3;
+      --accent: #3d9cf5;
+      --ok: #6ee7b7;
+      --err: #f87171;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "DM Sans", system-ui, -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }
+    header {
+      padding: 1.5rem clamp(1rem, 4vw, 2.5rem);
+      border-bottom: 1px solid var(--border);
+      background: linear-gradient(180deg, #151c26 0%, var(--bg) 100%);
+    }
+    header h1 {
+      margin: 0;
+      font-size: clamp(1.15rem, 2.5vw, 1.5rem);
+      font-weight: 600;
+      letter-spacing: -0.02em;
+    }
+    header p {
+      margin: 0.35rem 0 0;
+      color: var(--muted);
+      font-size: 0.9rem;
+      max-width: 52rem;
+    }
+    .nav-top { margin-top: 0.75rem; }
+    .nav-top a { color: var(--accent); font-size: 0.875rem; }
+    main {
+      padding: clamp(1rem, 3vw, 2rem);
+      max-width: 1400px;
+      margin: 0 auto;
+    }
+    .row {
+      display: grid;
+      gap: 1rem;
+      grid-template-columns: 1fr;
+      align-items: start;
+    }
+    @media (min-width: 900px) {
+      .row { grid-template-columns: minmax(280px, 0.9fr) minmax(320px, 1.1fr); }
+    }
+    .panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.25rem;
+    }
+    .panel-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
+      margin-bottom: 1rem;
+    }
+    .panel h2 {
+      margin: 0;
+      font-size: 0.85rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--muted);
+    }
+    input[type="file"] { font-size: 0.875rem; color: var(--muted); }
+    button {
+      font-family: inherit;
+      font-size: 0.8rem;
+      font-weight: 600;
+      padding: 0.4rem 0.75rem;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: transparent;
+      color: var(--text);
+      cursor: pointer;
+    }
+    button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+    button:disabled { opacity: 0.45; cursor: not-allowed; }
+    .preview-box {
+      margin-top: 1rem;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: #0a0e14;
+      min-height: 280px;
+      max-height: 70vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: auto;
+      padding: 0.75rem;
+    }
+    .preview-box img { max-width: 100%; height: auto; border-radius: 4px; }
+    .placeholder { color: var(--muted); font-size: 0.875rem; text-align: center; padding: 1rem; }
+    .status { font-size: 0.85rem; margin-top: 0.75rem; min-height: 1.25rem; }
+    .status.error { color: var(--err); }
+    .status.ok { color: var(--ok); }
+    code.endpoint {
+      font-size: 0.78rem;
+      background: #0a0e14;
+      padding: 0.2rem 0.45rem;
+      border-radius: 4px;
+      border: 1px solid var(--border);
+    }
+    pre.json,
+    pre.prompt {
+      margin: 0;
+      overflow: auto;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 0.78rem;
+      line-height: 1.45;
+      background: #0a0e14;
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.85rem;
+      white-space: pre-wrap;
+    }
+    .hint {
+      font-size: 0.8rem;
+      color: var(--muted);
+      margin: 0.85rem 0 0.4rem;
+    }
+    pre.prompt {
+      max-height: 220px;
+      color: var(--muted);
+      margin: 0 0 1rem;
+    }
+      .row.stack {
+        display: grid;
+        gap: 1rem;
+      }
+      pre.raw {
+        min-height: 220px;
+        max-height: 50vh;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+  </style>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;600&display=swap" rel="stylesheet" />
+</head>
+<body>
+  <header>
+    <h1>PaddleOCR-VL — tes KTP</h1>
+    <p>
+      Unggah satu foto KTP. Model yang sama dengan demo resmi
+      (<a href="https://aistudio.baidu.com/paddleocr/task/" target="_blank" rel="noopener">PaddleOCR-VL-1.6 document parsing</a>)
+      lewat <code class="endpoint">POST /systems/ocr/api/v1/ocr-vl-ktp</code>.
+      Kanan atas: field KTP. Kanan bawah: teks mentah VL (setara panel Document parsing).
+    </p>
+    <p class="nav-top"><a href="/">← Beranda platform</a> · <a href="/systems/ocr/">OCR lain</a></p>
+  </header>
+  <main>
+    <div class="row">
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Unggah</h2>
+        </div>
+        <input type="file" id="file" accept="image/*" />
+        <p class="hint">Prompt yang dikirim bersama gambar</p>
+        <pre class="prompt" id="promptBox"></pre>
+        <div class="preview-box" id="preview">
+          <span class="placeholder">Pilih satu foto KTP (JPEG, PNG, atau WebP).</span>
+        </div>
+        <div class="status" id="status" role="status"></div>
+      </section>
+      <div class="row stack">
+        <section class="panel">
+          <div class="panel-head">
+            <h2>JSON field</h2>
+            <button type="button" id="copy" disabled>Salin JSON</button>
+          </div>
+          <pre class="json" id="jsonOut">Belum ada hasil.</pre>
+        </section>
+        <section class="panel">
+          <div class="panel-head">
+            <h2>Raw PaddleOCR-VL</h2>
+            <button type="button" id="copyRaw" disabled>Salin raw</button>
+          </div>
+          <pre class="json raw" id="rawOut">Belum ada hasil VL.</pre>
+        </section>
+      </div>
+    </div>
+  </main>
+  <script>
+    const KTP_PROMPT = `You are an Indonesian identity document extraction system.
+
+Extract the following fields from the KTP image:
+
+- nik
+- nama
+- status_perkawinan
+
+Rules:
+
+1. NIK must contain exactly 16 numeric digits.
+2. Do not invent missing characters.
+3. Preserve the name exactly as written.
+4. status_perkawinan must be one of:
+   BELUM KAWIN
+   KAWIN
+   CERAI HIDUP
+   CERAI MATI
+5. If a value cannot be read confidently, return null.
+6. Return JSON only.
+
+Output:
+
+{
+  "nik": null,
+  "nama": null,
+  "status_perkawinan": null,
+  "confidence": {
+    "nik": 0.0,
+    "nama": 0.0,
+    "status_perkawinan": 0.0
+  }
+}`;
+
+    const fileInput = document.getElementById("file");
+    const preview = document.getElementById("preview");
+    const statusEl = document.getElementById("status");
+    const jsonOut = document.getElementById("jsonOut");
+    const rawOut = document.getElementById("rawOut");
+    const copyBtn = document.getElementById("copy");
+    const copyRawBtn = document.getElementById("copyRaw");
+    document.getElementById("promptBox").textContent = KTP_PROMPT;
+
+    let objectUrl = null;
+    let requestSeq = 0;
+
+    function setStatus(msg, type) {
+      statusEl.textContent = msg || "";
+      statusEl.className = "status" + (type ? " " + type : "");
+    }
+
+    function showPlaceholder(text) {
+      preview.innerHTML = "";
+      const s = document.createElement("span");
+      s.className = "placeholder";
+      s.textContent = text;
+      preview.appendChild(s);
+    }
+
+    function errorMessage(data, fallback) {
+      const d = data && data.detail;
+      if (typeof d === "string") return d;
+      if (d && typeof d === "object") {
+        if (typeof d.message === "string" && typeof d.error === "string") {
+          return d.message + " (" + d.error + ")";
+        }
+        if (typeof d.message === "string") return d.message;
+      }
+      if (d) return JSON.stringify(d);
+      return fallback;
+    }
+
+    fileInput.addEventListener("change", async () => {
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+      objectUrl = null;
+      const file = fileInput.files && fileInput.files[0];
+      jsonOut.textContent = "Belum ada hasil.";
+      rawOut.textContent = "Belum ada hasil VL.";
+      copyBtn.disabled = true;
+      copyRawBtn.disabled = true;
+      if (!file) {
+        showPlaceholder("Pilih satu foto KTP (JPEG, PNG, atau WebP).");
+        setStatus("");
+        return;
+      }
+
+      const isImage = (file.type || "").startsWith("image/");
+      if (isImage) {
+        objectUrl = URL.createObjectURL(file);
+        preview.innerHTML = "";
+        const img = document.createElement("img");
+        img.src = objectUrl;
+        img.alt = file.name;
+        preview.appendChild(img);
+      } else {
+        showPlaceholder(file.name);
+      }
+
+      const seq = ++requestSeq;
+      setStatus("Memproses KTP dengan PaddleOCR-VL…");
+      const fd = new FormData();
+      fd.append("file", file);
+
+      try {
+        const res = await fetch("/systems/ocr/api/v1/ocr-vl-ktp?v=2", {
+          method: "POST",
+          body: fd,
+        });
+        const data = await res.json().catch(() => ({}));
+        if (seq !== requestSeq) return;
+        jsonOut.textContent = JSON.stringify(data, null, 2);
+        rawOut.textContent = data.vl_markdown || data.raw_model_text || JSON.stringify(data, null, 2);
+        copyBtn.disabled = false;
+        copyRawBtn.disabled = false;
+        if (!res.ok) {
+          setStatus(errorMessage(data, res.statusText || "Gagal"), "error");
+          return;
+        }
+        const total = data.timing && data.timing.total_wall_s;
+        const model = data.model || "PaddleOCR-VL";
+        const backend = data.backend ? " · " + data.backend : "";
+        setStatus(
+          typeof total === "number"
+            ? "Selesai — " + model + backend + " · " + total + "s"
+            : "Selesai — " + model + backend,
+          "ok"
+        );
+      } catch (e) {
+        if (seq !== requestSeq) return;
+        const msg = e && e.message ? e.message : String(e);
+        jsonOut.textContent = JSON.stringify({ success: false, error: msg }, null, 2);
+        rawOut.textContent = msg;
+        copyBtn.disabled = false;
+        copyRawBtn.disabled = false;
+        setStatus(msg, "error");
+      }
+    });
+
+    copyBtn.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(jsonOut.textContent);
+        setStatus("JSON disalin.", "ok");
+      } catch (e) {
+        setStatus("Gagal menyalin JSON.", "error");
+      }
+    });
+
+    copyRawBtn.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(rawOut.textContent);
+        setStatus("Raw VL disalin.", "ok");
+      } catch (e) {
+        setStatus("Gagal menyalin raw.", "error");
+      }
+    });
+  </script>
+</body>
+</html>

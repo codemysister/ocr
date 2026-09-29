@@ -134,6 +134,50 @@ def _is_probably_field_label(seg: str) -> bool:
     return False
 
 
+_BPJS_NAME_SKIP_PREFIXES = (
+    "jl",
+    "jln",
+    "jl.",
+    "jln.",
+    "kp",
+    "kp.",
+    "rt",
+    "rw",
+    "blok",
+    "perum",
+    "dusun",
+    "desa",
+    "kel",
+    "kab",
+    "kabupaten",
+    "kota",
+    "pkm",
+    "klinik",
+    "puskesmas",
+    "faskes",
+    "pt",
+    "kartu",
+    "syarat",
+    "apabila",
+    "nomor",
+    "alamat",
+    "tanggal",
+)
+
+
+def _bpjs_reject_name_line(seg: str) -> bool:
+    """Bukan nama peserta KIS: alamat, faskes, atau label syarat."""
+    low = _normalize(seg)
+    if not low:
+        return True
+    first = low.split()[0].rstrip(".,:")
+    if first in _BPJS_NAME_SKIP_PREFIXES or any(low.startswith(p) for p in _BPJS_NAME_SKIP_PREFIXES):
+        return True
+    if re.search(r"\b(?:rt|rw)\b", low) and re.search(r"\d", low):
+        return True
+    return False
+
+
 _PLACE_PREFIX = re.compile(r"^(kota|kab\.?|kabupaten|kecamatan|kelurahan|provinsi|desa)\b", re.I)
 
 
@@ -461,107 +505,304 @@ def extract_npwp_holder_names(ocr_text: str) -> list[str]:
     return out
 
 
-def extract_jkn_participant_names(ocr_text: str) -> list[str]:
-    """Nama peserta dari kartu Mobile JKN (biasanya huruf kapital, bisa beberapa anggota)."""
-    seen: set[str] = set()
-    out: list[str] = []
-
-    skip_next_value = False
-    skip_markers = (
-        "faskes",
-        "lahir",
+_JKN_SKIP_MARKERS = (
+    "faskes",
+    "lahir",
+    "kelas",
+    "kelompok",
+    "tagihan",
+    "saldo",
+    "sisa",
+)
+_JKN_NON_NAME_TOKENS = frozenset(
+    {
+        "aktif",
+        "tidak",
+        "non",
+        "bulan",
         "kelas",
+        "lahir",
+        "faskes",
         "kelompok",
-        "tagihan",
-        "saldo",
-        "sisa",
-    )
-    non_name_tokens = frozenset(
-        {
-            "aktif",
-            "tidak",
-            "non",
-            "bulan",
-            "kelas",
-            "lahir",
-            "faskes",
-            "kelompok",
-            "peserta",
-            "anak",
-            "istri",
-            "kepesertaan",
-            "info",
-            "jenis",
-            "tampilan",
-            "terdaftar",
-            "prolanis",
-            "hipertensi",
-            "daerah",
-            "pemerintah",
-            "pbpu",
-            "pbi",
-            "apbn",
-            "pbpu",
-            "pega",
-            "swasta",
+        "peserta",
+        "anak",
+        "istri",
+        "kepesertaan",
+        "info",
+        "jenis",
+        "tampilan",
+        "terdaftar",
+        "prolanis",
+        "hipertensi",
+        "daerah",
+        "pemerintah",
+        "pbpu",
+        "pbi",
+        "apbn",
+        "pega",
+        "swasta",
+        "klinik",
+        "puskesmas",
+        "pkm",
+        "klg",
+        "tambahan",
+        "nomor",
+        "kartu",
+        "keluarga",
+        "jumlah",
+        "jiwa",
+        "pekerja",
+        "penerima",
+        "upah",
+        "karna",
+        "premi",
+        "penangguhan",
+        "pembayaran",
+        "bukan",
+    }
+)
+_JKN_STATUS_STRIP_RE = re.compile(
+    r"[\(\[]?\s*(?:tidak\s*aktif|non[\s\-]*aktif|nonaktif|aktif)"
+    r"(?:\s*\([^)]*\))?[\s\)\]]*",
+    re.I,
+)
+_JKN_NAMA_PESERTA_RE = re.compile(r"^\s*nama\s*peserta\s*:?\s*(.+)$", re.I)
+_JKN_STATUS_PESERTA_RE = re.compile(r"^\s*status\s*peserta\s*:?\s*(.+)$", re.I)
+_JKN_MASK_TOKEN_RE = re.compile(r"^[a-z]{1,5}[x*]{2,}$")
+_JKN_DIGIT_NOISE_RE = re.compile(r"^[\d\s.:/-]+$")
+_JKN_FACILITY_PREFIXES = (
+    "klinik",
+    "puskesmas",
+    "pkm",
+)
+_JKN_ROLE_PREFIXES = (
+    "peserta",
+    "anak",
+    "istri",
+    "klg",
+    "keluarga tambahan",
+    "nomor kartu",
+    "jumlah jiwa",
+    "karna premi",
+    "penangguhan",
+    "pembayaran",
+    "pekerja",
+    "penerima",
+)
+
+
+def parse_jkn_status_label(text: str) -> str | None:
+    """aktif | tidak_aktif | None dari baris OCR Info Peserta."""
+    compact = re.sub(r"[^a-z]", "", _normalize(text))
+    if "tidakaktif" in compact or "nonaktif" in compact:
+        return "tidak_aktif"
+    if "aktif" in compact:
+        return "aktif"
+    return None
+
+
+def _jkn_normalize_words(raw: str) -> str:
+    s = _normalize(raw)
+    s = re.sub(r"[()\[\]{}]", " ", s)
+    s = s.replace("*", "x")
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def _jkn_is_facility_or_role_line(raw: str) -> bool:
+    low = _jkn_normalize_words(raw)
+    if not low:
+        return False
+    if any(low.startswith(p) for p in _JKN_FACILITY_PREFIXES):
+        return True
+    if any(low.startswith(p) for p in _JKN_ROLE_PREFIXES):
+        return True
+    if "pekerja bukan" in low or "penerima upah" in low:
+        return True
+    return False
+
+
+def _jkn_is_masked_name(raw: str) -> bool:
+    """Nama tersensor: SIXX JUXXXXXX / AP***** SU************."""
+    words = _jkn_normalize_words(_trim_name_punctuation(raw)).split()
+    if not words:
+        return False
+    masked = [w for w in words if _JKN_MASK_TOKEN_RE.fullmatch(w)]
+    return len(masked) >= 1 and len(masked) == len(words)
+
+
+def jkn_masked_name_matches(extracted: str, expected: str) -> bool:
+    """Cocokkan nama tersensor (X atau *) dengan nama referensi (awalan kata)."""
+    ext_words = _jkn_normalize_words(extracted).split()
+    exp_words = _normalize(expected).split()
+    ext_words = [w for w in ext_words if w not in {"nama", "peserta"}]
+    if len(ext_words) < 2 or len(exp_words) < 2:
+        return False
+    if not all(_JKN_MASK_TOKEN_RE.fullmatch(w) for w in ext_words):
+        return False
+
+    used: set[int] = set()
+    matched = 0
+    for ocr_tok in ext_words:
+        prefix = ocr_tok.rstrip("x")
+        if len(prefix) < 2:
+            continue
+        for i, exp_tok in enumerate(exp_words):
+            if i in used:
+                continue
+            if not exp_tok.startswith(prefix):
+                continue
+            if abs(len(ocr_tok) - len(exp_tok)) > 2 and len(ocr_tok) < len(exp_tok):
+                if len(ocr_tok) < len(prefix) + 2:
+                    continue
+            used.add(i)
+            matched += 1
+            break
+    need = 2 if len(exp_words) == 2 else max(2, len(exp_words) - 1)
+    return matched >= need and matched >= min(len(ext_words), len(exp_words))
+
+
+def _jkn_caps_is_name(raw: str) -> bool:
+    s = _trim_name_punctuation(raw)
+    if not s or re.fullmatch(r"[\d\s./:-]+", s):
+        return False
+    if _jkn_is_facility_or_role_line(s):
+        return False
+    low = _jkn_normalize_words(s)
+    words = low.split()
+    if _jkn_is_masked_name(s):
+        return True
+    if any(w in _JKN_NON_NAME_TOKENS for w in words):
+        return False
+    if any(low.startswith(marker) for marker in _JKN_SKIP_MARKERS):
+        return False
+    alpha = sum(c.isalpha() for c in s)
+    if alpha < max(3, len(s) * 0.5):
+        return False
+    letters_only = re.sub(r"[^A-Za-z*xX]", "", s)
+    if letters_only and letters_only.upper() == letters_only:
+        if len(words) >= 2:
+            return True
+        if len(letters_only) >= 4:
+            return True
+    return False
+
+
+def extract_jkn_participants(ocr_text: str) -> list[dict[str, str | None]]:
+    """Kartu anggota Info Peserta / chat Pandawa: nama + status (aktif / tidak_aktif)."""
+    members: list[dict[str, str | None]] = []
+    current: dict[str, str | None] | None = None
+    skip_next_value = False
+
+    def _flush() -> None:
+        nonlocal current
+        if current and current.get("name"):
+            members.append(current)
+        current = None
+
+    def _start(name: str, status: str | None, status_raw: str | None) -> None:
+        nonlocal current
+        _flush()
+        current = {
+            "name": _trim_name_punctuation(name),
+            "status": status,
+            "status_raw": status_raw,
         }
-    )
 
-    def _jkn_caps_is_name(raw: str) -> bool:
-        s = raw.strip()
-        if not s or re.fullmatch(r"[\d\s./:-]+", s):
-            return False
-        low = _normalize(s)
-        words = low.split()
-        if any(w in non_name_tokens for w in words):
-            return False
-        if any(low.startswith(marker) for marker in skip_markers):
-            return False
-        alpha = sum(c.isalpha() for c in s)
-        if alpha < max(3, len(s) * 0.5):
-            return False
-        if s.upper() == s:
-            if len(words) >= 2:
-                return True
-            if len(s) >= 4:
-                return True
-        return _looks_like_person_name(s)
-
-    def _add(raw: str) -> None:
-        cand = _trim_name_punctuation(raw)
-        if not _jkn_caps_is_name(cand):
+    def _extend_or_start(name: str, status: str | None, status_raw: str | None) -> None:
+        nonlocal current
+        cleaned = _trim_name_punctuation(name)
+        if (
+            current
+            and current.get("name")
+            and not current.get("status")
+            and _jkn_caps_is_name(str(current.get("name") or ""))
+            and _jkn_caps_is_name(cleaned)
+        ):
+            current["name"] = f"{current['name']} {cleaned}".strip()
+            if status:
+                current["status"] = status
+                current["status_raw"] = status_raw
             return
-        key = _normalize(cand)
-        if key in seen:
-            return
-        seen.add(key)
-        out.append(cand)
+        _start(cleaned, status, status_raw)
 
     segments = _split_segments(ocr_text)
-    for i, seg in enumerate(segments):
+    for seg in segments:
         raw = seg.strip()
         low = _normalize(raw)
         if not raw:
             continue
-        if any(low.startswith(marker) for marker in skip_markers):
-            skip_next_value = True
+
+        labeled_status = _JKN_STATUS_PESERTA_RE.match(raw)
+        if labeled_status:
+            status = parse_jkn_status_label(labeled_status.group(1))
+            if status and current is not None and not current.get("status"):
+                current["status"] = status
+                current["status_raw"] = raw
+            continue
+
+        labeled_name = _JKN_NAMA_PESERTA_RE.match(raw)
+        if labeled_name:
+            name = labeled_name.group(1).strip(" -")
+            if name:
+                st = parse_jkn_status_label(name)
+                name_only = _JKN_STATUS_STRIP_RE.sub(" ", name)
+                name_only = re.sub(r"\s+", " ", name_only).strip(" -")
+                if name_only:
+                    _start(name_only, st, raw if st else None)
+            continue
+
+        if low.startswith("jenis peserta"):
+            continue
+        if _JKN_DIGIT_NOISE_RE.match(raw):
+            continue
+        if _jkn_is_facility_or_role_line(raw):
+            skip_next_value = False
+            continue
+
+        if any(low.startswith(marker) for marker in _JKN_SKIP_MARKERS):
+            rest = low
+            marker_hit = ""
+            for marker in _JKN_SKIP_MARKERS:
+                if low.startswith(marker):
+                    rest = low[len(marker) :].strip(" :.-")
+                    marker_hit = marker
+                    break
+            if not rest:
+                skip_next_value = True
+            elif marker_hit == "faskes" and re.fullmatch(r"\d{1,2}", rest):
+                skip_next_value = True
             continue
         if skip_next_value:
             skip_next_value = False
             continue
-        if raw.upper() == raw and re.search(r"[A-Z]{2,}", raw):
-            _add(raw)
-            if i + 1 < len(segments):
-                nxt = segments[i + 1].strip()
-                if (
-                    nxt.upper() == nxt
-                    and re.search(r"[A-Z]{2,}", nxt)
-                    and len(nxt.split()) <= 2
-                ):
-                    _add(f"{raw} {nxt}")
-        for m in _CAPS_NAME_RUN_RE.finditer(raw):
-            _add(m.group(1))
 
+        status = parse_jkn_status_label(raw)
+        name_only = _JKN_STATUS_STRIP_RE.sub(" ", raw)
+        name_only = re.sub(r"\s+", " ", name_only).strip(" -")
+        has_name = bool(name_only) and _jkn_caps_is_name(name_only)
+
+        if has_name:
+            _extend_or_start(name_only, status, raw if status else None)
+            continue
+        if status and current is not None and not current.get("status"):
+            current["status"] = status
+            current["status_raw"] = raw
+
+    _flush()
+    return members
+
+
+def extract_jkn_participant_names(ocr_text: str) -> list[str]:
+    """Nama peserta dari kartu Mobile JKN (biasanya huruf kapital, bisa beberapa anggota)."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for member in extract_jkn_participants(ocr_text):
+        name = str(member.get("name") or "").strip()
+        key = _normalize(name)
+        if not name or key in seen:
+            continue
+        seen.add(key)
+        out.append(name)
     return out
 
 
@@ -1003,10 +1244,13 @@ def _looks_like_cv_name_line(seg: str, *, expected_name: str = "") -> bool:
     exp_n = _normalize(expected_name)
     words = s.split()
 
-    # Nama satu kata di header CV (mis. ANNISA) — umum di template Canva/design
+    # Nama satu kata di header CV (mis. ANNISA) — hanya jika referensi juga satu kata.
     if len(words) == 1 and re.fullmatch(r"[A-Za-z'.-]+", s):
         if exp_n:
-            return float(fuzz.WRatio(low, exp_n)) >= 65.0
+            exp_words = [w for w in exp_n.split() if w]
+            if len(exp_words) >= 2:
+                return False
+            return float(fuzz.ratio(low, exp_n)) >= 90.0
         if s.upper() == s and 4 <= len(s) <= 30:
             return True
 
@@ -1161,12 +1405,82 @@ def extract_cv_holder_name(
     return None, "failed"
 
 
+_HEALTH_NAME_STOP_RE = re.compile(
+    r"klinik|puskesmas|rumah\s+sakit|\brs\b|surat\s+keterangan|yang\s+bertanda|"
+    r"dokter|telp|npwp|izin|nib|alamat|\bjl\.?\b|jalan|umur|tahun|kelamin|"
+    r"pekerjaan|tinggi|berat|tekanan|darah|nadi|visus|kesimpulan",
+    re.I,
+)
+_HEALTH_NAMA_LABEL_RE = re.compile(r"^(?:nama|nana|name)\b", re.I)
+_HEALTH_BAHWA_NAME_RE = re.compile(
+    r"bahwa\s*[:.]?\s*((?:nn|ny|tn|nt|sdr|sdri)?\.?\s*[A-Za-z0-9][A-Za-z0-9'.\s-]{2,70})",
+    re.I,
+)
+
+
+def extract_keterangan_kesehatan_names(ocr_text: str) -> list[str]:
+    """Nama pasien: sering di kiri/atas label Nama, OCR pecah baris + angka."""
+    lines = [ln.strip() for ln in (ocr_text or "").splitlines() if ln.strip()]
+    out: list[str] = []
+    seen: set[str] = set()
+
+    def add(cand: str) -> None:
+        c = re.sub(r"\s+", " ", (cand or "").strip(" :.-"))
+        if len(c) < 4:
+            return
+        key = _normalize(c)
+        if not key or key in seen:
+            return
+        seen.add(key)
+        out.append(c)
+
+    for i, ln in enumerate(lines):
+        low = _normalize(ln)
+        label = low.split(":", 1)[0].strip() if ":" in ln else low
+        if not (_HEALTH_NAMA_LABEL_RE.match(low) or label in {"nama", "nana", "name"}):
+            continue
+        if ":" in ln:
+            after = ln.split(":", 1)[1].strip()
+            if after:
+                add(after)
+        prev: list[str] = []
+        for j in range(i - 1, max(-1, i - 5), -1):
+            if _HEALTH_NAME_STOP_RE.search(lines[j]) or _is_probably_field_label(lines[j]):
+                break
+            if len(lines[j]) > 55:
+                break
+            prev.append(lines[j])
+        prev.reverse()
+        nxt: list[str] = []
+        for j in range(i + 1, min(len(lines), i + 4)):
+            if _HEALTH_NAME_STOP_RE.search(lines[j]) or _is_probably_field_label(lines[j]):
+                break
+            if re.search(r"\d{1,2}[/\-.]\d{1,2}", lines[j]):
+                break
+            nxt.append(lines[j])
+        if prev:
+            add(" ".join(prev))
+        if nxt:
+            add(" ".join(nxt))
+        if prev or nxt:
+            add(" ".join(prev + nxt))
+
+    for m in _HEALTH_BAHWA_NAME_RE.finditer(ocr_text or ""):
+        add(m.group(1))
+    return out
+
+
 def extract_holder_name_candidate(ocr_text: str, document_profile_id: str) -> tuple[str | None, str]:
     """
     Mengembalikan (teks nama perkiraan atau None, metode / alasan).
     `document_profile_id` kanonik: ktp, npwp, dll.
     """
     profile = (document_profile_id or "").strip().casefold()
+    if profile == "keterangan_kesehatan":
+        health_names = extract_keterangan_kesehatan_names(ocr_text)
+        if health_names:
+            return health_names[0], "keterangan_kesehatan_nama_field"
+
     if profile == "cv":
         return extract_cv_holder_name(ocr_text)
 
@@ -1204,18 +1518,30 @@ def extract_holder_name_candidate(ocr_text: str, document_profile_id: str) -> tu
 
     if profile == "bpjs":
         segments = _split_segments(ocr_text)
+        nama_aliases = {"nama", "nana", "name", "lama", "vama"}
         for i, seg in enumerate(segments):
             raw = seg.strip()
             low = _normalize(raw)
-            if low in {"nama", "nana", "name", "lama"} and i + 1 < len(segments):
-                nxt = segments[i + 1].strip()
-                if nxt and not _is_probably_field_label(nxt):
-                    merged = re.sub(r"\s+", " ", nxt)
+            label = low.split(":", 1)[0].strip() if ":" in raw else low
+            if label in nama_aliases and i + 1 < len(segments):
+                for nxt in segments[i + 1 : i + 6]:
+                    cand = re.sub(r"^[:\s]+", "", nxt.strip())
+                    nlow = _normalize(cand)
+                    if not cand:
+                        continue
+                    if nlow.split(":", 1)[0].strip() in nama_aliases:
+                        continue
+                    if _is_probably_field_label(cand) or _bpjs_reject_name_line(cand):
+                        continue
+                    merged = re.sub(r"\s+", " ", cand)
                     if _looks_like_person_name(merged) or (
                         merged.upper() == merged and re.search(r"[A-Z]{2,}", merged)
                     ):
                         return merged, "bpjs_after_nama"
+                    break
         for seg in person_like_segments(ocr_text):
+            if _bpjs_reject_name_line(seg):
+                continue
             if seg.upper() == seg and re.search(r"[A-Z]{2,}", seg) and len(seg.split()) >= 2:
                 return seg, "bpjs_caps_name"
 

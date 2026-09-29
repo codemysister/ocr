@@ -20,6 +20,7 @@ from app.dataset_benchmark import (
 )
 from app.pipeline_runner import OcrMode, PipelineResult, run_pipeline_bytes
 from systems.ocr.fast_runner import list_pp_ocr_tiers
+from systems.ocr.remote_client import default_ocr_mode
 from systems.ocr.runtime_hint import ocr_inference_unavailable_detail, paddle_gpu_healthcheck
 from systems.observability.last_tuning_log import (
     log_safe_failure,
@@ -33,12 +34,31 @@ from systems.observability.llm_fallback_log import (
     log_stats,
     read_llm_fallback_logs,
 )
+from systems.observability.validation_failure_log import (
+    clear_validation_failures,
+    count_validation_failures,
+    failure_log_stats,
+    read_validation_failures,
+)
+from systems.observability.validation_success_log import (
+    clear_validation_successes,
+    count_validation_successes,
+    read_validation_successes,
+    success_log_stats,
+)
 from systems.validation.bank_rekening import (
     list_supported_banks,
     normalize_expected_bank,
     parse_account_from_filename,
 )
 from systems.validation.document_profiles import list_supported_document_types, resolve_keywords
+from systems.validation.user_errors import (
+    HttpUserErrorBody,
+    PipelineFrontendResponse,
+    frontend_error_usage,
+    pipeline_http_detail,
+    user_error_http_detail,
+)
 
 router = APIRouter(prefix="/api/v1", tags=["api"])
 
@@ -83,25 +103,33 @@ def api_info() -> dict:
                     "expected_name": "string (optional)",
                 },
                 "query": {
-                    "ocr_mode": "fast (default PP-OCRv6) | mistral | vl",
+                    "ocr_mode": "fast | vl | mistral (kosong = OCR_DEFAULT_MODE, default fast / PP-OCRv6)",
                     "pp_ocr_tier": "balanced | medium | small | tiny — hanya ocr_mode=fast",
                     "include_preprocessed_image": "true | false (default false)",
                     "enable_preprocess": "true | false (default false) — crop/rotate sebelum OCR",
                     "skip_passthrough": "true | false (default false) — raw upload ke OCR, tanpa resize/grayscale",
                     "full_json": "true | false — hanya ocr_mode=vl",
                 },
-                "description": "OCR (pilihan engine) → validasi dokumen; preprocessing opsional (enable_preprocess=true).",
+                "description": (
+                    "OCR → validasi. HTTP 200 juga jika dokumen tidak lolos: "
+                    "baca error_message, jangan explanation.summary."
+                ),
                 "ocr_modes": {
-                    "fast": "Lokal PP-OCRv6 (default pipeline, pp_ocr_tier)",
+                    "fast": "PP-OCRv6 (default pipeline, pp_ocr_tier)",
+                    "vl": "PaddleOCR-VL-1.6",
                     "mistral": "Cloud Mistral OCR + document_annotation (opsional)",
-                    "vl": "Lokal PaddleOCR-VL-1.6 (layout + markdown)",
                 },
                 "pp_ocr_tiers": list_pp_ocr_tiers(),
                 "response_fields": {
+                    "document_matched": "true = VALID. false = tampilkan error_message (HTTP tetap 200)",
+                    "error_code": "kode tetap, mis. ktp.name_mismatch. null jika lolos",
+                    "error_message": "kalimat siap tampil di UI. null jika lolos",
+                    "error_cases": "array {code, message}; >1 item jika gagal lebih dari satu case",
                     "verdict.is_own_document": "true | false | null — milik user saat ini?",
                     "verdict.document_type_current_label": "jenis dokumen terdeteksi dari OCR",
-                    "verdict.summary": "ringkasan bahasa Indonesia",
+                    "verdict.summary": "ringkasan debug (jangan ditampilkan ke user)",
                 },
+                "error_catalog": "/systems/validation/api/v1/error-catalog",
             },
             "ocr_mistral": {
                 "method": "POST",
@@ -128,6 +156,11 @@ def api_info() -> dict:
                     "expected_name": "string (optional)",
                     "mistral_annotation": "object (opsional, dari Mistral OCR)",
                 },
+            },
+            "error_catalog": {
+                "method": "GET",
+                "path": "/systems/validation/api/v1/error-catalog",
+                "description": "Katalog error_code + error_message per dokumen/case + usage frontend.",
             },
             "validate_foto_profile": {
                 "method": "POST",
@@ -163,9 +196,36 @@ def api_info() -> dict:
                 "description": "Benchmark pipeline terhadap file dataset (response NDJSON stream).",
                 "body_note": "Per selection: pakai limit/offset batch, atau isi `files` untuk uji file spesifik.",
             },
+            "health_letter_ai": {
+                "method": "POST",
+                "path": "/api/v1/health-letter-ai",
+                "content_type": "multipart/form-data",
+                "description": "Tes OCR AI Ornith: ekstraksi + validasi surat keterangan kesehatan.",
+            },
+            "validation_failures": {
+                "method": "GET",
+                "path": "/api/v1/validation-failures",
+                "description": "Daftar dokumen gagal validasi/pipeline (JSONL di server).",
+            },
+            "validation_failures_clear": {
+                "method": "DELETE",
+                "path": "/api/v1/validation-failures",
+                "description": "Hapus semua log kegagalan.",
+            },
+            "validation_successes": {
+                "method": "GET",
+                "path": "/api/v1/validation-successes",
+                "description": "Daftar dokumen lolos validasi (JSONL di server).",
+            },
+            "validation_successes_clear": {
+                "method": "DELETE",
+                "path": "/api/v1/validation-successes",
+                "description": "Hapus semua log keberhasilan.",
+            },
         },
         "document_types": list_supported_document_types(),
         "docs": "/docs",
+        "frontend_errors": frontend_error_usage(),
     }
 
 
@@ -176,45 +236,107 @@ def api_healthcheck() -> dict:
 
 
 def _pipeline_http_error(result: PipelineResult) -> HTTPException:
-    """Map PipelineResult gagal ke HTTPException."""
+    """Map PipelineResult gagal ke HTTPException dengan field error frontend."""
     kind = result.error_kind or ""
-    detail = result.error
+    extra: dict = {"kind": kind, "message": result.error}
     if kind == "unknown_document_type":
-        detail = {
-            "message": result.error,
-            "supported": list_supported_document_types(),
-        }
+        extra["supported"] = list_supported_document_types()
     elif kind == "cv_unavailable":
-        detail = {
-            "code": "CV_SUBSYSTEM_UNAVAILABLE",
-            "message": result.error,
-            "install": "pip install -r requirements-cv.txt",
-            "opensearch": "docker compose -f docker-compose.cv.yml up -d",
-        }
+        extra.update(
+            {
+                "code": "CV_SUBSYSTEM_UNAVAILABLE",
+                "install": "pip install -r requirements-cv.txt",
+                "opensearch": "docker compose -f docker-compose.cv.yml up -d",
+            }
+        )
     elif kind == "mistral_unavailable":
-        detail = {
-            "code": "MISTRAL_OCR_UNAVAILABLE",
-            "message": result.error,
-            "install": "pip install -r requirements-mistral.txt",
-            "env": ["MISTRAL_API_KEY", "MISTRAL_OCR_MODEL"],
-        }
+        extra.update(
+            {
+                "code": "MISTRAL_OCR_UNAVAILABLE",
+                "install": "pip install -r requirements-mistral.txt",
+                "env": ["MISTRAL_API_KEY", "MISTRAL_OCR_MODEL"],
+            }
+        )
     elif kind == "ocr_unavailable":
-        detail = ocr_inference_unavailable_detail(mode="fast", exc=RuntimeError(result.error or ""))
+        extra.update(ocr_inference_unavailable_detail(mode="fast", exc=RuntimeError(result.error or "")))
+    elif kind == "health_ai_unavailable":
+        extra.update(
+            {
+                "code": "HEALTH_AI_UNAVAILABLE",
+                "engine": "ornith",
+                "env": ["LLM_HEALTH_AI_BASE_URL", "LLM_HEALTH_AI_MODEL"],
+            }
+        )
     elif kind == "opencv_unavailable":
         from systems.cv.index.opensearch_client import opensearch_unavailable_detail
 
-        detail = opensearch_unavailable_detail(exc=RuntimeError(result.error or ""))
+        extra.update(opensearch_unavailable_detail(exc=RuntimeError(result.error or "")))
+    detail = pipeline_http_detail(kind, extra=extra)
     return HTTPException(status_code=result.http_status_hint, detail=detail)
 
 
-@router.post("/pipeline")
+@router.post(
+    "/pipeline",
+    response_description=(
+        "HTTP 200 = pipeline selesai (lolos atau tidak). "
+        "Jika document_matched=false, tampilkan error_message ke user."
+    ),
+    responses={
+        200: {
+            "model": PipelineFrontendResponse,
+            "description": (
+                "Selesai. Field ocr/validation/verdict tetap ada. "
+                "Untuk UI cukup document_matched + error_message + error_cases."
+            ),
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "lolos": {
+                            "summary": "Dokumen lolos",
+                            "value": {
+                                "success": True,
+                                "document_matched": True,
+                                "error_code": None,
+                                "error_message": None,
+                                "error_cases": [],
+                            },
+                        },
+                        "gagal_nama": {
+                            "summary": "Nama tidak cocok — tampilkan error_message",
+                            "value": {
+                                "success": True,
+                                "document_matched": False,
+                                "error_code": "ktp.name_mismatch",
+                                "error_message": "Nama pada KTP tidak cocok.",
+                                "error_cases": [
+                                    {
+                                        "code": "ktp.name_mismatch",
+                                        "message": "Nama pada KTP tidak cocok.",
+                                    }
+                                ],
+                            },
+                        },
+                    }
+                }
+            },
+        },
+        400: {
+            "model": HttpUserErrorBody,
+            "description": "Request tidak valid. Baca detail.error_message.",
+        },
+        503: {
+            "model": HttpUserErrorBody,
+            "description": "OCR/CV tidak tersedia. Baca detail.error_message.",
+        },
+    },
+)
 async def api_pipeline(
     file: UploadFile = File(..., description="Gambar dokumen"),
     document_type: str = Form(..., description="Jenis dokumen, mis. KTP / NPWP"),
     expected_name: str = Form("", description="Nama referensi (opsional)"),
-    ocr_mode: OcrMode = Query(
-        "fast",
-        description="Engine OCR: fast (default, PP-OCRv6 lokal), mistral (cloud), vl (PaddleOCR-VL)",
+    ocr_mode: OcrMode | None = Query(
+        None,
+        description="Engine OCR: fast (PP-OCRv6, default), vl (PaddleOCR-VL), mistral. Kosong = OCR_DEFAULT_MODE.",
     ),
     pp_ocr_tier: PpOcrTier = Query(
         "medium",
@@ -253,6 +375,10 @@ async def api_pipeline(
         "",
         description="Untuk document_type=rekening: nomor rekening referensi (opsional jika ada di filename)",
     ),
+    job_position: str = Form(
+        "",
+        description="Posisi kerja. Untuk KTP + Helper: status perkawinan harus BELUM KAWIN.",
+    ),
 ) -> JSONResponse:
     """
     Pipeline lengkap: OCR (pilihan model) → validasi dokumen. Preprocess opsional (`enable_preprocess=true`).
@@ -272,7 +398,7 @@ async def api_pipeline(
             http_status=400,
             detail="File kosong.",
         )
-        raise HTTPException(status_code=400, detail="File kosong.")
+        raise HTTPException(status_code=400, detail=user_error_http_detail("pipeline.empty_file"))
     if not doc_type:
         log_safe_failure(
             subsystem="pipeline",
@@ -281,15 +407,20 @@ async def api_pipeline(
             http_status=400,
             detail="document_type kosong.",
         )
-        raise HTTPException(status_code=400, detail="document_type tidak boleh kosong.")
+        raise HTTPException(
+            status_code=400,
+            detail=user_error_http_detail("pipeline.empty_document_type"),
+        )
 
     resolved = resolve_keywords(doc_type)
     if not resolved:
-        detail = {
-            "message": "Jenis dokumen tidak dikenal.",
-            "document_type": doc_type,
-            "supported": list_supported_document_types(),
-        }
+        detail = user_error_http_detail(
+            "pipeline.unknown_document_type",
+            extra={
+                "document_type": doc_type,
+                "supported": list_supported_document_types(),
+            },
+        )
         log_safe_failure(subsystem="pipeline", method="POST", path=path, http_status=400, detail=detail)
         raise HTTPException(status_code=400, detail=detail)
 
@@ -297,11 +428,13 @@ async def api_pipeline(
     upload_name = file.filename or "upload"
     if canonical_id == "rekening":
         if not normalize_expected_bank(expected_bank):
-            detail = {
-                "message": "expected_bank wajib untuk dokumen rekening (mandiri | mas).",
-                "expected_bank": expected_bank.strip(),
-                "supported": list_supported_banks(),
-            }
+            detail = user_error_http_detail(
+                "pipeline.missing_expected_bank",
+                extra={
+                    "expected_bank": expected_bank.strip(),
+                    "supported": list_supported_banks(),
+                },
+            )
             log_safe_failure(subsystem="pipeline", method="POST", path=path, http_status=400, detail=detail)
             raise HTTPException(status_code=400, detail=detail)
         acct_ref = (
@@ -310,19 +443,39 @@ async def api_pipeline(
             or ""
         )
         if not (name_ref or cv_search_query).strip() and not acct_ref:
-            detail = {
-                "message": "Untuk rekening, isi expected_name dan/atau expected_account (nama/rekening: salah satu harus cocok).",
-            }
+            detail = user_error_http_detail("pipeline.missing_expected_identity")
             log_safe_failure(subsystem="pipeline", method="POST", path=path, http_status=400, detail=detail)
             raise HTTPException(status_code=400, detail=detail)
 
+    if canonical_id == "mutasi":
+        if not normalize_expected_bank(expected_bank):
+            detail = user_error_http_detail(
+                "pipeline.missing_expected_bank",
+                extra={
+                    "expected_bank": expected_bank.strip(),
+                    "supported": list_supported_banks(),
+                },
+            )
+            log_safe_failure(subsystem="pipeline", method="POST", path=path, http_status=400, detail=detail)
+            raise HTTPException(status_code=400, detail=detail)
+        acct_ref = (
+            expected_account.strip()
+            or parse_account_from_filename(upload_name)
+            or ""
+        )
+        if not acct_ref:
+            detail = user_error_http_detail("pipeline.missing_expected_account")
+            log_safe_failure(subsystem="pipeline", method="POST", path=path, http_status=400, detail=detail)
+            raise HTTPException(status_code=400, detail=detail)
+
+    resolved_ocr_mode: OcrMode = ocr_mode or default_ocr_mode()  # type: ignore[assignment]
     result = run_pipeline_bytes(
         raw,
         document_type=doc_type,
         expected_name=(name_ref or cv_search_query).strip(),
         filename=upload_name,
-        ocr_mode=ocr_mode,
-        pp_ocr_tier=pp_ocr_tier if ocr_mode == "fast" else None,
+        ocr_mode=resolved_ocr_mode,
+        pp_ocr_tier=pp_ocr_tier if resolved_ocr_mode == "fast" else None,
         include_preprocessed_image=include_preprocessed_image,
         enable_preprocess=enable_preprocess,
         skip_passthrough=skip_passthrough,
@@ -331,6 +484,7 @@ async def api_pipeline(
         cv_experience_query=cv_experience_query.strip(),
         expected_bank=expected_bank.strip(),
         expected_account=expected_account.strip(),
+        job_position=job_position.strip(),
     )
 
     if not result.ok:
@@ -344,7 +498,7 @@ async def api_pipeline(
         raise _pipeline_http_error(result)
 
     payload = result.payload or {}
-    tier_arg = pp_ocr_tier if ocr_mode == "fast" else None
+    tier_arg = pp_ocr_tier if resolved_ocr_mode == "fast" else None
 
     write_last_tuning_log(
         {
@@ -354,7 +508,7 @@ async def api_pipeline(
             "path": path,
             "input_bytes": len(raw),
             "query": {
-                "ocr_mode": ocr_mode,
+                "ocr_mode": resolved_ocr_mode,
                 "pp_ocr_tier": tier_arg,
                 "include_preprocessed_image": include_preprocessed_image,
                 "enable_preprocess": enable_preprocess,
@@ -364,6 +518,7 @@ async def api_pipeline(
                 "cv_education_query": cv_education_query or None,
                 "cv_experience_query": cv_experience_query or None,
                 "expected_bank": expected_bank.strip() or None,
+                "job_position": job_position.strip() or None,
             },
             "request": {
                 "document_type": doc_type,
@@ -396,17 +551,25 @@ class DatasetSelectionBody(BaseModel):
         "",
         description="Folder rekening: mandiri | mas (kosong = pakai manifest per file bila use_expected_bank)",
     )
+    job_position: str = Field(
+        "",
+        description="Posisi kerja untuk folder KTP (mis. helper → status perkawinan wajib BELUM KAWIN).",
+    )
 
 
 class DatasetBenchmarkBody(BaseModel):
     selections: list[DatasetSelectionBody]
-    ocr_mode: OcrMode = "fast"
+    ocr_mode: OcrMode | None = None
     pp_ocr_tier: PpOcrTier = "medium"
     use_expected_name: bool = True
     use_expected_bank: bool = True
     use_expected_account: bool = True
     enable_preprocess: bool = False
     skip_passthrough: bool = False
+    job_position: str = Field(
+        "",
+        description="Posisi kerja. Untuk folder KTP + Helper: status perkawinan harus BELUM KAWIN.",
+    )
 
 
 @router.get("/dataset/types")
@@ -465,16 +628,18 @@ def api_dataset_benchmark(body: DatasetBenchmarkBody) -> StreamingResponse:
                 offset=s.offset,
                 files=list(s.files or []),
                 expected_bank=(s.expected_bank or "").strip() or None,
+                job_position=(s.job_position or "").strip() or None,
             )
             for s in body.selections
         ],
-        ocr_mode=body.ocr_mode,
+        ocr_mode=(body.ocr_mode or default_ocr_mode()),  # type: ignore[arg-type]
         pp_ocr_tier=body.pp_ocr_tier,
         use_expected_name=body.use_expected_name,
         use_expected_bank=body.use_expected_bank,
         use_expected_account=body.use_expected_account,
         enable_preprocess=body.enable_preprocess,
         skip_passthrough=body.skip_passthrough,
+        job_position=(body.job_position or "").strip(),
     )
 
     def stream():
@@ -483,7 +648,10 @@ def api_dataset_benchmark(body: DatasetBenchmarkBody) -> StreamingResponse:
     return StreamingResponse(
         stream(),
         media_type="application/x-ndjson",
-        headers={"Cache-Control": "no-store"},
+        headers={
+            "Cache-Control": "no-store",
+            "X-Accel-Buffering": "no",
+        },
     )
 
 
@@ -516,3 +684,117 @@ def api_clear_llm_fallback_logs() -> dict:
     """Hapus semua entri log fallback AI."""
     cleared = clear_llm_fallback_logs()
     return {"cleared": cleared, "total": count_llm_fallback_logs()}
+
+
+@router.get("/validation-failures")
+def api_validation_failures(
+    limit: int = Query(200, ge=1, le=2000),
+    offset: int = Query(0, ge=0),
+    kind: str | None = Query(None, description="validation_fail | pipeline_error"),
+) -> dict:
+    """Daftar dokumen yang gagal validasi atau error pipeline."""
+    entries = read_validation_failures(limit=limit, offset=offset)
+    kind_n = (kind or "").strip()
+    if kind_n == "validation_fail":
+        entries = [e for e in entries if (e.get("failure_kind") or "validation_fail") == "validation_fail"]
+    elif kind_n == "pipeline_error":
+        entries = [e for e in entries if (e.get("failure_kind") or "") != "validation_fail"]
+    stats = failure_log_stats()
+    return {
+        "entries": entries,
+        "stats": stats,
+        "limit": limit,
+        "offset": offset,
+        "total": stats["total"],
+        "filtered_count": len(entries),
+    }
+
+
+@router.delete("/validation-failures")
+def api_clear_validation_failures() -> dict:
+    """Hapus semua log kegagalan (halaman /dataset-failures)."""
+    cleared = clear_validation_failures()
+    return {"cleared": cleared, "total": count_validation_failures()}
+
+
+@router.get("/validation-successes")
+def api_validation_successes(
+    limit: int = Query(200, ge=1, le=2000),
+    offset: int = Query(0, ge=0),
+    document_type: str | None = Query(None, description="Filter profil dokumen, mis. ktp"),
+) -> dict:
+    """Daftar dokumen yang lolos validasi."""
+    entries = read_validation_successes(limit=limit, offset=offset)
+    type_n = (document_type or "").strip()
+    if type_n:
+        entries = [
+            e
+            for e in entries
+            if str(e.get("document_type") or "").strip().casefold() == type_n.casefold()
+        ]
+    stats = success_log_stats()
+    return {
+        "entries": entries,
+        "stats": stats,
+        "limit": limit,
+        "offset": offset,
+        "total": stats["total"],
+        "filtered_count": len(entries),
+    }
+
+
+@router.delete("/validation-successes")
+def api_clear_validation_successes() -> dict:
+    """Hapus semua log keberhasilan (halaman /dataset-successes)."""
+    cleared = clear_validation_successes()
+    return {"cleared": cleared, "total": count_validation_successes()}
+
+
+@router.get("/health-letter-ai/config")
+def api_health_letter_ai_config() -> dict:
+    """Default server Ornith, daftar model, dan prompt template surat kesehatan."""
+    from systems.validation.keterangan_kesehatan_ai import health_ai_config
+
+    return health_ai_config()
+
+
+@router.post("/health-letter-ai")
+async def api_health_letter_ai(
+    file: UploadFile = File(..., description="Foto surat keterangan kesehatan"),
+    expected_name: str = Form(""),
+    expected_nik: str = Form(""),
+    llm_base_url: str = Form(""),
+    llm_model: str = Form(""),
+    user_prompt: str = Form(""),
+    today: str = Form(""),
+) -> JSONResponse:
+    """Kirim gambar ke LLM lokal multimodal, ekstrak field, lalu validasi."""
+    from datetime import date as date_cls
+
+    from systems.validation.keterangan_kesehatan_ai import analyze_health_letter_image
+
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(status_code=400, detail=user_error_http_detail("pipeline.empty_file"))
+    as_of = None
+    today_s = (today or "").strip()
+    if today_s:
+        try:
+            as_of = date_cls.fromisoformat(today_s[:10])
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail="today harus YYYY-MM-DD") from e
+    mime = file.content_type or "image/jpeg"
+    try:
+        result = analyze_health_letter_image(
+            raw,
+            image_mime=mime,
+            expected_name=expected_name,
+            expected_nik=expected_nik,
+            user_prompt=user_prompt or None,
+            llm_base_url=llm_base_url.strip() or None,
+            llm_model=llm_model.strip() or None,
+            today=as_of,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return JSONResponse(jsonable_encoder(result))

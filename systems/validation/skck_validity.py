@@ -6,6 +6,35 @@ import re
 from datetime import date, datetime
 from typing import Any
 
+_ID_MONTH_NAMES = (
+    "Januari",
+    "Februari",
+    "Maret",
+    "April",
+    "Mei",
+    "Juni",
+    "Juli",
+    "Agustus",
+    "September",
+    "Oktober",
+    "November",
+    "Desember",
+)
+
+
+def format_id_date(iso: str | None) -> str | None:
+    """Ubah YYYY-MM-DD menjadi '15 Juni 2026' untuk tampilan benchmark."""
+    if not iso or not isinstance(iso, str):
+        return None
+    parts = iso.strip()[:10].split("-")
+    if len(parts) != 3:
+        return iso.strip() or None
+    try:
+        year, month, day = int(parts[0]), int(parts[1]), int(parts[2])
+        return f"{day} {_ID_MONTH_NAMES[month - 1]} {year}"
+    except (ValueError, IndexError):
+        return iso.strip() or None
+
 _MONTHS: dict[str, int] = {
     "januari": 1,
     "january": 1,
@@ -202,6 +231,8 @@ def apply_skck_expiry_gate(
     out["skck_expiry_pass"] = gate["expiry_pass"]
     out["skck_valid_until"] = gate["valid_until"]
     out["skck_valid_from"] = gate["valid_from"]
+    out["issued_date"] = gate["valid_from"]
+    out["issued_date_display"] = format_id_date(gate["valid_from"])
 
     explanation = dict(out.get("explanation") or {})
     details = [gate["reason"], *list(explanation.get("detail_lines") or [])]
