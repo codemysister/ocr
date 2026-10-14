@@ -9,8 +9,6 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-import cv2
-
 from systems.ocr.fast_runner import run_paddleocr_fast
 from systems.ocr.mistral_annotation import parse_document_annotation
 from systems.ocr.mistral_runner import run_mistral_ocr
@@ -22,7 +20,6 @@ from systems.ocr.remote_client import (
 )
 from systems.ocr.vl_runner import run_paddleocr_vl
 from systems.preprocessing.pipeline import (
-    decode_image_bytes_bgr,
     encode_image_bytes_for_ocr_direct,
     encode_image_bytes_for_ocr_passthrough,
     encode_image_bytes_for_ocr_remote_safe,
@@ -40,6 +37,7 @@ from systems.validation.document_profiles import (
 )
 from systems.validation.bank_rekening import (
     parse_account_from_filename,
+    parse_rekening_name_from_filename,
     validate_account_in_ocr,
 )
 from systems.validation.fuzzy_compare import (
@@ -71,7 +69,14 @@ from systems.validation.llm_fallback import (
 from systems.observability.llm_fallback_log import record_pipeline_llm_fallback
 from systems.observability.validation_failure_log import record_from_pipeline_result
 from systems.observability.validation_success_log import record_success_from_pipeline_result
-from systems.validation.portrait_photo_validate import validate_foto_profile
+from systems.validation.foto_profile_ai import analyze_portrait_image
+from systems.validation.npwp_ai import analyze_npwp_image
+from systems.validation.pemadanan_npwp_ai import analyze_pemadanan_npwp_image
+from systems.validation.rekening_ai import analyze_rekening_image
+from systems.validation.bpjs_ai import analyze_bpjs_image, parse_bpjs_name_from_filename
+from systems.validation.vaksinasi_1_ai import analyze_vaksinasi_1_image
+from systems.validation.vaksinasi_2_ai import analyze_vaksinasi_2_image
+from systems.validation.vaksinasi_3_ai import analyze_vaksinasi_3_image
 from systems.validation.user_errors import attach_user_errors
 
 OcrMode = Literal["mistral", "fast", "vl"]
@@ -112,7 +117,19 @@ class PipelineResult:
             return 503
         if self.error_kind == "opencv_unavailable":
             return 503
-        if self.error_kind in ("ocr_unavailable", "mistral_unavailable", "health_ai_unavailable"):
+        if self.error_kind in (
+            "ocr_unavailable",
+            "mistral_unavailable",
+            "health_ai_unavailable",
+            "portrait_ai_unavailable",
+            "npwp_ai_unavailable",
+            "pemadanan_npwp_ai_unavailable",
+            "rekening_ai_unavailable",
+            "bpjs_ai_unavailable",
+            "vaksinasi_1_ai_unavailable",
+            "vaksinasi_2_ai_unavailable",
+            "vaksinasi_3_ai_unavailable",
+        ):
             return 503
         if self.error_kind == "empty_ocr":
             return 400
@@ -368,34 +385,51 @@ def _run_pipeline_bytes_impl(
         )
 
     if is_image_only_profile(canonical_id):
-        t_pre0 = time.perf_counter()
-        try:
-            bgr, decode_meta = decode_image_bytes_bgr(raw)
-        except Exception as e:
-            timing.total_s = time.perf_counter() - t_total0
-            return PipelineResult(ok=False, error=str(e), error_kind="decode_error", timing=timing)
-        timing.preprocess_s = time.perf_counter() - t_pre0
-
         t_val0 = time.perf_counter()
-        validation_detail = attach_user_errors(
-            validate_foto_profile(
-                bgr,
+        try:
+            ai_out = analyze_portrait_image(
+                raw,
                 document_type=doc_type,
                 expected_name=name_ref,
             )
-        )
+        except ValueError as e:
+            timing.total_s = time.perf_counter() - t_total0
+            return PipelineResult(ok=False, error=str(e), error_kind="preprocess_error", timing=timing)
+        except Exception as e:
+            timing.total_s = time.perf_counter() - t_total0
+            return PipelineResult(
+                ok=False, error=str(e), error_kind="portrait_ai_unavailable", timing=timing
+            )
         timing.validation_s = time.perf_counter() - t_val0
-        analysis_bgr = validation_detail.pop("_analysis_bgr", None)
+        llm_meta = ai_out.get("llm") if isinstance(ai_out.get("llm"), dict) else {}
+        if isinstance(llm_meta.get("latency_s"), (int, float)):
+            timing.ocr_s = float(llm_meta["latency_s"])
+        if ai_out.get("error") or not isinstance(ai_out.get("validation"), dict):
+            timing.total_s = time.perf_counter() - t_total0
+            return PipelineResult(
+                ok=False,
+                error=f"AI foto profil gagal: {ai_out.get('error') or 'empty_extraction'}",
+                error_kind="portrait_ai_unavailable",
+                timing=timing,
+            )
+        validation_detail = ai_out["validation"]
         matched = bool(validation_detail.get("document_matched"))
 
         payload = {
             "success": True,
             "valid": matched,
-            "ocr_mode": None,
+            "ocr_mode": "ornith",
+            "ocr_engine": "ornith",
             "pp_ocr_tier": None,
             "validation_mode": "image",
-            "preprocess": {"skipped": True, "reason": "image_only_profile", **decode_meta},
-            "ocr": None,
+            "preprocess": {"skipped": True, "reason": "portrait_ai", **(ai_out.get("image_prepare") or {})},
+            "ocr": {
+                "success": True,
+                "mode": "ornith_portrait_ai",
+                "model": llm_meta.get("model"),
+                "extraction": ai_out.get("extraction"),
+                "timing": {"total_wall_s": round(timing.ocr_s, 3)},
+            },
             "validation": {
                 "document_profile_id": canonical_id,
                 "keywords_from_profile": keywords,
@@ -410,15 +444,533 @@ def _run_pipeline_bytes_impl(
             "error_cases": validation_detail.get("error_cases") or [],
             "timing": timing.as_dict(),
         }
-        if include_preprocessed_image:
-            preview_bgr = analysis_bgr if analysis_bgr is not None else bgr
-            ok, encoded = cv2.imencode(".png", preview_bgr)
-            if ok:
-                payload["preprocessed_image"] = {
-                    "mime": "image/png",
-                    "image_base64": base64.b64encode(encoded.tobytes()).decode("ascii"),
-                }
+        timing.total_s = time.perf_counter() - t_total0
+        return PipelineResult(
+            ok=True,
+            payload=payload,
+            timing=timing,
+            document_matched=matched,
+        )
 
+    if canonical_id == "npwp":
+        expected_nik = parse_nik16_from_filename(filename) or ""
+        t_val0 = time.perf_counter()
+        try:
+            ai_out = analyze_npwp_image(
+                raw,
+                document_type=doc_type,
+                expected_name=name_ref,
+                expected_nik=expected_nik,
+            )
+        except ValueError as e:
+            timing.total_s = time.perf_counter() - t_total0
+            return PipelineResult(ok=False, error=str(e), error_kind="preprocess_error", timing=timing)
+        except Exception as e:
+            timing.total_s = time.perf_counter() - t_total0
+            return PipelineResult(
+                ok=False, error=str(e), error_kind="npwp_ai_unavailable", timing=timing
+            )
+        timing.validation_s = time.perf_counter() - t_val0
+        llm_meta = ai_out.get("llm") if isinstance(ai_out.get("llm"), dict) else {}
+        if isinstance(llm_meta.get("latency_s"), (int, float)):
+            timing.ocr_s = float(llm_meta["latency_s"])
+        if ai_out.get("error") or not isinstance(ai_out.get("validation"), dict):
+            timing.total_s = time.perf_counter() - t_total0
+            return PipelineResult(
+                ok=False,
+                error=f"AI NPWP gagal: {ai_out.get('error') or 'empty_extraction'}",
+                error_kind="npwp_ai_unavailable",
+                timing=timing,
+            )
+        validation_detail = ai_out["validation"]
+        matched = bool(validation_detail.get("document_matched"))
+        payload = {
+            "success": True,
+            "valid": matched,
+            "document_matched": matched,
+            "format_lama": validation_detail.get("format_lama"),
+            "npwp_number": validation_detail.get("npwp_number"),
+            "ocr_mode": "ornith",
+            "ocr_engine": "ornith",
+            "pp_ocr_tier": None,
+            "validation_mode": "image",
+            "preprocess": {"skipped": True, "reason": "npwp_ai", **(ai_out.get("image_prepare") or {})},
+            "ocr": {
+                "success": True,
+                "mode": "ornith_npwp_ai",
+                "model": llm_meta.get("model"),
+                "extraction": ai_out.get("extraction"),
+                "timing": {"total_wall_s": round(timing.ocr_s, 3)},
+            },
+            "validation": {
+                "document_profile_id": canonical_id,
+                "keywords_from_profile": keywords,
+                **validation_detail,
+            },
+            "verdict": validation_detail.get("verdict"),
+            "is_own_document": validation_detail.get("is_own_document"),
+            "document_type_current": validation_detail.get("document_type_current"),
+            "document_type_current_label": validation_detail.get("document_type_current_label"),
+            "error_code": validation_detail.get("error_code"),
+            "error_message": validation_detail.get("error_message"),
+            "error_cases": validation_detail.get("error_cases") or [],
+            "timing": timing.as_dict(),
+        }
+        timing.total_s = time.perf_counter() - t_total0
+        return PipelineResult(
+            ok=True,
+            payload=payload,
+            timing=timing,
+            document_matched=matched,
+        )
+
+    if canonical_id == "pemadanan_npwp":
+        expected_nik = parse_nik16_from_filename(filename) or ""
+        holder_ref = name_ref or parse_bpjs_name_from_filename(filename)
+        t_val0 = time.perf_counter()
+        try:
+            ai_out = analyze_pemadanan_npwp_image(
+                raw,
+                document_type=doc_type,
+                expected_name=holder_ref,
+                expected_nik=expected_nik,
+            )
+        except ValueError as e:
+            timing.total_s = time.perf_counter() - t_total0
+            return PipelineResult(ok=False, error=str(e), error_kind="preprocess_error", timing=timing)
+        except Exception as e:
+            timing.total_s = time.perf_counter() - t_total0
+            return PipelineResult(
+                ok=False, error=str(e), error_kind="pemadanan_npwp_ai_unavailable", timing=timing
+            )
+        timing.validation_s = time.perf_counter() - t_val0
+        llm_meta = ai_out.get("llm") if isinstance(ai_out.get("llm"), dict) else {}
+        if isinstance(llm_meta.get("latency_s"), (int, float)):
+            timing.ocr_s = float(llm_meta["latency_s"])
+        if ai_out.get("error") or not isinstance(ai_out.get("validation"), dict):
+            timing.total_s = time.perf_counter() - t_total0
+            return PipelineResult(
+                ok=False,
+                error=f"AI pemadanan NPWP gagal: {ai_out.get('error') or 'empty_extraction'}",
+                error_kind="pemadanan_npwp_ai_unavailable",
+                timing=timing,
+            )
+        validation_detail = ai_out["validation"]
+        matched = bool(validation_detail.get("document_matched"))
+        payload = {
+            "success": True,
+            "valid": matched,
+            "document_matched": matched,
+            "holder_name": validation_detail.get("holder_name"),
+            "npwp_number": validation_detail.get("npwp_number"),
+            "nik": validation_detail.get("nik"),
+            "format_lama": validation_detail.get("format_lama"),
+            "name_match_method": validation_detail.get("name_match_method"),
+            "ocr_mode": "ornith",
+            "ocr_engine": "ornith",
+            "pp_ocr_tier": None,
+            "validation_mode": "image",
+            "preprocess": {
+                "skipped": True,
+                "reason": "pemadanan_npwp_ai",
+                **(ai_out.get("image_prepare") or {}),
+            },
+            "ocr": {
+                "success": True,
+                "mode": "ornith_pemadanan_npwp_ai",
+                "model": llm_meta.get("model"),
+                "extraction": ai_out.get("extraction"),
+                "timing": {"total_wall_s": round(timing.ocr_s, 3)},
+            },
+            "validation": {
+                "document_profile_id": canonical_id,
+                "keywords_from_profile": keywords,
+                **validation_detail,
+            },
+            "verdict": validation_detail.get("verdict"),
+            "is_own_document": validation_detail.get("is_own_document"),
+            "document_type_current": validation_detail.get("document_type_current"),
+            "document_type_current_label": validation_detail.get("document_type_current_label"),
+            "error_code": validation_detail.get("error_code"),
+            "error_message": validation_detail.get("error_message"),
+            "error_cases": validation_detail.get("error_cases") or [],
+            "timing": timing.as_dict(),
+        }
+        timing.total_s = time.perf_counter() - t_total0
+        return PipelineResult(
+            ok=True,
+            payload=payload,
+            timing=timing,
+            document_matched=matched,
+        )
+
+    if canonical_id == "rekening":
+        acct_ref = (expected_account or "").strip() or parse_account_from_filename(filename) or ""
+        holder_ref = name_ref or parse_rekening_name_from_filename(filename) or ""
+        t_val0 = time.perf_counter()
+        try:
+            ai_out = analyze_rekening_image(
+                raw,
+                document_type=doc_type,
+                expected_name=holder_ref,
+                expected_bank=expected_bank,
+                expected_account=acct_ref,
+            )
+        except ValueError as e:
+            timing.total_s = time.perf_counter() - t_total0
+            return PipelineResult(ok=False, error=str(e), error_kind="preprocess_error", timing=timing)
+        except Exception as e:
+            timing.total_s = time.perf_counter() - t_total0
+            return PipelineResult(
+                ok=False, error=str(e), error_kind="rekening_ai_unavailable", timing=timing
+            )
+        timing.validation_s = time.perf_counter() - t_val0
+        llm_meta = ai_out.get("llm") if isinstance(ai_out.get("llm"), dict) else {}
+        if isinstance(llm_meta.get("latency_s"), (int, float)):
+            timing.ocr_s = float(llm_meta["latency_s"])
+        if ai_out.get("error") or not isinstance(ai_out.get("validation"), dict):
+            timing.total_s = time.perf_counter() - t_total0
+            return PipelineResult(
+                ok=False,
+                error=f"AI rekening gagal: {ai_out.get('error') or 'empty_extraction'}",
+                error_kind="rekening_ai_unavailable",
+                timing=timing,
+            )
+        validation_detail = ai_out["validation"]
+        matched = bool(validation_detail.get("document_matched"))
+        payload = {
+            "success": True,
+            "valid": matched,
+            "document_matched": matched,
+            "holder_name": validation_detail.get("holder_name"),
+            "name_match_method": validation_detail.get("name_match_method"),
+            "detected_bank": validation_detail.get("detected_bank"),
+            "account_number": validation_detail.get("account_number"),
+            "ocr_mode": "ornith",
+            "ocr_engine": "ornith",
+            "pp_ocr_tier": None,
+            "validation_mode": "image",
+            "preprocess": {"skipped": True, "reason": "rekening_ai", **(ai_out.get("image_prepare") or {})},
+            "ocr": {
+                "success": True,
+                "mode": "ornith_rekening_ai",
+                "model": llm_meta.get("model"),
+                "extraction": ai_out.get("extraction"),
+                "timing": {"total_wall_s": round(timing.ocr_s, 3)},
+            },
+            "validation": {
+                "document_profile_id": canonical_id,
+                "keywords_from_profile": keywords,
+                **validation_detail,
+            },
+            "verdict": validation_detail.get("verdict"),
+            "is_own_document": validation_detail.get("is_own_document"),
+            "document_type_current": validation_detail.get("document_type_current"),
+            "document_type_current_label": validation_detail.get("document_type_current_label"),
+            "error_code": validation_detail.get("error_code"),
+            "error_message": validation_detail.get("error_message"),
+            "error_cases": validation_detail.get("error_cases") or [],
+            "timing": timing.as_dict(),
+        }
+        timing.total_s = time.perf_counter() - t_total0
+        return PipelineResult(
+            ok=True,
+            payload=payload,
+            timing=timing,
+            document_matched=matched,
+        )
+
+    if canonical_id == "bpjs":
+        expected_nik = parse_nik16_from_filename(filename) or ""
+        holder_ref = name_ref or parse_bpjs_name_from_filename(filename)
+        t_val0 = time.perf_counter()
+        try:
+            ai_out = analyze_bpjs_image(
+                raw,
+                document_type=doc_type,
+                expected_name=holder_ref,
+                expected_nik=expected_nik,
+            )
+        except ValueError as e:
+            timing.total_s = time.perf_counter() - t_total0
+            return PipelineResult(ok=False, error=str(e), error_kind="preprocess_error", timing=timing)
+        except Exception as e:
+            timing.total_s = time.perf_counter() - t_total0
+            return PipelineResult(
+                ok=False, error=str(e), error_kind="bpjs_ai_unavailable", timing=timing
+            )
+        timing.validation_s = time.perf_counter() - t_val0
+        llm_meta = ai_out.get("llm") if isinstance(ai_out.get("llm"), dict) else {}
+        if isinstance(llm_meta.get("latency_s"), (int, float)):
+            timing.ocr_s = float(llm_meta["latency_s"])
+        if ai_out.get("error") or not isinstance(ai_out.get("validation"), dict):
+            timing.total_s = time.perf_counter() - t_total0
+            return PipelineResult(
+                ok=False,
+                error=f"AI BPJS gagal: {ai_out.get('error') or 'empty_extraction'}",
+                error_kind="bpjs_ai_unavailable",
+                timing=timing,
+            )
+        validation_detail = ai_out["validation"]
+        matched = bool(validation_detail.get("document_matched"))
+        payload = {
+            "success": True,
+            "valid": matched,
+            "document_matched": matched,
+            "holder_name": validation_detail.get("holder_name"),
+            "nik": validation_detail.get("nik"),
+            "name_match_method": validation_detail.get("name_match_method"),
+            "ocr_mode": "ornith",
+            "ocr_engine": "ornith",
+            "pp_ocr_tier": None,
+            "validation_mode": "image",
+            "preprocess": {"skipped": True, "reason": "bpjs_ai", **(ai_out.get("image_prepare") or {})},
+            "ocr": {
+                "success": True,
+                "mode": "ornith_bpjs_ai",
+                "model": llm_meta.get("model"),
+                "extraction": ai_out.get("extraction"),
+                "timing": {"total_wall_s": round(timing.ocr_s, 3)},
+            },
+            "validation": {
+                "document_profile_id": canonical_id,
+                "keywords_from_profile": keywords,
+                **validation_detail,
+            },
+            "verdict": validation_detail.get("verdict"),
+            "is_own_document": validation_detail.get("is_own_document"),
+            "document_type_current": validation_detail.get("document_type_current"),
+            "document_type_current_label": validation_detail.get("document_type_current_label"),
+            "error_code": validation_detail.get("error_code"),
+            "error_message": validation_detail.get("error_message"),
+            "error_cases": validation_detail.get("error_cases") or [],
+            "timing": timing.as_dict(),
+        }
+        timing.total_s = time.perf_counter() - t_total0
+        return PipelineResult(
+            ok=True,
+            payload=payload,
+            timing=timing,
+            document_matched=matched,
+        )
+
+    if canonical_id == "vaksinasi_1":
+        expected_nik = parse_nik16_from_filename(filename) or ""
+        holder_ref = name_ref or parse_bpjs_name_from_filename(filename)
+        t_val0 = time.perf_counter()
+        try:
+            ai_out = analyze_vaksinasi_1_image(
+                raw,
+                document_type=doc_type,
+                expected_name=holder_ref,
+                expected_nik=expected_nik,
+            )
+        except ValueError as e:
+            timing.total_s = time.perf_counter() - t_total0
+            return PipelineResult(ok=False, error=str(e), error_kind="preprocess_error", timing=timing)
+        except Exception as e:
+            timing.total_s = time.perf_counter() - t_total0
+            return PipelineResult(
+                ok=False, error=str(e), error_kind="vaksinasi_1_ai_unavailable", timing=timing
+            )
+        timing.validation_s = time.perf_counter() - t_val0
+        llm_meta = ai_out.get("llm") if isinstance(ai_out.get("llm"), dict) else {}
+        if isinstance(llm_meta.get("latency_s"), (int, float)):
+            timing.ocr_s = float(llm_meta["latency_s"])
+        if ai_out.get("error") or not isinstance(ai_out.get("validation"), dict):
+            timing.total_s = time.perf_counter() - t_total0
+            return PipelineResult(
+                ok=False,
+                error=f"AI vaksinasi dosis 1 gagal: {ai_out.get('error') or 'empty_extraction'}",
+                error_kind="vaksinasi_1_ai_unavailable",
+                timing=timing,
+            )
+        validation_detail = ai_out["validation"]
+        matched = bool(validation_detail.get("document_matched"))
+        payload = {
+            "success": True,
+            "valid": matched,
+            "document_matched": matched,
+            "holder_name": validation_detail.get("holder_name"),
+            "nik": validation_detail.get("nik"),
+            "dose_label": validation_detail.get("dose_label"),
+            "name_match_method": validation_detail.get("name_match_method"),
+            "ocr_mode": "ornith",
+            "ocr_engine": "ornith",
+            "pp_ocr_tier": None,
+            "validation_mode": "image",
+            "preprocess": {"skipped": True, "reason": "vaksinasi_1_ai", **(ai_out.get("image_prepare") or {})},
+            "ocr": {
+                "success": True,
+                "mode": "ornith_vaksinasi_1_ai",
+                "model": llm_meta.get("model"),
+                "extraction": ai_out.get("extraction"),
+                "timing": {"total_wall_s": round(timing.ocr_s, 3)},
+            },
+            "validation": {
+                "document_profile_id": canonical_id,
+                "keywords_from_profile": keywords,
+                **validation_detail,
+            },
+            "verdict": validation_detail.get("verdict"),
+            "is_own_document": validation_detail.get("is_own_document"),
+            "document_type_current": validation_detail.get("document_type_current"),
+            "document_type_current_label": validation_detail.get("document_type_current_label"),
+            "error_code": validation_detail.get("error_code"),
+            "error_message": validation_detail.get("error_message"),
+            "error_cases": validation_detail.get("error_cases") or [],
+            "timing": timing.as_dict(),
+        }
+        timing.total_s = time.perf_counter() - t_total0
+        return PipelineResult(
+            ok=True,
+            payload=payload,
+            timing=timing,
+            document_matched=matched,
+        )
+
+    if canonical_id == "vaksinasi_2":
+        expected_nik = parse_nik16_from_filename(filename) or ""
+        holder_ref = name_ref or parse_bpjs_name_from_filename(filename)
+        t_val0 = time.perf_counter()
+        try:
+            ai_out = analyze_vaksinasi_2_image(
+                raw,
+                document_type=doc_type,
+                expected_name=holder_ref,
+                expected_nik=expected_nik,
+            )
+        except ValueError as e:
+            timing.total_s = time.perf_counter() - t_total0
+            return PipelineResult(ok=False, error=str(e), error_kind="preprocess_error", timing=timing)
+        except Exception as e:
+            timing.total_s = time.perf_counter() - t_total0
+            return PipelineResult(
+                ok=False, error=str(e), error_kind="vaksinasi_2_ai_unavailable", timing=timing
+            )
+        timing.validation_s = time.perf_counter() - t_val0
+        llm_meta = ai_out.get("llm") if isinstance(ai_out.get("llm"), dict) else {}
+        if isinstance(llm_meta.get("latency_s"), (int, float)):
+            timing.ocr_s = float(llm_meta["latency_s"])
+        if ai_out.get("error") or not isinstance(ai_out.get("validation"), dict):
+            timing.total_s = time.perf_counter() - t_total0
+            return PipelineResult(
+                ok=False,
+                error=f"AI vaksinasi dosis 2 gagal: {ai_out.get('error') or 'empty_extraction'}",
+                error_kind="vaksinasi_2_ai_unavailable",
+                timing=timing,
+            )
+        validation_detail = ai_out["validation"]
+        matched = bool(validation_detail.get("document_matched"))
+        payload = {
+            "success": True,
+            "valid": matched,
+            "document_matched": matched,
+            "holder_name": validation_detail.get("holder_name"),
+            "nik": validation_detail.get("nik"),
+            "dose_label": validation_detail.get("dose_label"),
+            "name_match_method": validation_detail.get("name_match_method"),
+            "ocr_mode": "ornith",
+            "ocr_engine": "ornith",
+            "pp_ocr_tier": None,
+            "validation_mode": "image",
+            "preprocess": {"skipped": True, "reason": "vaksinasi_2_ai", **(ai_out.get("image_prepare") or {})},
+            "ocr": {
+                "success": True,
+                "mode": "ornith_vaksinasi_2_ai",
+                "model": llm_meta.get("model"),
+                "extraction": ai_out.get("extraction"),
+                "timing": {"total_wall_s": round(timing.ocr_s, 3)},
+            },
+            "validation": {
+                "document_profile_id": canonical_id,
+                "keywords_from_profile": keywords,
+                **validation_detail,
+            },
+            "verdict": validation_detail.get("verdict"),
+            "is_own_document": validation_detail.get("is_own_document"),
+            "document_type_current": validation_detail.get("document_type_current"),
+            "document_type_current_label": validation_detail.get("document_type_current_label"),
+            "error_code": validation_detail.get("error_code"),
+            "error_message": validation_detail.get("error_message"),
+            "error_cases": validation_detail.get("error_cases") or [],
+            "timing": timing.as_dict(),
+        }
+        timing.total_s = time.perf_counter() - t_total0
+        return PipelineResult(
+            ok=True,
+            payload=payload,
+            timing=timing,
+            document_matched=matched,
+        )
+
+    if canonical_id == "vaksinasi_3":
+        expected_nik = parse_nik16_from_filename(filename) or ""
+        holder_ref = name_ref or parse_bpjs_name_from_filename(filename)
+        t_val0 = time.perf_counter()
+        try:
+            ai_out = analyze_vaksinasi_3_image(
+                raw,
+                document_type=doc_type,
+                expected_name=holder_ref,
+                expected_nik=expected_nik,
+            )
+        except ValueError as e:
+            timing.total_s = time.perf_counter() - t_total0
+            return PipelineResult(ok=False, error=str(e), error_kind="preprocess_error", timing=timing)
+        except Exception as e:
+            timing.total_s = time.perf_counter() - t_total0
+            return PipelineResult(
+                ok=False, error=str(e), error_kind="vaksinasi_3_ai_unavailable", timing=timing
+            )
+        timing.validation_s = time.perf_counter() - t_val0
+        llm_meta = ai_out.get("llm") if isinstance(ai_out.get("llm"), dict) else {}
+        if isinstance(llm_meta.get("latency_s"), (int, float)):
+            timing.ocr_s = float(llm_meta["latency_s"])
+        if ai_out.get("error") or not isinstance(ai_out.get("validation"), dict):
+            timing.total_s = time.perf_counter() - t_total0
+            return PipelineResult(
+                ok=False,
+                error=f"AI vaksinasi booster gagal: {ai_out.get('error') or 'empty_extraction'}",
+                error_kind="vaksinasi_3_ai_unavailable",
+                timing=timing,
+            )
+        validation_detail = ai_out["validation"]
+        matched = bool(validation_detail.get("document_matched"))
+        payload = {
+            "success": True,
+            "valid": matched,
+            "document_matched": matched,
+            "holder_name": validation_detail.get("holder_name"),
+            "nik": validation_detail.get("nik"),
+            "dose_label": validation_detail.get("dose_label"),
+            "name_match_method": validation_detail.get("name_match_method"),
+            "ocr_mode": "ornith",
+            "ocr_engine": "ornith",
+            "pp_ocr_tier": None,
+            "validation_mode": "image",
+            "preprocess": {"skipped": True, "reason": "vaksinasi_3_ai", **(ai_out.get("image_prepare") or {})},
+            "ocr": {
+                "success": True,
+                "mode": "ornith_vaksinasi_3_ai",
+                "model": llm_meta.get("model"),
+                "extraction": ai_out.get("extraction"),
+                "timing": {"total_wall_s": round(timing.ocr_s, 3)},
+            },
+            "validation": {
+                "document_profile_id": canonical_id,
+                "keywords_from_profile": keywords,
+                **validation_detail,
+            },
+            "verdict": validation_detail.get("verdict"),
+            "is_own_document": validation_detail.get("is_own_document"),
+            "document_type_current": validation_detail.get("document_type_current"),
+            "document_type_current_label": validation_detail.get("document_type_current_label"),
+            "error_code": validation_detail.get("error_code"),
+            "error_message": validation_detail.get("error_message"),
+            "error_cases": validation_detail.get("error_cases") or [],
+            "timing": timing.as_dict(),
+        }
         timing.total_s = time.perf_counter() - t_total0
         return PipelineResult(
             ok=True,

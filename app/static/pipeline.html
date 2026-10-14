@@ -230,7 +230,14 @@
       <strong>hanya model OCR</strong> yang dipanggil ke server itu;
       aturan nama, Helper/BELUM KAWIN, dan gate dokumen tetap dijalankan di lokal.
       Alternatif: PaddleOCR-VL atau Mistral cloud.
-      Untuk <strong>foto_profile</strong>: validasi gambar saja (wajah + latar biru) — tanpa OCR.
+      Untuk <strong>foto_profile</strong>: AI (Ornith) — pas foto dan latar biru saja.
+      Untuk <strong>npwp</strong>: AI (Ornith) — plus flag <code>format_lama</code> bila nomor bukan NIK 16 digit.
+      Untuk <strong>pemadanan_npwp</strong>: AI (Ornith) — kartu NPWP 16 digit atau Ikhtisar Profil DJP.
+      Untuk <strong>rekening</strong>: AI (Ornith) — nama boleh sebagian atau tersensor.
+      Untuk <strong>bpjs</strong>: AI (Ornith) — nama boleh terpotong; NIK di nama file bisa mencocokkan kartu.
+      Untuk <strong>vaksinasi_1</strong>: AI (Ornith) — dosis pertama; tahap 2 yang ikut tercantum tidak menggagalkan.
+      Untuk <strong>vaksinasi_2</strong>: AI (Ornith) — dosis kedua; tahap 1 yang ikut tercantum tidak menggagalkan.
+      Untuk <strong>vaksinasi_3</strong>: AI (Ornith) — booster; vaksin primer 2 tidak dihitung booster.
       Untuk <strong>cv</strong>: ingest ke index pencarian + opsional hybrid search — tanpa validasi dokumen.
     </p>
     <p id="ocrRemoteBanner" class="hint" style="display:none;margin-top:0.5rem;"></p>
@@ -250,6 +257,7 @@
             <option value="" disabled selected>Pilih jenis dokumen…</option>
             <option value="ktp">KTP</option>
             <option value="npwp">NPWP</option>
+            <option value="pemadanan_npwp">Pemadanan NPWP</option>
             <option value="kk">Kartu Keluarga (KK)</option>
             <option value="rekening">Rekening tabungan</option>
             <option value="mutasi">Mutasi / e-statement</option>
@@ -260,6 +268,8 @@
             <option value="jkn">JKN (Info Peserta)</option>
             <option value="iuran">Iuran JKN (Info Iuran)</option>
             <option value="vaksinasi_1">Vaksinasi COVID-19 (Dosis 1)</option>
+            <option value="vaksinasi_2">Vaksinasi COVID-19 (Dosis 2)</option>
+            <option value="vaksinasi_3">Vaksinasi COVID-19 (Booster)</option>
             <option value="foto_profile">Foto profil (latar biru)</option>
             <option value="cv">CV (curriculum vitae)</option>
           </select>
@@ -380,7 +390,6 @@
     const healthAiHint = document.getElementById("healthAiHint");
     const ocrSection = document.getElementById("ocrSection");
     const ppOcrTier = document.getElementById("ppOcrTier");
-    const ocrSection = document.getElementById("ocrSection");
     const expectedLabel = document.getElementById("expectedLabel");
     const pipelineHint = document.getElementById("pipelineHint");
     const panelOcr = document.getElementById("panelOcr");
@@ -419,6 +428,14 @@
       return (docType || "").trim() === "foto_profile";
     }
 
+    function isNpwpProfile(docType) {
+      return (docType || "").trim() === "npwp";
+    }
+
+    function isPemadananProfile(docType) {
+      return (docType || "").trim() === "pemadanan_npwp";
+    }
+
     function isKtpProfile(docType) {
       return (docType || "").trim() === "ktp";
     }
@@ -429,6 +446,22 @@
 
     function isRekeningProfile(docType) {
       return (docType || "").trim() === "rekening";
+    }
+
+    function isBpjsProfile(docType) {
+      return (docType || "").trim() === "bpjs";
+    }
+
+    function isVaksin1Profile(docType) {
+      return (docType || "").trim() === "vaksinasi_1";
+    }
+
+    function isVaksin2Profile(docType) {
+      return (docType || "").trim() === "vaksinasi_2";
+    }
+
+    function isVaksin3Profile(docType) {
+      return (docType || "").trim() === "vaksinasi_3";
     }
 
     function isMutasiProfile(docType) {
@@ -445,15 +478,21 @@
 
     function syncUiForDocType() {
       const foto = isFotoProfile(docInput.value);
+      const npwp = isNpwpProfile(docInput.value);
+      const pemadanan = isPemadananProfile(docInput.value);
       const cv = isCvProfile(docInput.value);
       const rekening = isRekeningProfile(docInput.value);
+      const bpjs = isBpjsProfile(docInput.value);
+      const vaksin1 = isVaksin1Profile(docInput.value);
+      const vaksin2 = isVaksin2Profile(docInput.value);
+      const vaksin3 = isVaksin3Profile(docInput.value);
       const mutasi = isMutasiProfile(docInput.value);
       const health = isHealthLetterProfile(docInput.value);
       const bankDoc = isBankDocProfile(docInput.value);
-      const special = foto || cv;
+      const special = foto || cv || npwp || pemadanan || rekening || bpjs || vaksin1 || vaksin2 || vaksin3;
       if (healthAiHint) healthAiHint.style.display = health ? "" : "none";
       document.querySelectorAll('input[name="ocrMode"]').forEach((el) => {
-        el.disabled = health;
+        el.disabled = health || npwp || pemadanan || bpjs || vaksin1 || vaksin2 || vaksin3;
       });
       ocrSection.classList.toggle("hidden-for-foto", special);
       panelOcr.classList.toggle("hidden-for-foto", special);
@@ -476,7 +515,7 @@
       stPrep.style.display = special ? "none" : "";
       stOcr.style.display = special ? "none" : "";
       stVal.style.display = special ? "none" : "";
-      stImg.style.display = foto ? "" : "none";
+      stImg.style.display = foto || npwp || pemadanan || rekening || bpjs || vaksin1 || vaksin2 || vaksin3 ? "" : "none";
       stIngest.style.display = cv ? "" : "none";
       stCvSearch.style.display = cv ? "" : "none";
       if (cv) {
@@ -503,7 +542,7 @@
         expectedLabel.textContent = "Nama pemilik rekening (opsional)";
         expectedInputEl.placeholder = "Contoh: Reva Wulan Rahmawati — dicek vs teks aplikasi bank.";
         pipelineHint.textContent =
-          "rekening: OCR + keyword tabungan; pilih bank Mandiri/MAS untuk validasi bank.";
+          "rekening: AI Ornith wajib. Nama boleh sebagian atau tersensor (Deva / Dxxa untuk Deva Apriana). Bank wajib cocok.";
         previewTitle.textContent = "Gambar rekening";
         jsonTitle.textContent = "JSON validasi (mentah)";
       } else if (health) {
@@ -519,8 +558,62 @@
         fileLabel.textContent = "Gambar dokumen";
         fileInputEl.accept = "image/*";
         pipelineHint.textContent =
-          "foto_profile: validasi gambar (wajah + latar biru) via POST /api/v1/pipeline — tanpa OCR.";
+          "foto_profile: AI Ornith wajib. Lolos hanya jika pas foto dan latar biru. Jumlah wajah tidak dicek.";
         previewTitle.textContent = "Kotak foto profil";
+        jsonTitle.textContent = "Hasil validasi";
+      } else if (vaksin3) {
+        fileLabel.textContent = "Gambar kartu vaksinasi booster";
+        fileInputEl.accept = "image/*";
+        expectedLabel.textContent = "Nama penerima (opsional)";
+        expectedInputEl.placeholder = "Nama boleh terpotong di kartu.";
+        pipelineHint.textContent =
+          "vaksinasi_3: AI Ornith wajib. Lolos jika riwayat memuat booster, meski tahap 1 atau 2 juga tercantum. Vaksin primer 2 bukan booster. NIK di nama file yang cocok tetap lolos.";
+        previewTitle.textContent = "Gambar kartu vaksin";
+        jsonTitle.textContent = "Hasil validasi";
+      } else if (vaksin2) {
+        fileLabel.textContent = "Gambar kartu vaksinasi dosis 2";
+        fileInputEl.accept = "image/*";
+        expectedLabel.textContent = "Nama penerima (opsional)";
+        expectedInputEl.placeholder = "Nama boleh terpotong di kartu.";
+        pipelineHint.textContent =
+          "vaksinasi_2: AI Ornith wajib. Lolos jika riwayat memuat dosis kedua, meski tahap 1 juga tercantum. Booster saja tidak lolos. NIK di nama file yang cocok tetap lolos.";
+        previewTitle.textContent = "Gambar kartu vaksin";
+        jsonTitle.textContent = "Hasil validasi";
+      } else if (vaksin1) {
+        fileLabel.textContent = "Gambar kartu vaksinasi dosis 1";
+        fileInputEl.accept = "image/*";
+        expectedLabel.textContent = "Nama penerima (opsional)";
+        expectedInputEl.placeholder = "Nama boleh terpotong di kartu.";
+        pipelineHint.textContent =
+          "vaksinasi_1: AI Ornith wajib. Lolos jika riwayat memuat dosis pertama, meski tahap 2 juga tercantum. NIK di nama file yang cocok tetap lolos.";
+        previewTitle.textContent = "Gambar kartu vaksin";
+        jsonTitle.textContent = "Hasil validasi";
+      } else if (bpjs) {
+        fileLabel.textContent = "Gambar kartu BPJS Kesehatan";
+        fileInputEl.accept = "image/*";
+        expectedLabel.textContent = "Nama peserta (opsional)";
+        expectedInputEl.placeholder = "Nama boleh terpotong di kartu, misalnya TIARA untuk Tiara Putri.";
+        pipelineHint.textContent =
+          "bpjs: AI Ornith wajib. Nama boleh terpotong. NIK 16 digit di nama file yang cocok dengan kartu tetap lolos.";
+        previewTitle.textContent = "Gambar kartu BPJS";
+        jsonTitle.textContent = "Hasil validasi";
+      } else if (pemadanan) {
+        fileLabel.textContent = "Gambar bukti pemadanan NPWP";
+        fileInputEl.accept = "image/*";
+        expectedLabel.textContent = "Nama wajib pajak (opsional)";
+        expectedInputEl.placeholder = "Nama boleh terpotong di screenshot.";
+        pipelineHint.textContent =
+          "pemadanan_npwp: AI Ornith wajib. Kartu NPWP 16 digit, Ikhtisar Profil DJP, dan Surat Keterangan Aktivasi NIK lolos. Kartu format lama 15 digit tidak lolos.";
+        previewTitle.textContent = "Gambar bukti pemadanan";
+        jsonTitle.textContent = "Hasil validasi";
+      } else if (npwp) {
+        fileLabel.textContent = "Gambar NPWP";
+        fileInputEl.accept = "image/*";
+        expectedLabel.textContent = "Nama wajib pajak (opsional)";
+        expectedInputEl.placeholder = "Nama di kartu NPWP.";
+        pipelineHint.textContent =
+          "npwp: AI Ornith wajib. format_lama = true jika nomor NPWP bukan NIK 16 digit (format lama / belum pemadanan).";
+        previewTitle.textContent = "Gambar NPWP";
         jsonTitle.textContent = "Hasil validasi";
       } else {
         fileLabel.textContent = "Gambar dokumen";
@@ -709,6 +802,104 @@
         esc(String(Math.round(file.size / 1024)) + " KB") +
         "</span>";
       previewPre.appendChild(wrap);
+    }
+
+    function renderRekeningSummary(data) {
+      const valData = (data && data.validation) || {};
+      const valid = data.valid === true || data.document_matched === true || valData.document_matched === true;
+      const method = data.name_match_method || valData.name_match_method || "";
+      const methodLabel =
+        method === "masked" ? "tersensor" : method === "partial" ? "sebagian" : method === "full" ? "lengkap" : method;
+      let html =
+        '<p class="val-badge ' +
+        (valid ? "ok" : "no") +
+        '">' +
+        esc(valid ? "VALID" : "TIDAK VALID") +
+        "</p>";
+      html += "<p>" + esc((valData.explanation && valData.explanation.summary) || data.error_message || "") + "</p>";
+      html += "<ul>";
+      html += "<li>Nama di rekening: " + esc(data.holder_name || valData.holder_name || "—") + "</li>";
+      html += "<li>Cocok nama: " + esc(methodLabel || "—") + "</li>";
+      html += "<li>Bank: " + esc(data.detected_bank || valData.detected_bank || "—") + "</li>";
+      html += "<li>Nomor rekening: " + esc(data.account_number || valData.account_number || "—") + "</li>";
+      html += "</ul>";
+      valSummary.innerHTML = html;
+    }
+
+    function renderVaksin1Summary(data) {
+      const valData = (data && data.validation) || {};
+      const valid = data.valid === true || data.document_matched === true || valData.document_matched === true;
+      const method = data.name_match_method || valData.name_match_method || "";
+      let html =
+        '<p class="val-badge ' +
+        (valid ? "ok" : "no") +
+        '">' +
+        esc(valid ? "VALID" : "TIDAK VALID") +
+        "</p>";
+      html += "<p>" + esc((valData.explanation && valData.explanation.summary) || data.error_message || "") + "</p>";
+      html += "<ul>";
+      html += "<li>Nama penerima: " + esc(data.holder_name || valData.holder_name || "—") + "</li>";
+      html += "<li>NIK: " + esc(data.nik || valData.nik || "—") + "</li>";
+      html += "<li>Dosis: " + esc(data.dose_label || valData.dose_label || "—") + "</li>";
+      html += "<li>Cocok identitas: " + esc(method || "—") + "</li>";
+      html += "</ul>";
+      valSummary.innerHTML = html;
+    }
+
+    function renderBpjsSummary(data) {
+      const valData = (data && data.validation) || {};
+      const valid = data.valid === true || data.document_matched === true || valData.document_matched === true;
+      const method = data.name_match_method || valData.name_match_method || "";
+      let html =
+        '<p class="val-badge ' +
+        (valid ? "ok" : "no") +
+        '">' +
+        esc(valid ? "VALID" : "TIDAK VALID") +
+        "</p>";
+      html += "<p>" + esc((valData.explanation && valData.explanation.summary) || data.error_message || "") + "</p>";
+      html += "<ul>";
+      html += "<li>Nama di kartu: " + esc(data.holder_name || valData.holder_name || "—") + "</li>";
+      html += "<li>NIK: " + esc(data.nik || valData.nik || "—") + "</li>";
+      html += "<li>Cocok identitas: " + esc(method || "—") + "</li>";
+      html += "</ul>";
+      valSummary.innerHTML = html;
+    }
+
+    function renderNpwpSummary(data) {
+      const valData = (data && data.validation) || {};
+      const valid = data.valid === true || data.document_matched === true || valData.document_matched === true;
+      const lama = data.format_lama === true || valData.format_lama === true;
+      let html =
+        '<p class="val-badge ' +
+        (valid ? "ok" : "no") +
+        '">' +
+        esc(valid ? "VALID" : "TIDAK VALID") +
+        "</p>";
+      html += "<p>" + esc((valData.explanation && valData.explanation.summary) || data.error_message || "") + "</p>";
+      html += "<ul>";
+      html += "<li>Format lama / belum pemadanan: " + esc(lama ? "ya (true)" : "tidak (false)") + "</li>";
+      html += "<li>Nomor NPWP: " + esc(valData.npwp_number || data.npwp_number || "—") + "</li>";
+      html += "</ul>";
+      valSummary.innerHTML = html;
+    }
+
+    function renderPemadananSummary(data) {
+      const valData = (data && data.validation) || {};
+      const valid = data.valid === true || data.document_matched === true || valData.document_matched === true;
+      const method = data.name_match_method || valData.name_match_method || "";
+      let html =
+        '<p class="val-badge ' +
+        (valid ? "ok" : "no") +
+        '">' +
+        esc(valid ? "VALID" : "TIDAK VALID") +
+        "</p>";
+      html += "<p>" + esc((valData.explanation && valData.explanation.summary) || data.error_message || "") + "</p>";
+      html += "<ul>";
+      html += "<li>Nama: " + esc(data.holder_name || valData.holder_name || "—") + "</li>";
+      html += "<li>NPWP: " + esc(data.npwp_number || valData.npwp_number || data.nik || "—") + "</li>";
+      html += "<li>Cocok identitas: " + esc(method || "—") + "</li>";
+      html += "</ul>";
+      valSummary.innerHTML = html;
     }
 
     function renderFotoProfileSummary(valid, valData) {
@@ -932,6 +1123,351 @@
           } else {
             showPreviewFromBlob(f, "Foto profil");
           }
+          setStatus(valid ? "Selesai — VALID" : "Selesai — TIDAK VALID", valid ? "ok" : "error");
+        } catch (e) {
+          stImg.classList.remove("run");
+          stImg.classList.add("fail");
+          setStatus(e.message || String(e), "error");
+        } finally {
+          updateRunEnabled();
+        }
+        return;
+      }
+
+      if (isNpwpProfile(document_type)) {
+        stImg.classList.add("run");
+        const fd = new FormData();
+        fd.append("file", f);
+        fd.append("document_type", document_type);
+        fd.append("expected_name", (expectedInputEl.value || "").trim());
+        try {
+          const r = await fetch("/api/v1/pipeline", { method: "POST", body: fd });
+          const data = await r.json().catch(() => ({}));
+          stImg.classList.remove("run");
+          if (!r.ok) {
+            stImg.classList.add("fail");
+            const msg = formatApiDetail(data.detail, data);
+            outVal.value = JSON.stringify(data, null, 2);
+            valSummary.className = "val-summary no";
+            valSummary.textContent = msg;
+            setStatus("Validasi gagal.", "error");
+            return;
+          }
+          stImg.classList.add("done");
+          const valid = data.valid === true || data.document_matched === true;
+          valSummary.className = "val-summary " + (valid ? "ok" : "no");
+          renderNpwpSummary(data);
+          outVal.value = JSON.stringify(
+            {
+              valid: valid,
+              document_matched: data.document_matched,
+              format_lama: data.format_lama,
+              npwp_number: data.npwp_number,
+              error_code: data.error_code,
+              error_message: data.error_message,
+            },
+            null,
+            2,
+          );
+          showPreviewFromBlob(f, "NPWP");
+          setStatus(
+            valid ? "Selesai — VALID" : "Selesai — TIDAK VALID",
+            valid ? "ok" : "error",
+          );
+        } catch (e) {
+          stImg.classList.remove("run");
+          stImg.classList.add("fail");
+          setStatus(e.message || String(e), "error");
+        } finally {
+          updateRunEnabled();
+        }
+        return;
+      }
+
+      if (isPemadananProfile(document_type)) {
+        stImg.classList.add("run");
+        const fd = new FormData();
+        fd.append("file", f);
+        fd.append("document_type", document_type);
+        fd.append("expected_name", (expectedInputEl.value || "").trim());
+        try {
+          const r = await fetch("/api/v1/pipeline", { method: "POST", body: fd });
+          const data = await r.json().catch(() => ({}));
+          stImg.classList.remove("run");
+          if (!r.ok) {
+            stImg.classList.add("fail");
+            const msg = formatApiDetail(data.detail, data);
+            outVal.value = JSON.stringify(data, null, 2);
+            valSummary.className = "val-summary no";
+            valSummary.textContent = msg;
+            setStatus("Validasi gagal.", "error");
+            return;
+          }
+          stImg.classList.add("done");
+          const valid = data.valid === true || data.document_matched === true;
+          valSummary.className = "val-summary " + (valid ? "ok" : "no");
+          renderPemadananSummary(data);
+          outVal.value = JSON.stringify(
+            {
+              valid: valid,
+              document_matched: data.document_matched,
+              holder_name: data.holder_name,
+              npwp_number: data.npwp_number,
+              nik: data.nik,
+              name_match_method: data.name_match_method,
+              error_code: data.error_code,
+              error_message: data.error_message,
+            },
+            null,
+            2,
+          );
+          showPreviewFromBlob(f, "Pemadanan NPWP");
+          setStatus(valid ? "Selesai — VALID" : "Selesai — TIDAK VALID", valid ? "ok" : "error");
+        } catch (e) {
+          stImg.classList.remove("run");
+          stImg.classList.add("fail");
+          setStatus(e.message || String(e), "error");
+        } finally {
+          updateRunEnabled();
+        }
+        return;
+      }
+
+      if (isBpjsProfile(document_type)) {
+        stImg.classList.add("run");
+        const fd = new FormData();
+        fd.append("file", f);
+        fd.append("document_type", document_type);
+        fd.append("expected_name", (expectedInputEl.value || "").trim());
+        try {
+          const r = await fetch("/api/v1/pipeline", { method: "POST", body: fd });
+          const data = await r.json().catch(() => ({}));
+          stImg.classList.remove("run");
+          if (!r.ok) {
+            stImg.classList.add("fail");
+            const msg = formatApiDetail(data.detail, data);
+            outVal.value = JSON.stringify(data, null, 2);
+            valSummary.className = "val-summary no";
+            valSummary.textContent = msg;
+            setStatus("Validasi gagal.", "error");
+            return;
+          }
+          stImg.classList.add("done");
+          const valid = data.valid === true || data.document_matched === true;
+          valSummary.className = "val-summary " + (valid ? "ok" : "no");
+          renderBpjsSummary(data);
+          outVal.value = JSON.stringify(
+            {
+              valid: valid,
+              document_matched: data.document_matched,
+              holder_name: data.holder_name,
+              nik: data.nik,
+              name_match_method: data.name_match_method,
+              error_code: data.error_code,
+              error_message: data.error_message,
+            },
+            null,
+            2,
+          );
+          showPreviewFromBlob(f, "BPJS Kesehatan");
+          setStatus(valid ? "Selesai — VALID" : "Selesai — TIDAK VALID", valid ? "ok" : "error");
+        } catch (e) {
+          stImg.classList.remove("run");
+          stImg.classList.add("fail");
+          setStatus(e.message || String(e), "error");
+        } finally {
+          updateRunEnabled();
+        }
+        return;
+      }
+
+      if (isVaksin1Profile(document_type)) {
+        stImg.classList.add("run");
+        const fd = new FormData();
+        fd.append("file", f);
+        fd.append("document_type", document_type);
+        fd.append("expected_name", (expectedInputEl.value || "").trim());
+        try {
+          const r = await fetch("/api/v1/pipeline", { method: "POST", body: fd });
+          const data = await r.json().catch(() => ({}));
+          stImg.classList.remove("run");
+          if (!r.ok) {
+            stImg.classList.add("fail");
+            const msg = formatApiDetail(data.detail, data);
+            outVal.value = JSON.stringify(data, null, 2);
+            valSummary.className = "val-summary no";
+            valSummary.textContent = msg;
+            setStatus("Validasi gagal.", "error");
+            return;
+          }
+          stImg.classList.add("done");
+          const valid = data.valid === true || data.document_matched === true;
+          valSummary.className = "val-summary " + (valid ? "ok" : "no");
+          renderVaksin1Summary(data);
+          outVal.value = JSON.stringify(
+            {
+              valid: valid,
+              document_matched: data.document_matched,
+              holder_name: data.holder_name,
+              nik: data.nik,
+              dose_label: data.dose_label,
+              name_match_method: data.name_match_method,
+              error_code: data.error_code,
+              error_message: data.error_message,
+            },
+            null,
+            2,
+          );
+          showPreviewFromBlob(f, "Vaksinasi dosis 1");
+          setStatus(valid ? "Selesai — VALID" : "Selesai — TIDAK VALID", valid ? "ok" : "error");
+        } catch (e) {
+          stImg.classList.remove("run");
+          stImg.classList.add("fail");
+          setStatus(e.message || String(e), "error");
+        } finally {
+          updateRunEnabled();
+        }
+        return;
+      }
+
+      if (isVaksin2Profile(document_type)) {
+        stImg.classList.add("run");
+        const fd = new FormData();
+        fd.append("file", f);
+        fd.append("document_type", document_type);
+        fd.append("expected_name", (expectedInputEl.value || "").trim());
+        try {
+          const r = await fetch("/api/v1/pipeline", { method: "POST", body: fd });
+          const data = await r.json().catch(() => ({}));
+          stImg.classList.remove("run");
+          if (!r.ok) {
+            stImg.classList.add("fail");
+            const msg = formatApiDetail(data.detail, data);
+            outVal.value = JSON.stringify(data, null, 2);
+            valSummary.className = "val-summary no";
+            valSummary.textContent = msg;
+            setStatus("Validasi gagal.", "error");
+            return;
+          }
+          stImg.classList.add("done");
+          const valid = data.valid === true || data.document_matched === true;
+          valSummary.className = "val-summary " + (valid ? "ok" : "no");
+          renderVaksin1Summary(data);
+          outVal.value = JSON.stringify(
+            {
+              valid: valid,
+              document_matched: data.document_matched,
+              holder_name: data.holder_name,
+              nik: data.nik,
+              dose_label: data.dose_label,
+              name_match_method: data.name_match_method,
+              error_code: data.error_code,
+              error_message: data.error_message,
+            },
+            null,
+            2,
+          );
+          showPreviewFromBlob(f, "Vaksinasi dosis 2");
+          setStatus(valid ? "Selesai — VALID" : "Selesai — TIDAK VALID", valid ? "ok" : "error");
+        } catch (e) {
+          stImg.classList.remove("run");
+          stImg.classList.add("fail");
+          setStatus(e.message || String(e), "error");
+        } finally {
+          updateRunEnabled();
+        }
+        return;
+      }
+
+      if (isVaksin3Profile(document_type)) {
+        stImg.classList.add("run");
+        const fd = new FormData();
+        fd.append("file", f);
+        fd.append("document_type", document_type);
+        fd.append("expected_name", (expectedInputEl.value || "").trim());
+        try {
+          const r = await fetch("/api/v1/pipeline", { method: "POST", body: fd });
+          const data = await r.json().catch(() => ({}));
+          stImg.classList.remove("run");
+          if (!r.ok) {
+            stImg.classList.add("fail");
+            const msg = formatApiDetail(data.detail, data);
+            outVal.value = JSON.stringify(data, null, 2);
+            valSummary.className = "val-summary no";
+            valSummary.textContent = msg;
+            setStatus("Validasi gagal.", "error");
+            return;
+          }
+          stImg.classList.add("done");
+          const valid = data.valid === true || data.document_matched === true;
+          valSummary.className = "val-summary " + (valid ? "ok" : "no");
+          renderVaksin1Summary(data);
+          outVal.value = JSON.stringify(
+            {
+              valid: valid,
+              document_matched: data.document_matched,
+              holder_name: data.holder_name,
+              nik: data.nik,
+              dose_label: data.dose_label,
+              name_match_method: data.name_match_method,
+              error_code: data.error_code,
+              error_message: data.error_message,
+            },
+            null,
+            2,
+          );
+          showPreviewFromBlob(f, "Vaksinasi booster");
+          setStatus(valid ? "Selesai — VALID" : "Selesai — TIDAK VALID", valid ? "ok" : "error");
+        } catch (e) {
+          stImg.classList.remove("run");
+          stImg.classList.add("fail");
+          setStatus(e.message || String(e), "error");
+        } finally {
+          updateRunEnabled();
+        }
+        return;
+      }
+
+      if (isRekeningProfile(document_type)) {
+        stImg.classList.add("run");
+        const fd = new FormData();
+        fd.append("file", f);
+        fd.append("document_type", document_type);
+        fd.append("expected_name", (expectedInputEl.value || "").trim());
+        fd.append("expected_bank", (expectedBankEl.value || "").trim());
+        fd.append("expected_account", (expectedAccountEl.value || "").trim());
+        try {
+          const r = await fetch("/api/v1/pipeline", { method: "POST", body: fd });
+          const data = await r.json().catch(() => ({}));
+          stImg.classList.remove("run");
+          if (!r.ok) {
+            stImg.classList.add("fail");
+            const msg = formatApiDetail(data.detail, data);
+            outVal.value = JSON.stringify(data, null, 2);
+            valSummary.className = "val-summary no";
+            valSummary.textContent = msg;
+            setStatus("Validasi gagal.", "error");
+            return;
+          }
+          stImg.classList.add("done");
+          const valid = data.valid === true || data.document_matched === true;
+          valSummary.className = "val-summary " + (valid ? "ok" : "no");
+          renderRekeningSummary(data);
+          outVal.value = JSON.stringify(
+            {
+              valid: valid,
+              document_matched: data.document_matched,
+              holder_name: data.holder_name,
+              name_match_method: data.name_match_method,
+              detected_bank: data.detected_bank,
+              account_number: data.account_number,
+              error_code: data.error_code,
+              error_message: data.error_message,
+            },
+            null,
+            2,
+          );
+          showPreviewFromBlob(f, "Rekening");
           setStatus(valid ? "Selesai — VALID" : "Selesai — TIDAK VALID", valid ? "ok" : "error");
         } catch (e) {
           stImg.classList.remove("run");

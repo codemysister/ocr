@@ -50,8 +50,7 @@ _NIK_ACCOUNT_SUFFIX_RE = re.compile(r"(\d{16})(?:_(\d{10,13}))?$", re.I)
 def parse_nik16_from_filename(filename: str) -> str | None:
     """Ambil NIK 16 digit dari pola `{tipe}_{Nama}_{NIK16}` atau `..._{NIK16}_{NoRek}.ext`."""
     stem = (filename or "").rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
-    if "." in stem:
-        stem = stem.rsplit(".", 1)[0]
+    stem = re.sub(r"\.(?:jpe?g|png|webp|gif|pdf)$", "", stem, flags=re.I)
     m = _NIK_ACCOUNT_SUFFIX_RE.search(stem)
     return m.group(1) if m else None
 

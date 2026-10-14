@@ -17,8 +17,7 @@ from systems.validation.document_profiles import (
     resolve_keywords,
 )
 from systems.validation.fuzzy_compare import compare_ocr_name_to_expected, validate_document_ocr
-from systems.validation.portrait_photo_validate import validate_foto_profile
-from systems.preprocessing.pipeline import decode_image_bytes_bgr
+from systems.validation.foto_profile_ai import analyze_portrait_image
 from systems.observability.last_tuning_log import (
     log_safe_failure,
     summarize_validation_result,
@@ -30,6 +29,7 @@ from systems.validation.user_errors import (
     PipelineFrontendResponse,
     error_catalog_for_api,
     user_error_http_detail,
+    pipeline_http_detail,
 )
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -131,7 +131,8 @@ def validation_health() -> dict:
             "Profil SKCK: nama + tanggal kadaluarsa (Sampai dengan) belum terlewati. "
             "Profil JKN: nama (jika diisi); status AKTIF/TIDAK AKTIF diekstrak, tidak memblokir. "
             "KTP + job_position=helper: status perkawinan wajib BELUM KAWIN. "
-            "Default aggregate_min_pass_ratio=0.7, identity_min_score=65 (opsional di body JSON)."
+            "Default aggregate_min_pass_ratio=0.7, identity_min_score=65 (opsional di body JSON). "
+            "Surat keterangan kesehatan: validasi biasanya lewat pipeline Ornith, bukan teks OCR manual."
         ),
         "last_tuning_log": {
             "file": "logs/last_tuning.json",
@@ -379,29 +380,47 @@ async def api_validate_foto_profile(
         raise HTTPException(status_code=400, detail=detail)
 
     try:
-        bgr, decode_meta = decode_image_bytes_bgr(raw)
-    except Exception as e:
+        ai_out = analyze_portrait_image(
+            raw,
+            document_type=doc_type,
+            expected_name=expected_name.strip(),
+        )
+    except ValueError as e:
         log_safe_failure(subsystem=sub, method="POST", path=path, http_status=400, detail=str(e))
         raise HTTPException(
             status_code=400,
-            detail=user_error_http_detail(
-                "pipeline.unreadable_image",
-                extra={"message": str(e)},
-            ),
+            detail=user_error_http_detail("pipeline.unreadable_image", extra={"message": str(e)}),
+        ) from e
+    except Exception as e:
+        log_safe_failure(subsystem=sub, method="POST", path=path, http_status=503, detail=str(e))
+        raise HTTPException(
+            status_code=503,
+            detail=pipeline_http_detail("portrait_ai_unavailable", extra={"message": str(e)}),
         ) from e
 
-    detail = validate_foto_profile(
-        bgr,
-        document_type=doc_type,
-        expected_name=expected_name.strip(),
-    )
-    analysis_bgr = detail.pop("_analysis_bgr", None)
+    if ai_out.get("error") or not isinstance(ai_out.get("validation"), dict):
+        log_safe_failure(
+            subsystem=sub,
+            method="POST",
+            path=path,
+            http_status=503,
+            detail=str(ai_out.get("error")),
+        )
+        raise HTTPException(
+            status_code=503,
+            detail=pipeline_http_detail(
+                "portrait_ai_unavailable",
+                extra={"message": str(ai_out.get("error") or "empty_extraction")},
+            ),
+        )
+
+    detail = ai_out["validation"]
     payload = {
         "success": True,
         "valid": detail.get("document_matched"),
         "document_profile_id": canonical_id,
         "keywords_from_profile": keywords,
-        "decode": decode_meta,
+        "ocr_engine": "ornith",
         **detail,
     }
     write_last_tuning_log(
@@ -415,7 +434,6 @@ async def api_validate_foto_profile(
                 "document_type": doc_type,
                 "expected_name_chars": len(expected_name.strip()),
             },
-            "decode": decode_meta,
             "result": summarize_validation_result(payload),
         }
     )

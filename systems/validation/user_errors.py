@@ -18,6 +18,14 @@ ERROR_CATALOG: dict[str, str] = {
     "pipeline.empty_ocr": "Teks pada dokumen tidak terbaca. Foto ulang dengan lebih jelas.",
     "pipeline.ocr_unavailable": "Layanan OCR sedang tidak tersedia. Coba lagi nanti.",
     "pipeline.health_ai_unavailable": "OCR AI surat kesehatan tidak merespons. Coba lagi nanti.",
+    "pipeline.portrait_ai_unavailable": "AI foto profil tidak merespons. Coba lagi nanti.",
+    "pipeline.npwp_ai_unavailable": "AI NPWP tidak merespons. Coba lagi nanti.",
+    "pipeline.pemadanan_npwp_ai_unavailable": "AI pemadanan NPWP tidak merespons. Coba lagi nanti.",
+    "pipeline.rekening_ai_unavailable": "AI rekening tidak merespons. Coba lagi nanti.",
+    "pipeline.bpjs_ai_unavailable": "AI BPJS Kesehatan tidak merespons. Coba lagi nanti.",
+    "pipeline.vaksinasi_1_ai_unavailable": "AI vaksinasi dosis 1 tidak merespons. Coba lagi nanti.",
+    "pipeline.vaksinasi_2_ai_unavailable": "AI vaksinasi dosis 2 tidak merespons. Coba lagi nanti.",
+    "pipeline.vaksinasi_3_ai_unavailable": "AI vaksinasi booster tidak merespons. Coba lagi nanti.",
     "pipeline.ocr_error": "Gagal membaca teks dokumen. Coba unggah ulang.",
     "pipeline.internal": "Terjadi kesalahan sistem saat memproses dokumen.",
     "pipeline.missing_expected_bank": "Bank referensi wajib diisi (mandiri atau mas).",
@@ -31,8 +39,10 @@ ERROR_CATALOG: dict[str, str] = {
     "ktp.helper_not_single": "Untuk posisi Helper, status perkawinan di KTP harus BELUM KAWIN.",
     # NPWP
     "npwp.wrong_document": "Dokumen ini bukan NPWP yang valid.",
+    "npwp.name_mismatch": "Nama pada NPWP tidak cocok.",
     "npwp.nik_mismatch": "NIK/nomor NPWP 16 digit tidak cocok.",
     "pemadanan_npwp.wrong_document": "Dokumen ini bukan bukti pemadanan NPWP yang valid.",
+    "pemadanan_npwp.name_mismatch": "Nama pada bukti pemadanan NPWP tidak cocok.",
     "pemadanan_npwp.nik_mismatch": "NIK/nomor NPWP 16 digit tidak cocok.",
     # KK
     "kk.wrong_document": "Dokumen ini bukan Kartu Keluarga yang valid.",
@@ -88,6 +98,7 @@ ERROR_CATALOG: dict[str, str] = {
     "keterangan_kesehatan.date_missing": "Tanggal cek kesehatan tidak terbaca.",
     "keterangan_kesehatan.expired": "Surat keterangan kesehatan sudah kadaluarsa.",
     # Foto profil
+    "foto_profile.not_profile_photo": "Ini bukan foto profil / pas foto.",
     "foto_profile.no_face": "Wajah tidak terdeteksi pada foto profil.",
     "foto_profile.multiple_faces": "Foto profil harus menampilkan satu wajah saja.",
     "foto_profile.face_size": "Ukuran wajah pada foto profil tidak sesuai (terlalu kecil atau terlalu besar).",
@@ -106,6 +117,14 @@ PIPELINE_KIND_TO_CODE: dict[str, str] = {
     "empty_ocr": "pipeline.empty_ocr",
     "ocr_unavailable": "pipeline.ocr_unavailable",
     "health_ai_unavailable": "pipeline.health_ai_unavailable",
+    "portrait_ai_unavailable": "pipeline.portrait_ai_unavailable",
+    "npwp_ai_unavailable": "pipeline.npwp_ai_unavailable",
+    "pemadanan_npwp_ai_unavailable": "pipeline.pemadanan_npwp_ai_unavailable",
+    "rekening_ai_unavailable": "pipeline.rekening_ai_unavailable",
+    "bpjs_ai_unavailable": "pipeline.bpjs_ai_unavailable",
+    "vaksinasi_1_ai_unavailable": "pipeline.vaksinasi_1_ai_unavailable",
+    "vaksinasi_2_ai_unavailable": "pipeline.vaksinasi_2_ai_unavailable",
+    "vaksinasi_3_ai_unavailable": "pipeline.vaksinasi_3_ai_unavailable",
     "mistral_unavailable": "pipeline.ocr_unavailable",
     "ocr_error": "pipeline.ocr_error",
     "ocr_value_error": "pipeline.ocr_error",
@@ -170,6 +189,32 @@ def frontend_error_usage() -> dict[str, Any]:
                 }
             },
             "read_from": "response.detail.error_message (FastAPI HTTPException)",
+        },
+        "health_ai_transport_error": {
+            "http_status": 503,
+            "when": "POST /api/v1/pipeline + document_type=keterangan_kesehatan, Ornith gagal",
+            "body": {
+                "detail": {
+                    "error_code": "pipeline.health_ai_unavailable",
+                    "error_message": "OCR AI surat kesehatan tidak merespons. Coba lagi nanti.",
+                    "error_cases": [
+                        {
+                            "code": "pipeline.health_ai_unavailable",
+                            "message": "OCR AI surat kesehatan tidak merespons. Coba lagi nanti.",
+                        }
+                    ],
+                    "code": "HEALTH_AI_UNAVAILABLE",
+                    "engine": "ornith",
+                }
+            },
+        },
+        "health_letter_ai_body_error": {
+            "http_status": 200,
+            "when": "POST /api/v1/health-letter-ai — baca body.error, bukan HTTP status",
+            "examples": {
+                "empty_content": "Model tidak mengisi content (thinking/token)",
+                "invalid_json": "Jawaban bukan JSON valid",
+            },
         },
         "typescript": (
             "type UserErrorCase = { code: string; message: string };\n"
@@ -257,6 +302,31 @@ def infer_error_cases(validation: dict[str, Any]) -> list[dict[str, str]]:
         seen.add(code)
         cases.append(_case(code))
 
+    portrait_ai = profile == "foto_profile" and validation.get("validation_engine") == "ornith"
+    npwp_ai = profile == "npwp" and validation.get("validation_engine") == "ornith"
+    pemadanan_ai = profile == "pemadanan_npwp" and validation.get("validation_engine") == "ornith"
+    if portrait_ai:
+        if validation.get("is_profile_photo") is False:
+            add("foto_profile.not_profile_photo")
+        if validation.get("is_blue_background") is False:
+            add("foto_profile.not_blue")
+    if npwp_ai:
+        if validation.get("is_npwp") is False:
+            add("npwp.wrong_document")
+        else:
+            if validation.get("nik_pass") is False:
+                add("npwp.nik_mismatch")
+            if validation.get("name_pass") is False and validation.get("nik_pass") is not True:
+                add("npwp.name_mismatch")
+    if pemadanan_ai:
+        if validation.get("is_pemadanan_npwp") is False:
+            add("pemadanan_npwp.wrong_document")
+        else:
+            if validation.get("nik_pass") is False:
+                add("pemadanan_npwp.nik_mismatch")
+            if validation.get("name_pass") is False and validation.get("nik_pass") is not True:
+                add("pemadanan_npwp.name_mismatch")
+
     # 1) Gate kebijakan (meski jenis dokumen sudah lolos).
     if "BPJS_KESANGGUPAN_STAMP" in blockers or (
         profile == "bpjs_kesanggupan" and validation.get("stamp_pass") is False
@@ -295,9 +365,9 @@ def infer_error_cases(validation: dict[str, Any]) -> list[dict[str, str]]:
         add("ktp.helper_not_single")
 
     # 2) Jenis dokumen / exclusion / foto.
-    if "FACE_DETECTOR" in blockers:
+    if not portrait_ai and "FACE_DETECTOR" in blockers:
         add("foto_profile.detector_unavailable")
-    if "FACE" in blockers:
+    if not portrait_ai and "FACE" in blockers:
         img = validation.get("image_validation") or {}
         count = img.get("face_count")
         if count == 0 or count is None:
@@ -306,7 +376,7 @@ def infer_error_cases(validation: dict[str, Any]) -> list[dict[str, str]]:
             add("foto_profile.multiple_faces")
         else:
             add("foto_profile.face_size")
-    if "BLUE_BACKGROUND" in blockers:
+    if not portrait_ai and "BLUE_BACKGROUND" in blockers:
         add("foto_profile.not_blue")
 
     if validation.get("exclusion_violated") is True:
@@ -314,7 +384,7 @@ def infer_error_cases(validation: dict[str, Any]) -> list[dict[str, str]]:
             add("rekening.wrong_type_statement")
         elif profile:
             add(f"{profile}.wrong_document")
-    elif type_failed:
+    elif type_failed and not portrait_ai and not npwp_ai and not pemadanan_ai:
         if profile == "foto_profile":
             if not any(c["code"].startswith("foto_profile.") for c in cases):
                 add("foto_profile.not_blue")
@@ -347,7 +417,11 @@ def infer_error_cases(validation: dict[str, Any]) -> list[dict[str, str]]:
         ):
             add("mutasi.account_mismatch")
 
-        if "IDENTITY" in blockers or validation.get("identity_pass") is False:
+        if (
+            not npwp_ai
+            and not pemadanan_ai
+            and ("IDENTITY" in blockers or validation.get("identity_pass") is False)
+        ):
             ident = validation.get("identity") or {}
             if profile in {"npwp", "pemadanan_npwp"} or ident.get("npwp_nik_identity"):
                 add(f"{profile or 'npwp'}.nik_mismatch")

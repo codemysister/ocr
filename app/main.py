@@ -58,7 +58,18 @@ app = FastAPI(
         "**Frontend:** pada `POST /api/v1/pipeline`, HTTP 200 berarti proses selesai "
         "(bukan otomatis lolos). Baca `document_matched`. Jika `false`, tampilkan "
         "`error_message` (kode: `error_code`, daftar: `error_cases`). "
-        "Katalog: `GET /systems/validation/api/v1/error-catalog`."
+        "HTTP 4xx/5xx: baca `detail.error_message`. "
+        "`keterangan_kesehatan` memakai Ornith AI (bukan Paddle); gagal AI → 503 "
+        "`pipeline.health_ai_unavailable`. "
+        "`npwp` memakai Ornith AI; `format_lama` true jika nomor NPWP bukan NIK 16 digit. "
+        "`pemadanan_npwp` memakai Ornith AI; kartu NPWP 16 digit atau Ikhtisar Profil, nama boleh terpotong, NIK filename bisa lolos. "
+        "`rekening` memakai Ornith AI; nama boleh sebagian atau tersensor. "
+        "`bpjs` (Kartu Indonesia Sehat) memakai Ornith AI. "
+        "`vaksinasi_1` memakai Ornith AI; dosis pertama tetap lolos bila tahap 2 juga tercantum. "
+        "`vaksinasi_2` memakai Ornith AI; dosis kedua tetap lolos bila tahap 1 juga tercantum. "
+        "`vaksinasi_3` memakai Ornith AI; booster tetap lolos bila tahap 1 atau 2 juga tercantum. "
+        "Katalog: `GET /systems/validation/api/v1/error-catalog` · ringkasan: `GET /api/v1` · "
+        "spesifikasi lengkap: file `API.md` di root repo."
     ),
     version="1.0.0",
 )

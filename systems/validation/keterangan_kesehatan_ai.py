@@ -46,10 +46,70 @@ Kembalikan HANYA satu objek JSON (tanpa markdown) dengan kunci persis:
 """
 
 
+def _quote_bare_json_value(line: str) -> str:
+    matched = re.match(r'^(\s*"[^"]+"\s*:\s*)(.*)$', line)
+    if not matched:
+        return line
+    prefix, rest = matched.group(1), matched.group(2).rstrip()
+    comma = ""
+    body = rest
+    if body.endswith(","):
+        comma = ","
+        body = body[:-1].rstrip()
+    if not body or body[0] in '"[{' or body in {"true", "false", "null"}:
+        return line
+    if re.fullmatch(r"-?\d+(?:\.\d+)?", body):
+        if len(body) > 1 and body[0] == "0":
+            return f'{prefix}"{body}"{comma}'
+        return line
+    body = body.replace("\\", "\\\\").replace('"', '\\"')
+    return f'{prefix}"{body}"{comma}'
+
+
+def _loose_json_object(text: str) -> dict[str, Any] | None:
+    """Terima jawaban model yang menyerupai JSON: bullet, kunci tanpa kutip, atau tanpa kurung."""
+    raw = (text or "").strip()
+    raw = re.sub(r"^```(?:json)?", "", raw, flags=re.I).strip()
+    raw = re.sub(r"```$", "", raw).strip()
+    raw = re.sub(r"^json\s*", "", raw, flags=re.I)
+    raw = re.sub(r"(?m)^\s*-\s*", "", raw)
+    start = raw.find("{")
+    end = raw.rfind("}")
+    if start >= 0 and end > start:
+        chunk = raw[start : end + 1]
+    elif ":" not in raw:
+        return None
+    else:
+        chunk = "{\n" + raw + "\n}"
+    lines = []
+    for line in chunk.splitlines():
+        line = re.sub(r'^(\s*)([A-Za-z_][\w]*)\s*:', r'\1"\2":', line)
+        lines.append(_quote_bare_json_value(line))
+    joined: list[str] = []
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        nxt = lines[index + 1].strip() if index + 1 < len(lines) else ""
+        if stripped and stripped not in {"{", "}", "[", "]"} and nxt and nxt not in {"{", "}", "[", "]"}:
+            if not stripped.endswith((",", "{", "[")):
+                line = line.rstrip() + ","
+        joined.append(line)
+    chunk = re.sub(r",\s*([}\]])", r"\1", "\n".join(joined))
+    try:
+        parsed = json.loads(chunk)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    return {str(key).casefold(): value for key, value in parsed.items()}
+
+
 def _parse_health_json(text: str) -> dict[str, Any] | None:
     obj = _extract_json_object(text)
     if obj:
         return obj
+    loose = _loose_json_object(text)
+    if loose:
+        return loose
     raw = (text or "").strip()
     start = raw.find("{")
     if start < 0:

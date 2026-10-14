@@ -1437,6 +1437,579 @@ def test_truncated_jpeg_is_repaired_for_ocr() -> None:
     assert img.shape[0] >= 100 and img.shape[1] >= 100
 
 
+def test_rekening_ai_accepts_partial_and_masked_name() -> None:
+    from systems.validation.rekening_ai import rekening_validation_from_extraction
+
+    base = {
+        "is_savings_account": True,
+        "is_statement": False,
+        "bank": "mandiri",
+        "account_number": "1330035980275",
+        "confidence": 90,
+    }
+    partial = rekening_validation_from_extraction(
+        {**base, "holder_name": "Deva"},
+        expected_name="Deva Apriana",
+        expected_bank="mandiri",
+        expected_account="1330035980275",
+    )
+    assert partial["name_pass"] is True
+    assert partial["name_match_method"] == "partial"
+    assert partial["document_matched"] is True
+
+    masked = rekening_validation_from_extraction(
+        {**base, "holder_name": "Dxxa"},
+        expected_name="Deva Apriana",
+        expected_bank="mandiri",
+        expected_account="1330035980275",
+    )
+    assert masked["name_match_method"] == "masked"
+    assert masked["document_matched"] is True
+
+    other = rekening_validation_from_extraction(
+        {**base, "holder_name": "Budi"},
+        expected_name="Deva Apriana",
+        expected_bank="mandiri",
+        expected_account="1330035980275",
+    )
+    assert other["document_matched"] is False
+    assert other["error_code"] == "rekening.name_mismatch"
+
+    apostrophe = rekening_validation_from_extraction(
+        {**base, "holder_name": "NAYLA SAIDAH"},
+        expected_name="Nayla Sa'idah",
+        expected_bank="mandiri",
+        expected_account="1330035980275",
+    )
+    assert apostrophe["name_pass"] is True
+    assert apostrophe["document_matched"] is True
+
+    glued = rekening_validation_from_extraction(
+        {**base, "holder_name": "SYAHRUL ARRIZAL MAARIF"},
+        expected_name="Syahrul Arrizal Ma'arif",
+        expected_bank="mas",
+        expected_account="1005992474",
+    )
+    assert glued["name_pass"] is True
+
+    statement = rekening_validation_from_extraction(
+        {**base, "is_savings_account": False, "is_statement": True, "holder_name": "Deva Apriana"},
+        expected_name="Deva Apriana",
+        expected_bank="mandiri",
+        expected_account="1330035980275",
+    )
+    assert statement["error_code"] == "rekening.wrong_type_statement"
+
+
+def test_npwp_ai_format_lama_flag() -> None:
+    from systems.validation.npwp_ai import npwp_validation_from_extraction
+
+    old = npwp_validation_from_extraction(
+        {
+            "is_npwp": True,
+            "holder_name": "Bunga Sabriya",
+            "npwp_number": "09.123.456.7-890.000",
+            "confidence": 90,
+        },
+        expected_name="Bunga Sabriya",
+        expected_nik="3172045809060002",
+    )
+    assert old["format_lama"] is True
+    assert old["is_nik_format"] is False
+    assert old["document_matched"] is True
+    assert old["error_code"] is None
+
+    new = npwp_validation_from_extraction(
+        {
+            "is_npwp": True,
+            "holder_name": "Orang Lain",
+            "npwp_number": "31.720458.0906.0002",
+        },
+        expected_name="Bunga Sabriya",
+        expected_nik="3172045809060002",
+    )
+    assert new["format_lama"] is False
+    assert new["document_matched"] is True
+
+    mismatch = npwp_validation_from_extraction(
+        {
+            "is_npwp": True,
+            "holder_name": "Sri Putri",
+            "npwp_number": "1111222233334444",
+        },
+        expected_name="Sri Putri",
+        expected_nik="3201175512030002",
+    )
+    assert mismatch["format_lama"] is False
+    assert mismatch["document_matched"] is False
+    assert mismatch["error_code"] == "npwp.nik_mismatch"
+
+    wrong_name = npwp_validation_from_extraction(
+        {
+            "is_npwp": True,
+            "holder_name": "Orang Lain",
+            "npwp_number": "09.123.456.7-890.000",
+        },
+        expected_name="Bunga Sabriya",
+    )
+    assert wrong_name["format_lama"] is True
+    assert wrong_name["error_code"] == "npwp.name_mismatch"
+
+    not_npwp = npwp_validation_from_extraction(
+        {"is_npwp": False, "npwp_number": "", "holder_name": ""}
+    )
+    assert not_npwp["error_code"] == "npwp.wrong_document"
+
+
+def test_pemadanan_npwp_ai_identity() -> None:
+    from systems.validation.bpjs_ai import parse_bpjs_name_from_filename
+    from systems.validation.pemadanan_npwp_ai import pemadanan_validation_from_extraction
+
+    ok = pemadanan_validation_from_extraction(
+        {
+            "is_pemadanan_npwp": True,
+            "holder_name": "ADANAN HASBI AHMAD NASUTION",
+            "npwp_number": "3216072612060008",
+        },
+        expected_name="ADANAN HASBI AHMAD NASUTION",
+        expected_nik="3216072612060008",
+    )
+    assert ok["document_matched"] is True
+    assert ok["name_match_method"] == "full"
+
+    truncated = pemadanan_validation_from_extraction(
+        {
+            "is_pemadanan_npwp": True,
+            "holder_name": "ADANAN HASBI",
+            "npwp_number": "32.160726.1206.0008",
+        },
+        expected_name="ADANAN HASBI AHMAD NASUTION",
+        expected_nik="3216072612060008",
+    )
+    assert truncated["document_matched"] is True
+
+    nik_saves = pemadanan_validation_from_extraction(
+        {
+            "is_pemadanan_npwp": True,
+            "holder_name": "ORANG LAIN",
+            "npwp_number": "3216072612060008",
+        },
+        expected_name="ADANAN HASBI AHMAD NASUTION",
+        expected_nik="3216072612060008",
+    )
+    assert nik_saves["document_matched"] is True
+    assert nik_saves["name_match_method"] == "nik"
+
+    mismatch = pemadanan_validation_from_extraction(
+        {
+            "is_pemadanan_npwp": True,
+            "holder_name": "ORANG LAIN",
+            "npwp_number": "1111222233334444",
+        },
+        expected_name="ADANAN HASBI AHMAD NASUTION",
+        expected_nik="3216072612060008",
+    )
+    assert mismatch["document_matched"] is False
+    codes = [c["code"] for c in mismatch["error_cases"]]
+    assert "pemadanan_npwp.nik_mismatch" in codes
+    assert "pemadanan_npwp.name_mismatch" in codes
+
+    card = pemadanan_validation_from_extraction(
+        {"is_pemadanan_npwp": False, "holder_name": "ADANAN", "npwp_number": "", "notes": "Ini KTP."}
+    )
+    assert card["error_code"] == "pemadanan_npwp.wrong_document"
+
+    new_card = pemadanan_validation_from_extraction(
+        {
+            "is_pemadanan_npwp": False,
+            "holder_name": "BUNGA SABRIYA",
+            "npwp_number": "3172045809060002",
+            "notes": "Kartu NPWP format lama 15 digit, bukan hasil pemadanan.",
+        },
+        expected_name="Bunga Sabriya",
+        expected_nik="3172045809060002",
+    )
+    assert new_card["document_matched"] is True
+
+    old_card = pemadanan_validation_from_extraction(
+        {
+            "is_pemadanan_npwp": True,
+            "holder_name": "WAHYU BAGASKORO",
+            "npwp_number": "10.999.045.7-523.000",
+        },
+        expected_name="Wahyu Bagaskoro",
+        expected_nik="3305022108060001",
+    )
+    assert old_card["error_code"] == "pemadanan_npwp.wrong_document"
+
+    aktivasi = pemadanan_validation_from_extraction(
+        {
+            "is_pemadanan_npwp": False,
+            "holder_name": "NELA NAILA NURHIKMAH",
+            "npwp_number": "",
+            "nik": "3214066412070001",
+            "notes": "Surat keterangan aktivasi NIK.",
+        },
+        expected_name="NELA NAILA NURHIKMAH",
+        expected_nik="3214066412070001",
+    )
+    assert aktivasi["document_matched"] is True
+    assert aktivasi["nik"] == "3214066412070001"
+
+    name = parse_bpjs_name_from_filename(
+        "pemadanan npwp_M. CHAIRIL HAMZAH_3213080506990001.jpg"
+    )
+    assert name == "M. CHAIRIL HAMZAH"
+
+
+def test_bpjs_ai_accepts_loose_model_json() -> None:
+    from systems.validation.bpjs_ai import bpjs_validation_from_extraction
+    from systems.validation.keterangan_kesehatan_ai import _parse_health_json
+
+    samples = {
+        "tita": """{
+- "is_bpjs_kesehatan": true,
+- "holder_name": "TITA DWILESTARI",
+- "nik": "3215236104010004",
+- "card_number": "0003635883775",
+- "confidence": 98,
+- "notes": "Kartu Indonesia Sehat."
+}""",
+        "syahrul": """JSON
+{
+is_bpjs_kesehatan: true,
+holder_name: "SYAHRUL, ARRIZAL MA'ARIF",
+nik: "3302172305320",
+card_number: "0002698191145",
+confidence: 98,
+notes: "Kartu Indonesia Sehat."
+}""",
+        "lia": """Is_bpjs_kesehatan: true
+Holder_name: "LIA APRIANI"
+Nik: "321601570650001"
+Card_number: "0000492438971"
+Confidence: 99
+Notes: "Kartu Indonesia Sehat."
+""",
+        "dyah": """is_bpjs_kesehatan: true
+holder_name: DYAH AYU WULANDARI
+nik: 3216076208960001
+card_number: 0001771359884
+confidence: 99
+notes: Ini kartu Indonesia Sehat / BPJS Kesehatan; nama dan NIK terbaca jelas.
+""",
+    }
+    tita = bpjs_validation_from_extraction(
+        _parse_health_json(samples["tita"]),
+        expected_name="Tita Dwi Lestari",
+        expected_nik="3215236104010004",
+    )
+    assert tita["holder_name"] == "TITA DWILESTARI"
+    assert tita["document_matched"] is True
+
+    syahrul = bpjs_validation_from_extraction(
+        _parse_health_json(samples["syahrul"]),
+        expected_name="Syahrul Arrizal Ma'arif",
+        expected_nik="3302172305020002",
+    )
+    assert syahrul["name_pass"] is True
+    assert syahrul["document_matched"] is True
+
+    lia = bpjs_validation_from_extraction(
+        _parse_health_json(samples["lia"]),
+        expected_name="Lia Apriani",
+        expected_nik="3216015706050001",
+    )
+    assert lia["holder_name"] == "LIA APRIANI"
+    assert lia["document_matched"] is True
+
+    dyah = bpjs_validation_from_extraction(
+        _parse_health_json(samples["dyah"]),
+        expected_name="Dyah ayu wulandari",
+        expected_nik="3216076208960001",
+    )
+    assert dyah["nik"] == "3216076208960001"
+    assert dyah["document_matched"] is True
+
+
+def test_vaksinasi_3_ai_booster_and_name() -> None:
+    from systems.validation.vaksinasi_3_ai import vaksinasi_3_validation_from_extraction
+
+    booster = vaksinasi_3_validation_from_extraction(
+        {
+            "is_covid_vaccine": True,
+            "is_dose_3": True,
+            "holder_name": "TIARA PUTRI",
+            "dose_label": "VAKSIN BOOSTER",
+            "nik": "3212017010070005",
+        },
+        expected_name="Tiara Putri",
+        expected_nik="3212017010070005",
+    )
+    assert booster["document_matched"] is True
+
+    primer = vaksinasi_3_validation_from_extraction(
+        {
+            "is_covid_vaccine": True,
+            "is_dose_3": True,
+            "holder_name": "YOLANDA INESTASYA",
+            "dose_label": "VAKSIN PRIMER 2",
+            "notes": "Ini vaksin primer 2, bukan booster.",
+        },
+        expected_name="Yolanda Inestasya Saragih",
+    )
+    assert primer["is_dose_3"] is False
+    assert primer["error_code"] == "vaksinasi_3.wrong_document"
+
+    printed = vaksinasi_3_validation_from_extraction(
+        {
+            "is_covid_vaccine": True,
+            "is_dose_3": False,
+            "holder_name": "TIARA",
+            "dose_label": "",
+            "notes": "Kartu vaksin booster, bukan dosis kedua.",
+        },
+        expected_name="Tiara Putri",
+    )
+    assert printed["is_dose_3"] is True
+    assert printed["name_pass"] is True
+    assert printed["document_matched"] is True
+
+
+def test_vaksinasi_2_ai_dose_and_name() -> None:
+    from systems.validation.bpjs_ai import parse_bpjs_name_from_filename
+    from systems.validation.fuzzy_compare import parse_nik16_from_filename
+    from systems.validation.vaksinasi_2_ai import vaksinasi_2_validation_from_extraction
+
+    both = vaksinasi_2_validation_from_extraction(
+        {
+            "is_covid_vaccine": True,
+            "is_dose_2": True,
+            "holder_name": "AAP HABATUL FADLI",
+            "nik": "3212042904060005",
+            "dose_label": "tahap 2",
+        },
+        expected_name="Aap habatul fadli",
+        expected_nik="3212042904060005",
+    )
+    assert both["document_matched"] is True
+
+    only_first = vaksinasi_2_validation_from_extraction(
+        {
+            "is_covid_vaccine": True,
+            "is_dose_2": False,
+            "holder_name": "AAP HABATUL FADLI",
+            "dose_label": "tahap 1",
+        },
+        expected_name="Aap habatul fadli",
+    )
+    assert only_first["error_code"] == "vaksinasi_2.wrong_document"
+
+    booster = vaksinasi_2_validation_from_extraction(
+        {
+            "is_covid_vaccine": True,
+            "is_dose_2": False,
+            "holder_name": "AAP HABATUL FADLI",
+            "dose_label": "booster",
+        },
+        expected_name="Aap habatul fadli",
+    )
+    assert booster["error_code"] == "vaksinasi_2.wrong_document"
+
+    primer = vaksinasi_2_validation_from_extraction(
+        {
+            "is_covid_vaccine": True,
+            "is_dose_2": False,
+            "holder_name": "FAHRU RAMADHAN",
+            "dose_label": "vaksin primer 2",
+        },
+        expected_name="FAHRU RAMADHAN",
+    )
+    assert primer["is_dose_2"] is True
+    assert primer["document_matched"] is True
+
+    denied_but_printed = vaksinasi_2_validation_from_extraction(
+        {
+            "is_covid_vaccine": True,
+            "is_dose_2": False,
+            "holder_name": "MOETIARA SARI",
+            "dose_label": "",
+            "notes": "Kartu vaksin primer 2, bukan dosis kedua.",
+        },
+        expected_name="Moetiara Sari",
+    )
+    assert denied_but_printed["is_dose_2"] is True
+    assert denied_but_printed["document_matched"] is True
+
+    yolanda = vaksinasi_2_validation_from_extraction(
+        {
+            "is_covid_vaccine": True,
+            "is_dose_2": False,
+            "holder_name": "YOLANDA INESTASYA",
+            "dose_label": "vaksin primer 2",
+        },
+        expected_name="Yolanda Inestasya Saragih",
+    )
+    assert yolanda["name_pass"] is True
+    assert yolanda["document_matched"] is True
+
+    dotted = "vaksinasi 2_M. CHAIRIL HAMZAH_3213080506990001.jpg"
+    assert parse_nik16_from_filename(dotted) == "3213080506990001"
+    assert parse_bpjs_name_from_filename(dotted) == "M. CHAIRIL HAMZAH"
+
+
+def test_vaksinasi_1_ai_dose_and_name() -> None:
+    from systems.validation.vaksinasi_1_ai import vaksinasi_1_validation_from_extraction
+
+    both_doses = vaksinasi_1_validation_from_extraction(
+        {
+            "is_covid_vaccine": True,
+            "is_dose_1": True,
+            "holder_name": "AAP HABATUL FADLI",
+            "nik": "3212042904060005",
+            "dose_label": "tahap 1",
+            "confidence": 95,
+        },
+        expected_name="Aap habatul fadli",
+        expected_nik="3212042904060005",
+    )
+    assert both_doses["document_matched"] is True
+    assert both_doses["error_code"] is None
+
+    truncated = vaksinasi_1_validation_from_extraction(
+        {
+            "is_covid_vaccine": True,
+            "is_dose_1": True,
+            "holder_name": "TIARA",
+            "nik": "",
+        },
+        expected_name="Tiara Putri",
+    )
+    assert truncated["name_pass"] is True
+    assert truncated["document_matched"] is True
+
+    nik_only = vaksinasi_1_validation_from_extraction(
+        {
+            "is_covid_vaccine": True,
+            "dose_label": "tahap 1",
+            "holder_name": "",
+            "nik": "3212042904060005",
+        },
+        expected_name="Aap habatul fadli",
+        expected_nik="3212042904060005",
+    )
+    assert nik_only["name_match_method"] == "nik"
+    assert nik_only["document_matched"] is True
+
+    dose2 = vaksinasi_1_validation_from_extraction(
+        {
+            "is_covid_vaccine": True,
+            "is_dose_1": False,
+            "holder_name": "AAP HABATUL FADLI",
+            "dose_label": "tahap 2",
+        },
+        expected_name="Aap habatul fadli",
+    )
+    assert dose2["error_code"] == "vaksinasi_1.wrong_document"
+
+    other = vaksinasi_1_validation_from_extraction(
+        {
+            "is_covid_vaccine": True,
+            "is_dose_1": True,
+            "holder_name": "BUDI",
+            "nik": "1111222233334444",
+        },
+        expected_name="Aap habatul fadli",
+        expected_nik="3212042904060005",
+    )
+    assert other["error_code"] == "vaksinasi_1.name_mismatch"
+
+
+def test_bpjs_ai_truncated_name_and_nik() -> None:
+    from systems.validation.bpjs_ai import (
+        bpjs_validation_from_extraction,
+        parse_bpjs_name_from_filename,
+    )
+
+    truncated = bpjs_validation_from_extraction(
+        {
+            "is_bpjs_kesehatan": True,
+            "holder_name": "TIARA",
+            "nik": "3212017010070005",
+            "confidence": 90,
+        },
+        expected_name="Tiara Putri",
+        expected_nik="3212017010070005",
+    )
+    assert truncated["name_pass"] is True
+    assert truncated["document_matched"] is True
+    assert truncated["error_code"] is None
+
+    nik_only = bpjs_validation_from_extraction(
+        {
+            "is_bpjs_kesehatan": True,
+            "holder_name": "",
+            "nik": "3175066010000006",
+        },
+        expected_name="Shella Octhaviani",
+        expected_nik="3175066010000006",
+    )
+    assert nik_only["name_match_method"] == "nik"
+    assert nik_only["document_matched"] is True
+
+    wrong = bpjs_validation_from_extraction(
+        {
+            "is_bpjs_kesehatan": True,
+            "holder_name": "BUDI",
+            "nik": "1111222233334444",
+        },
+        expected_name="Tiara Putri",
+        expected_nik="3212017010070005",
+    )
+    assert wrong["document_matched"] is False
+    assert wrong["error_code"] == "bpjs.name_mismatch"
+
+    not_kis = bpjs_validation_from_extraction(
+        {"is_bpjs_kesehatan": False, "holder_name": "Tiara", "nik": "3212017010070005"},
+        expected_name="Tiara Putri",
+    )
+    assert not_kis["error_code"] == "bpjs.wrong_document"
+
+    assert (
+        parse_bpjs_name_from_filename(
+            "bpjs kesehatan_ANGGUN RAMADHANI_3275045610060008.jpg"
+        )
+        == "ANGGUN RAMADHANI"
+    )
+
+
+def test_portrait_ai_gates_profile_and_blue_only() -> None:
+    from systems.validation.foto_profile_ai import portrait_validation_from_extraction
+
+    ok = portrait_validation_from_extraction(
+        {"is_profile_photo": True, "is_blue_background": True, "confidence": 90}
+    )
+    assert ok["document_matched"] is True
+    assert ok["error_code"] is None
+
+    red = portrait_validation_from_extraction(
+        {"is_profile_photo": True, "is_blue_background": False}
+    )
+    assert red["document_matched"] is False
+    assert red["error_code"] == "foto_profile.not_blue"
+
+    doc = portrait_validation_from_extraction(
+        {"is_profile_photo": False, "is_blue_background": True}
+    )
+    assert doc["error_code"] == "foto_profile.not_profile_photo"
+
+    both = portrait_validation_from_extraction(
+        {"is_profile_photo": False, "is_blue_background": False}
+    )
+    codes = [c["code"] for c in both["error_cases"]]
+    assert codes == ["foto_profile.not_profile_photo", "foto_profile.not_blue"]
+
+
 if __name__ == "__main__":
     test_clean_labeled_belum_kawin()
     test_ocr_extra_r_on_perkawinan()
@@ -1468,4 +2041,13 @@ if __name__ == "__main__":
     test_jkn_wrapped_and_pandawa_and_nik_fallback()
     test_bpjs_kis_nik_truncated_name_and_keyword_recovery()
     test_truncated_jpeg_is_repaired_for_ocr()
+    test_rekening_ai_accepts_partial_and_masked_name()
+    test_bpjs_ai_accepts_loose_model_json()
+    test_vaksinasi_3_ai_booster_and_name()
+    test_vaksinasi_2_ai_dose_and_name()
+    test_vaksinasi_1_ai_dose_and_name()
+    test_bpjs_ai_truncated_name_and_nik()
+    test_npwp_ai_format_lama_flag()
+    test_pemadanan_npwp_ai_identity()
+    test_portrait_ai_gates_profile_and_blue_only()
     print("ok")

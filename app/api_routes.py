@@ -112,12 +112,22 @@ def api_info() -> dict:
                 },
                 "description": (
                     "OCR → validasi. HTTP 200 juga jika dokumen tidak lolos: "
-                    "baca error_message, jangan explanation.summary."
+                    "baca error_message, jangan explanation.summary. "
+                    "document_type=keterangan_kesehatan, npwp, pemadanan_npwp, rekening, bpjs, vaksinasi_1, vaksinasi_2, dan vaksinasi_3: wajib Ornith AI (ocr_mode diabaikan). "
+                    "npwp mengembalikan format_lama (true jika nomor bukan NIK 16 digit). "
+                    "rekening menerima nama sebagian atau tersensor (Deva / Dxxa untuk Deva Apriana)."
                 ),
                 "ocr_modes": {
                     "fast": "PP-OCRv6 (default pipeline, pp_ocr_tier)",
                     "vl": "PaddleOCR-VL-1.6",
                     "mistral": "Cloud Mistral OCR + document_annotation (opsional)",
+                    "ornith": "Hanya keterangan_kesehatan — vision LLM (LLM_HEALTH_AI_*)",
+                },
+                "keterangan_kesehatan": {
+                    "ocr_engine": "ornith",
+                    "ocr_payload_mode": "ornith_health_ai",
+                    "issued_date_fields": ["validation.issued_date", "validation.issued_date_display"],
+                    "transport_error_503": "pipeline.health_ai_unavailable",
                 },
                 "pp_ocr_tiers": list_pp_ocr_tiers(),
                 "response_fields": {
@@ -196,11 +206,35 @@ def api_info() -> dict:
                 "description": "Benchmark pipeline terhadap file dataset (response NDJSON stream).",
                 "body_note": "Per selection: pakai limit/offset batch, atau isi `files` untuk uji file spesifik.",
             },
+            "health_letter_ai_config": {
+                "method": "GET",
+                "path": "/api/v1/health-letter-ai/config",
+                "description": "Default Ornith URL/model, daftar model, template prompt surat kesehatan.",
+            },
             "health_letter_ai": {
                 "method": "POST",
                 "path": "/api/v1/health-letter-ai",
                 "content_type": "multipart/form-data",
-                "description": "Tes OCR AI Ornith: ekstraksi + validasi surat keterangan kesehatan.",
+                "fields": {
+                    "file": "binary (required)",
+                    "expected_name": "string (optional)",
+                    "expected_nik": "string (optional, 16 digit)",
+                    "llm_base_url": "override LLM_HEALTH_AI_BASE_URL",
+                    "llm_model": "override LLM_HEALTH_AI_MODEL",
+                    "user_prompt": "override prompt user",
+                    "today": "YYYY-MM-DD untuk uji kadaluarsa",
+                },
+                "description": (
+                    "Ornith vision: ekstraksi JSON + validasi gate (sama inti pipeline keterangan_kesehatan). "
+                    "HTTP 200 meski gagal ekstraksi — baca body.error (empty_content, invalid_json)."
+                ),
+                "response_fields": {
+                    "document_matched": "boolean gate akhir",
+                    "extraction": "field dari model (holder_name, issued_date, health_conclusion, …)",
+                    "validation": "issued_date, synthetic_ocr, health_status_pass, …",
+                    "llm": "latency_s, model, error",
+                    "error": "null jika OK; else empty_content | invalid_json",
+                },
             },
             "validation_failures": {
                 "method": "GET",
@@ -225,6 +259,8 @@ def api_info() -> dict:
         },
         "document_types": list_supported_document_types(),
         "docs": "/docs",
+        "api_spec": "API.md",
+        "api_spec_note": "Spesifikasi integrasi tunggal di root repo (Markdown).",
         "frontend_errors": frontend_error_usage(),
     }
 
@@ -265,6 +301,74 @@ def _pipeline_http_error(result: PipelineResult) -> HTTPException:
                 "code": "HEALTH_AI_UNAVAILABLE",
                 "engine": "ornith",
                 "env": ["LLM_HEALTH_AI_BASE_URL", "LLM_HEALTH_AI_MODEL"],
+            }
+        )
+    elif kind == "portrait_ai_unavailable":
+        extra.update(
+            {
+                "code": "PORTRAIT_AI_UNAVAILABLE",
+                "engine": "ornith",
+                "env": ["LLM_PORTRAIT_AI_BASE_URL", "LLM_HEALTH_AI_BASE_URL", "LLM_PORTRAIT_AI_MODEL"],
+            }
+        )
+    elif kind == "npwp_ai_unavailable":
+        extra.update(
+            {
+                "code": "NPWP_AI_UNAVAILABLE",
+                "engine": "ornith",
+                "env": ["LLM_NPWP_AI_BASE_URL", "LLM_HEALTH_AI_BASE_URL", "LLM_NPWP_AI_MODEL"],
+            }
+        )
+    elif kind == "pemadanan_npwp_ai_unavailable":
+        extra.update(
+            {
+                "code": "PEMADANAN_NPWP_AI_UNAVAILABLE",
+                "engine": "ornith",
+                "env": [
+                    "LLM_PEMADANAN_NPWP_AI_BASE_URL",
+                    "LLM_HEALTH_AI_BASE_URL",
+                    "LLM_PEMADANAN_NPWP_AI_MODEL",
+                ],
+            }
+        )
+    elif kind == "rekening_ai_unavailable":
+        extra.update(
+            {
+                "code": "REKENING_AI_UNAVAILABLE",
+                "engine": "ornith",
+                "env": ["LLM_REKENING_AI_BASE_URL", "LLM_HEALTH_AI_BASE_URL", "LLM_REKENING_AI_MODEL"],
+            }
+        )
+    elif kind == "bpjs_ai_unavailable":
+        extra.update(
+            {
+                "code": "BPJS_AI_UNAVAILABLE",
+                "engine": "ornith",
+                "env": ["LLM_BPJS_AI_BASE_URL", "LLM_HEALTH_AI_BASE_URL", "LLM_BPJS_AI_MODEL"],
+            }
+        )
+    elif kind == "vaksinasi_1_ai_unavailable":
+        extra.update(
+            {
+                "code": "VAKSINASI_1_AI_UNAVAILABLE",
+                "engine": "ornith",
+                "env": ["LLM_VAKSINASI_1_AI_BASE_URL", "LLM_HEALTH_AI_BASE_URL", "LLM_VAKSINASI_1_AI_MODEL"],
+            }
+        )
+    elif kind == "vaksinasi_2_ai_unavailable":
+        extra.update(
+            {
+                "code": "VAKSINASI_2_AI_UNAVAILABLE",
+                "engine": "ornith",
+                "env": ["LLM_VAKSINASI_2_AI_BASE_URL", "LLM_HEALTH_AI_BASE_URL", "LLM_VAKSINASI_2_AI_MODEL"],
+            }
+        )
+    elif kind == "vaksinasi_3_ai_unavailable":
+        extra.update(
+            {
+                "code": "VAKSINASI_3_AI_UNAVAILABLE",
+                "engine": "ornith",
+                "env": ["LLM_VAKSINASI_3_AI_BASE_URL", "LLM_HEALTH_AI_BASE_URL", "LLM_VAKSINASI_3_AI_MODEL"],
             }
         )
     elif kind == "opencv_unavailable":
@@ -758,7 +862,13 @@ def api_health_letter_ai_config() -> dict:
     return health_ai_config()
 
 
-@router.post("/health-letter-ai")
+@router.post(
+    "/health-letter-ai",
+    response_description=(
+        "HTTP 200 biasanya meski ekstraksi gagal. Cek body.error (empty_content, invalid_json) "
+        "dan document_matched. Pipeline keterangan_kesehatan memakai logika sama; gagal Ornith → HTTP 503."
+    ),
+)
 async def api_health_letter_ai(
     file: UploadFile = File(..., description="Foto surat keterangan kesehatan"),
     expected_name: str = Form(""),
@@ -768,7 +878,7 @@ async def api_health_letter_ai(
     user_prompt: str = Form(""),
     today: str = Form(""),
 ) -> JSONResponse:
-    """Kirim gambar ke LLM lokal multimodal, ekstrak field, lalu validasi."""
+    """Kirim gambar ke Ornith multimodal, ekstrak field JSON, lalu validasi gate surat sehat."""
     from datetime import date as date_cls
 
     from systems.validation.keterangan_kesehatan_ai import analyze_health_letter_image
