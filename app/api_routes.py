@@ -113,7 +113,7 @@ def api_info() -> dict:
                 "description": (
                     "OCR → validasi. HTTP 200 juga jika dokumen tidak lolos: "
                     "baca error_message, jangan explanation.summary. "
-                    "document_type=keterangan_kesehatan, npwp, pemadanan_npwp, rekening, bpjs, iuran, vaksinasi_1, vaksinasi_2, dan vaksinasi_3: wajib Ornith AI (ocr_mode diabaikan). "
+                    "document_type=keterangan_kesehatan, npwp, pemadanan_npwp, rekening, bpjs, iuran, skck, vaksinasi_1, vaksinasi_2, dan vaksinasi_3: wajib Ornith AI (ocr_mode diabaikan). "
                     "npwp mengembalikan format_lama (true jika nomor bukan NIK 16 digit). "
                     "rekening menerima nama sebagian atau tersensor (Deva / Dxxa untuk Deva Apriana)."
                 ),
@@ -345,6 +345,14 @@ def _pipeline_http_error(result: PipelineResult) -> HTTPException:
                 "code": "BPJS_AI_UNAVAILABLE",
                 "engine": "ornith",
                 "env": ["LLM_BPJS_AI_BASE_URL", "LLM_HEALTH_AI_BASE_URL", "LLM_BPJS_AI_MODEL"],
+            }
+        )
+    elif kind == "skck_ai_unavailable":
+        extra.update(
+            {
+                "code": "SKCK_AI_UNAVAILABLE",
+                "engine": "ornith",
+                "env": ["LLM_SKCK_AI_BASE_URL", "LLM_HEALTH_AI_BASE_URL", "LLM_SKCK_AI_MODEL"],
             }
         )
     elif kind == "iuran_ai_unavailable":

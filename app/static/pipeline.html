@@ -470,6 +470,10 @@
       return (docType || "").trim() === "vaksinasi_3";
     }
 
+    function isSkckProfile(docType) {
+      return (docType || "").trim() === "skck";
+    }
+
     function isMutasiProfile(docType) {
       return (docType || "").trim() === "mutasi";
     }
@@ -495,11 +499,12 @@
       const vaksin3 = isVaksin3Profile(docInput.value);
       const mutasi = isMutasiProfile(docInput.value);
       const health = isHealthLetterProfile(docInput.value);
+      const skck = isSkckProfile(docInput.value);
       const bankDoc = isBankDocProfile(docInput.value);
-      const special = foto || cv || npwp || pemadanan || rekening || bpjs || iuran || vaksin1 || vaksin2 || vaksin3 || health;
+      const special = foto || cv || npwp || pemadanan || rekening || bpjs || iuran || vaksin1 || vaksin2 || vaksin3 || health || skck;
       if (healthAiHint) healthAiHint.style.display = health ? "" : "none";
       document.querySelectorAll('input[name="ocrMode"]').forEach((el) => {
-        el.disabled = health || npwp || pemadanan || bpjs || iuran || vaksin1 || vaksin2 || vaksin3;
+        el.disabled = health || skck || npwp || pemadanan || bpjs || iuran || vaksin1 || vaksin2 || vaksin3;
       });
       ocrSection.classList.toggle("hidden-for-foto", special);
       panelOcr.classList.toggle("hidden-for-foto", special);
@@ -522,7 +527,7 @@
       stPrep.style.display = special ? "none" : "";
       stOcr.style.display = special ? "none" : "";
       stVal.style.display = special ? "none" : "";
-      stImg.style.display = foto || npwp || pemadanan || rekening || bpjs || iuran || vaksin1 || vaksin2 || vaksin3 || health ? "" : "none";
+      stImg.style.display = foto || npwp || pemadanan || rekening || bpjs || iuran || vaksin1 || vaksin2 || vaksin3 || health || skck ? "" : "none";
       stIngest.style.display = cv ? "" : "none";
       stCvSearch.style.display = cv ? "" : "none";
       if (cv) {
@@ -551,6 +556,15 @@
         pipelineHint.textContent =
           "rekening: AI Ornith wajib. Nama boleh sebagian atau tersensor (Deva / Dxxa untuk Deva Apriana). Bank wajib cocok.";
         previewTitle.textContent = "Gambar rekening";
+        jsonTitle.textContent = "JSON validasi (mentah)";
+      } else if (skck) {
+        fileLabel.textContent = "Gambar SKCK";
+        fileInputEl.accept = "image/*";
+        expectedLabel.textContent = "Nama pemohon (opsional)";
+        expectedInputEl.placeholder = "Nama di SKCK — divalidasi oleh AI.";
+        pipelineHint.textContent =
+          "skck: AI Ornith wajib. Harus SKCK, nama cocok jika diisi, dan tanggal Sampai dengan terbaca serta belum lewat.";
+        previewTitle.textContent = "Gambar SKCK";
         jsonTitle.textContent = "JSON validasi (mentah)";
       } else if (health) {
         fileLabel.textContent = "Gambar surat keterangan kesehatan";

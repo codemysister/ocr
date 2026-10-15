@@ -459,6 +459,70 @@ def test_skck_expiry_must_not_be_past() -> None:
     assert expired_doc["error_message"] == "SKCK sudah kadaluarsa."
 
 
+def test_skck_ai_expiry_and_name() -> None:
+    from datetime import date
+
+    from systems.validation.skck_ai import skck_validation_from_extraction
+    from systems.validation.user_errors import attach_user_errors
+
+    today = date(2026, 10, 15)
+
+    def codes(parsed, name="Nur Holifah"):
+        detail = attach_user_errors(
+            skck_validation_from_extraction(parsed, expected_name=name, today=today)
+        )
+        return detail["document_matched"], detail.get("error_code")
+
+    ok, code = codes(
+        {
+            "is_skck": True,
+            "holder_name": "NUR HOLIFAH",
+            "valid_from": "2026-05-20",
+            "valid_until": "2026-11-20",
+            "notes": "SKCK",
+        }
+    )
+    assert ok is True and code is None
+
+    ok, code = codes(
+        {
+            "is_skck": True,
+            "holder_name": "NUR HOLIFAH",
+            "valid_from": "2026-05-20",
+            "valid_until": "2026-05-20",
+        }
+    )
+    assert ok is False and code == "skck.expired"
+
+    ok, code = codes(
+        {"is_skck": True, "holder_name": "NUR HOLIFAH", "valid_from": "2026-05-20", "valid_until": ""}
+    )
+    assert ok is False and code == "skck.expiry_missing"
+
+    ok, code = codes(
+        {
+            "is_skck": True,
+            "holder_name": "NUR HOLIFAH",
+            "valid_from": "2026-12-01",
+            "valid_until": "2027-06-01",
+        }
+    )
+    assert ok is False and code == "skck.not_yet_valid"
+
+    ok, code = codes({"is_skck": False, "holder_name": "NUR HOLIFAH", "notes": "KTP"})
+    assert ok is False and code == "skck.wrong_document"
+
+    ok, code = codes(
+        {
+            "is_skck": True,
+            "holder_name": "BUDI SANTOSO",
+            "valid_from": "2026-05-20",
+            "valid_until": "2026-11-20",
+        }
+    )
+    assert ok is False and code == "skck.name_mismatch"
+
+
 _KESANGGUPAN_BODY = """
 SURAT PERNYATAAN KESANGGUPAN
 MENANGGUNG BIAYA BPJS KESEHATAN
@@ -2232,6 +2296,7 @@ if __name__ == "__main__":
     test_kk_nik_ocr_confusable_and_one_digit()
     test_rekening_requires_name_and_visible_account()
     test_skck_expiry_must_not_be_past()
+    test_skck_ai_expiry_and_name()
     test_bpjs_kesanggupan_requires_meterai()
     test_bpjs_kesanggupan_red_meterai_on_dataset_images()
     test_keterangan_kesehatan_sehat_and_expiry()

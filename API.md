@@ -129,7 +129,7 @@ String yang dikirim klien untuk menentukan **profil validasi**. Server menormali
 | `kk` | Kartu Keluarga | OCR + keyword fuzzy |
 | `rekening` | Rekening | **Ornith AI** — nama boleh sebagian atau tersensor |
 | `mutasi` | Mutasi | OCR + keyword fuzzy |
-| `skck` | SKCK | OCR + keyword fuzzy |
+| `skck` | SKCK | **Ornith AI** — SKCK, nama, tanggal Sampai dengan belum lewat |
 | `bpjs` | BPJS Kesehatan (KIS) | **Ornith AI** — nama boleh terpotong, NIK filename bisa menyelamatkan |
 | `bpjs_tk` | BPJS Ketenagakerjaan | OCR + keyword AND/OR + identitas |
 | `bpjs_kesanggupan` | Kesanggupan BPJS Kesehatan | OCR + keyword AND/OR + identitas |
@@ -438,7 +438,7 @@ flowchart TD
 | KK | `kk`, `kartu keluarga` | Opsional | ✅ | Keyword KK ≥70%; nama bisa dari baris tabel anggota |
 | Rekening | `rekening`, `rekening tabungan` | Opsional | ❌ (AI vision) | **Ornith** — bukti tabungan, `expected_bank` wajib; nama dan nomor rekening keduanya cocok bila keduanya diisi |
 | Mutasi | `mutasi`, `e-statement` | Tidak dipakai | ✅ | Ada `tabungan` **dan** `e-statement`; `expected_bank` + `expected_account` wajib |
-| SKCK | `skck` | Opsional | ✅ | Ada `skck` / `kepolisian` |
+| SKCK | `skck` | Opsional | ❌ (AI vision) | **Ornith** — harus SKCK, nama cocok jika diisi, tanggal Sampai dengan terbaca dan belum lewat |
 | BPJS KIS | `bpjs`, `bpjs kesehatan`, `kartu indonesia sehat` | **Disarankan wajib** | ❌ (AI vision) | **Ornith** — KIS, nama boleh terpotong, NIK filename bisa lolos |
 | BPJS TK | `bpjs_tk`, `bpjs ketenagakerjaan` | **Disarankan wajib** | ✅ | Keyword kartu TK ≥70% **dan** identitas (jika nama diisi) |
 | Kesanggupan BPJS | `bpjs_kesanggupan`, `kesanggupan bpjs` | **Disarankan wajib** | ✅ | Surat kesanggupan ≥70%, **materai**, **dan** identitas (jika nama diisi) |
@@ -623,7 +623,27 @@ curl -X POST "https://checkinpro-ocr.web.id/api/v1/pipeline" \
 
 **Alias:** `surat keterangan catatan kepolisian`
 
-**Keyword:** `skck`, `kepolisian`
+**OCR:** **Ornith AI**. Bukan Paddle. Respons: `ocr_mode: "ornith"`, `ocr.mode: "ornith_skck_ai"`.
+
+**Validasi:**
+
+| Gate | Keterangan |
+|------|------------|
+| Jenis dokumen | Harus SKCK / Surat Keterangan Catatan Kepolisian |
+| `identity_pass` | Jika `expected_name` diisi — fuzzy nama ≥ 65, atau NIK 16 digit di surat sama dengan nama file |
+| `skck_expiry_pass` | Tanggal **Sampai dengan** terbaca dan belum lewat. Tanggal **Berlaku untuk** tidak boleh di masa depan |
+
+**Kode error validasi (HTTP 200, `document_matched: false`):**
+
+| `error_code` | Arti |
+|--------------|------|
+| `skck.wrong_document` | Bukan SKCK |
+| `skck.name_mismatch` | Nama pada SKCK tidak cocok |
+| `skck.expiry_missing` | Tanggal Sampai dengan tidak terbaca |
+| `skck.expired` | SKCK sudah kadaluarsa |
+| `skck.not_yet_valid` | Tanggal Berlaku untuk masih di masa depan |
+
+Gagal AI → HTTP **503** `pipeline.skck_ai_unavailable`.
 
 ```bash
 curl -X POST "https://checkinpro-ocr.web.id/api/v1/pipeline" \
@@ -1865,6 +1885,7 @@ Daftar lengkap kode per dokumen ada di `GET /systems/validation/api/v1/error-cat
 | 503 | Ornith pemadanan NPWP gagal | `pipeline.pemadanan_npwp_ai_unavailable` | AI pemadanan NPWP tidak merespons. Coba lagi nanti. |
 | 503 | Ornith BPJS Kesehatan gagal | `pipeline.bpjs_ai_unavailable` | AI BPJS Kesehatan tidak merespons. Coba lagi nanti. |
 | 503 | Ornith Info Iuran gagal | `pipeline.iuran_ai_unavailable` | AI Info Iuran tidak merespons. Coba lagi nanti. |
+| 503 | Ornith SKCK gagal | `pipeline.skck_ai_unavailable` | AI SKCK tidak merespons. Coba lagi nanti. |
 | 503 | Ornith vaksinasi dosis 1 gagal | `pipeline.vaksinasi_1_ai_unavailable` | AI vaksinasi dosis 1 tidak merespons. Coba lagi nanti. |
 | 503 | Ornith vaksinasi dosis 2 gagal | `pipeline.vaksinasi_2_ai_unavailable` | AI vaksinasi dosis 2 tidak merespons. Coba lagi nanti. |
 | 503 | Ornith vaksinasi booster gagal | `pipeline.vaksinasi_3_ai_unavailable` | AI vaksinasi booster tidak merespons. Coba lagi nanti. |
