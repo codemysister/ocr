@@ -780,14 +780,14 @@ def test_pipeline_health_letter_skips_paddle_uses_ornith() -> None:
             },
             "validation": {
                 "issued_date": "2026-06-04",
-                "synthetic_ocr": (
-                    "SURAT KETERANGAN KESEHATAN\nDokter: dr. A\n"
-                    "Nama: ANGGUN RAMADHANI\n"
-                    "Berdasarkan hasil pemeriksaan, dinyatakan SEHAT.\n"
-                    "Bekasi, 04 Juni 2026\nDokter pemeriksa\n"
-                ),
+                "health_exam_date": "2026-06-04",
+                "document_matched": True,
+                "document_type_pass": True,
+                "issuer_pass": True,
+                "issuer_type": "klinik",
                 "health_status_pass": True,
                 "health_expiry_pass": True,
+                "identity_pass": True,
             },
             "llm": {"model": "ornith-1.5-9b", "base_url": "http://172.21.13.26:8080/v1"},
             "raw_content": "{}",
@@ -823,6 +823,35 @@ def test_pipeline_health_letter_skips_paddle_uses_ornith() -> None:
         pr.analyze_health_letter_image = real_ai
         pr._run_ocr_inner = real_ocr
 
+
+
+def test_health_letter_issuer_rejects_bidan() -> None:
+    from systems.validation.keterangan_kesehatan_ai import _issuer_type, overlay_health_ai_on_validation
+    from systems.validation.user_errors import infer_error_cases
+
+    assert _issuer_type({"clinic_name": "RSUD Bekasi", "issuer_type": "lain"}) == "rumah_sakit"
+    assert _issuer_type({"clinic_name": "Klinik Sehat", "issuer_type": "lain"}) == "klinik"
+    assert _issuer_type({"clinic_name": "Puskesmas Sukmajaya"}) == "puskesmas"
+    assert _issuer_type({"clinic_name": "Klinik Bidan Melati", "issuer_type": "klinik"}) == "bidan"
+
+    overlaid = overlay_health_ai_on_validation(
+        {
+            "document_profile_id": "keterangan_kesehatan",
+            "document_type_pass": True,
+            "document_matched": True,
+            "health_status_pass": True,
+            "health_expiry_pass": True,
+            "identity_pass": True,
+            "explanation": {"primary_blockers": []},
+        },
+        {
+            "extraction": {"is_health_certificate": True, "issued_date": "2026-06-04"},
+            "validation": {"issuer_type": "bidan", "issuer_pass": False, "issued_date": "2026-06-04"},
+        },
+    )
+    assert overlaid["document_matched"] is False
+    codes = [item["code"] for item in infer_error_cases(overlaid)]
+    assert "keterangan_kesehatan.wrong_issuer" in codes
 
 
 def test_keterangan_kesehatan_reads_ocr_dates() -> None:
@@ -2206,6 +2235,7 @@ if __name__ == "__main__":
     test_bpjs_kesanggupan_requires_meterai()
     test_bpjs_kesanggupan_red_meterai_on_dataset_images()
     test_keterangan_kesehatan_sehat_and_expiry()
+    test_health_letter_issuer_rejects_bidan()
     test_keterangan_kesehatan_reads_ocr_dates()
     test_user_error_messages_per_case()
     test_jkn_extracts_aktif_status_without_blocking()

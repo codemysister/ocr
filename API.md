@@ -453,7 +453,7 @@ flowchart TD
 | Formulir lamaran | `formulir_lamaran`, `formulir lamaran pekerjaan` | Opsional | ✅ | Keyword lamaran pekerjaan ≥70% |
 | Surat lamaran | `surat_lamaran`, `surat lamaran` | Opsional | ✅ | Keyword surat lamaran ≥70% |
 | Pemadanan NPWP | `pemadanan_npwp`, `pemadanan npwp` | Opsional | ❌ (AI vision) | **Ornith** — kartu NPWP 16 digit atau Ikhtisar Profil; format lama 15 digit tidak lolos |
-| Surat keterangan kesehatan | `keterangan_kesehatan`, `keterangan kesehatan` | Opsional | ✅ | Keyword ≥70%, nama (jika diisi), tertera SEHAT, tanggal dari dokumen (kadaluarsa hanya jika surat menulis sampai/durasi) |
+| Surat keterangan kesehatan | `keterangan_kesehatan`, `keterangan kesehatan` | Opsional | ❌ (AI vision) | **Ornith** — rumah sakit, klinik, atau puskesmas (bukan bidan); tertulis SEHAT; tanggal pemeriksaan terbaca |
 | CV | `cv`, `resume`, `curriculum vitae` | Disarankan (dimensi nama) | ❌ (match struktural) | **PDF/DOCX/MD/gambar** → ingest + match nama/pendidikan/pengalaman |
 | Foto Profil | `foto_profile`, `pas foto` | Tidak dipakai | ❌ (AI vision) | **JPEG/PNG/WebP** — pas foto **dan** latar biru (Ornith) |
 
@@ -644,10 +644,10 @@ curl -X POST "https://checkinpro-ocr.web.id/api/v1/pipeline" \
 
 | Gate | Keterangan |
 |------|------------|
-| Jenis dokumen | Harus surat keterangan kesehatan / MCU (bukan surat buta warna, vaksin, dll.) |
+| Jenis dokumen | Surat keterangan kesehatan dari **rumah sakit, klinik, atau puskesmas**. Surat **bidan** ditolak |
 | `identity_pass` | Jika `expected_name` diisi — fuzzy nama ≥ 65 |
-| `health_status_pass` | Kesimpulan **SEHAT** |
-| `health_expiry_pass` | Tanggal dibuat terbaca; kadaluarsa hanya jika surat menulis masa berlaku / sampai tanggal |
+| `health_status_pass` | Surat harus menyatakan kondisi **SEHAT** |
+| `health_expiry_pass` | Tanggal pemeriksaan terbaca dan tidak di masa depan; kadaluarsa hanya jika surat menulis masa berlaku |
 | `issued_date` | ISO `YYYY-MM-DD` + `issued_date_display` (Bahasa Indonesia), mis. `4 Juni 2026` |
 
 **Kode error validasi (HTTP 200, `document_matched: false`):**
@@ -655,6 +655,7 @@ curl -X POST "https://checkinpro-ocr.web.id/api/v1/pipeline" \
 | `error_code` | `error_message` (ringkas) |
 |--------------|---------------------------|
 | `keterangan_kesehatan.wrong_document` | Bukan surat keterangan kesehatan yang valid |
+| `keterangan_kesehatan.wrong_issuer` | Surat harus dari rumah sakit, klinik, atau puskesmas, bukan bidan |
 | `keterangan_kesehatan.name_mismatch` | Nama pada surat tidak cocok |
 | `keterangan_kesehatan.not_healthy` | Tidak dinyatakan SEHAT |
 | `keterangan_kesehatan.date_missing` | Tanggal cek kesehatan tidak terbaca |

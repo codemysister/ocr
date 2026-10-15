@@ -268,6 +268,7 @@
             <option value="bpjs_kesanggupan">Kesanggupan BPJS Kesehatan</option>
             <option value="jkn">JKN (Info Peserta)</option>
             <option value="iuran">Iuran JKN (Info Iuran)</option>
+            <option value="keterangan_kesehatan">Surat keterangan sehat</option>
             <option value="vaksinasi_1">Vaksinasi COVID-19 (Dosis 1)</option>
             <option value="vaksinasi_2">Vaksinasi COVID-19 (Dosis 2)</option>
             <option value="vaksinasi_3">Vaksinasi COVID-19 (Booster)</option>
@@ -310,7 +311,7 @@
         <label><input type="radio" name="ocrMode" value="vl" /> PaddleOCR-VL-1.6</label>
       </div>
       <p class="hint" id="healthAiHint" style="display:none;margin-top:0.5rem;">
-        Surat keterangan kesehatan memakai Ornith AI (<code>172.21.13.26:8080</code>) sebagai OCR wajib — bukan PP-OCR/Paddle.
+        Surat keterangan sehat memakai AI. Penerbit harus rumah sakit, klinik, atau puskesmas (bukan bidan), tertulis sehat, dan tanggal pemeriksaan terbaca.
       </p>
       <div id="tierRow" class="row two" style="display: none; margin-top: 0.75rem;">
         <div>
@@ -495,7 +496,7 @@
       const mutasi = isMutasiProfile(docInput.value);
       const health = isHealthLetterProfile(docInput.value);
       const bankDoc = isBankDocProfile(docInput.value);
-      const special = foto || cv || npwp || pemadanan || rekening || bpjs || iuran || vaksin1 || vaksin2 || vaksin3;
+      const special = foto || cv || npwp || pemadanan || rekening || bpjs || iuran || vaksin1 || vaksin2 || vaksin3 || health;
       if (healthAiHint) healthAiHint.style.display = health ? "" : "none";
       document.querySelectorAll('input[name="ocrMode"]').forEach((el) => {
         el.disabled = health || npwp || pemadanan || bpjs || iuran || vaksin1 || vaksin2 || vaksin3;
@@ -521,7 +522,7 @@
       stPrep.style.display = special ? "none" : "";
       stOcr.style.display = special ? "none" : "";
       stVal.style.display = special ? "none" : "";
-      stImg.style.display = foto || npwp || pemadanan || rekening || bpjs || iuran || vaksin1 || vaksin2 || vaksin3 ? "" : "none";
+      stImg.style.display = foto || npwp || pemadanan || rekening || bpjs || iuran || vaksin1 || vaksin2 || vaksin3 || health ? "" : "none";
       stIngest.style.display = cv ? "" : "none";
       stCvSearch.style.display = cv ? "" : "none";
       if (cv) {
@@ -557,7 +558,7 @@
         expectedLabel.textContent = "Nama referensi";
         expectedInputEl.placeholder = "Nama di surat — divalidasi oleh Ornith AI.";
         pipelineHint.textContent =
-          "keterangan_kesehatan: OCR wajib Ornith AI (bukan Paddle). Ekstraksi + validasi SEHAT dan tanggal dibuat.";
+          "keterangan_kesehatan: AI Ornith wajib. Surat rumah sakit, klinik, atau puskesmas (bukan bidan), tertulis SEHAT, dan tanggal pemeriksaan terbaca.";
         previewTitle.textContent = "Gambar surat";
         jsonTitle.textContent = "JSON validasi (mentah)";
       } else if (foto) {

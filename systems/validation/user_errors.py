@@ -94,6 +94,7 @@ ERROR_CATALOG: dict[str, str] = {
     "surat_lamaran.wrong_document": "Dokumen ini bukan surat lamaran yang valid.",
     "surat_lamaran.name_mismatch": "Nama pada surat lamaran tidak cocok.",
     "keterangan_kesehatan.wrong_document": "Dokumen ini bukan surat keterangan kesehatan yang valid.",
+    "keterangan_kesehatan.wrong_issuer": "Surat harus dari rumah sakit, klinik, atau puskesmas, bukan bidan.",
     "keterangan_kesehatan.name_mismatch": "Nama pada surat keterangan kesehatan tidak cocok.",
     "keterangan_kesehatan.not_healthy": "Surat tidak menyatakan bahwa yang bersangkutan dalam kondisi sehat.",
     "keterangan_kesehatan.date_missing": "Tanggal cek kesehatan tidak terbaca.",
@@ -346,6 +347,11 @@ def infer_error_cases(validation: dict[str, Any]) -> list[dict[str, str]]:
             add("skck.not_yet_valid")
         else:
             add("skck.expired")
+
+    if "HEALTH_ISSUER" in blockers or (
+        profile == "keterangan_kesehatan" and validation.get("issuer_pass") is False
+    ):
+        add("keterangan_kesehatan.wrong_issuer")
 
     if "HEALTH_STATUS" in blockers or (
         profile == "keterangan_kesehatan" and validation.get("health_status_pass") is False

@@ -32,7 +32,10 @@ Kembalikan HANYA satu objek JSON (tanpa markdown) dengan kunci persis:
 - is_health_certificate (boolean): true hanya jika ini surat keterangan sehat/dokter/MCU, bukan vaksin/KTP
 - holder_name (string): nama pasien/yang diperiksa
 - identity_number (string): NIK jika ada (hanya digit), else ""
-- clinic_name (string): nama klinik/puskesmas/rumah sakit
+- issuer_type (string): salah satu "rumah_sakit", "klinik", "puskesmas", "bidan", "lain".
+  "bidan" jika surat dari bidan atau praktik bidan, meskipun ada kata klinik.
+  "lain" jika penerbit tidak terbaca.
+- clinic_name (string): nama rumah sakit, klinik, atau puskesmas
 - city (string): kota/tempat surat diterbitkan
 - doctor_name (string): nama dokter pemeriksa
 - health_conclusion (string): salah satu "sehat", "tidak_sehat", "tidak_jelas"
@@ -136,10 +139,10 @@ def _parse_health_json(text: str) -> dict[str, Any] | None:
 def health_letter_user_prompt(*, expected_name: str = "", expected_nik: str = "") -> str:
     lines = [
         "Baca gambar surat keterangan kesehatan ini.",
-        "Ambil nama, kesimpulan sehat/tidak, tanggal dibuat (tanggal pemeriksaan atau kaki surat), "
+        "Surat harus dari rumah sakit, klinik, atau puskesmas. Surat bidan tidak lolos.",
+        "Ambil nama, kesimpulan sehat/tidak, tanggal pemeriksaan atau tanggal surat, "
         "dan masa berlaku jika ada.",
-        "Validasi: apakah ini surat kesehatan, apakah nama cocok dengan referensi, "
-        "apakah dinyatakan SEHAT, dan apakah tanggal dibuat terbaca.",
+        "Validasi: penerbit, nama, tertulis SEHAT, dan tanggal pemeriksaan terbaca.",
     ]
     if expected_name.strip():
         lines.append(f"Nama referensi pemegang: {expected_name.strip()}")
@@ -266,6 +269,29 @@ def _synthetic_ocr(parsed: dict[str, Any]) -> str:
     return "\n".join(p for p in parts if p)
 
 
+def _issuer_type(parsed: dict[str, Any]) -> str:
+    explicit = str(parsed.get("issuer_type") or "").strip().casefold().replace(" ", "_")
+    blob = " ".join(
+        str(parsed.get(key) or "")
+        for key in ("clinic_name", "document_type_label", "doctor_name", "notes", "issuer_type")
+    )
+    compact = re.sub(r"[^a-z]", "", blob.casefold())
+    if "bidan" in compact or explicit == "bidan":
+        return "bidan"
+    if "puskesmas" in compact or explicit == "puskesmas":
+        return "puskesmas"
+    if any(mark in compact for mark in ("rumahsakit", "rsud", "rsu", "hospital")) or explicit in {
+        "rumah_sakit",
+        "rs",
+    }:
+        return "rumah_sakit"
+    if "klinik" in compact or "praktikdokter" in compact or explicit == "klinik":
+        return "klinik"
+    if explicit in {"rumah_sakit", "klinik", "puskesmas"}:
+        return explicit
+    return "lain"
+
+
 def _normalize_conclusion(value: Any) -> str:
     raw = str(value or "").strip().casefold().replace(" ", "_")
     if raw in {"sehat", "healthy", "fit"}:
@@ -346,6 +372,7 @@ def analyze_health_letter_image(
         out["error"] = "invalid_json"
         return out
 
+    parsed["issuer_type"] = _issuer_type(parsed)
     parsed["health_conclusion"] = _normalize_conclusion(parsed.get("health_conclusion"))
     parsed["issued_date"] = _iso_date(parsed.get("issued_date"))
     parsed["valid_until"] = _iso_date(parsed.get("valid_until"))
@@ -392,20 +419,29 @@ def analyze_health_letter_image(
     expiry_pass = False
     if exam:
         expiry_pass = True
+        try:
+            exam_day = date.fromisoformat(str(exam)[:10])
+        except ValueError:
+            exam_day = None
+        if exam_day and exam_day > as_of:
+            expiry_pass = False
         if until:
             try:
                 expiry_pass = date.fromisoformat(str(until)[:10]) >= as_of
             except ValueError:
                 expiry_pass = True
 
-    type_pass = is_health
-    matched = type_pass and health_status_pass and expiry_pass
+    issuer = str(parsed.get("issuer_type") or "lain")
+    issuer_pass = issuer in {"rumah_sakit", "klinik", "puskesmas"}
+    matched = is_health and issuer_pass and health_status_pass and expiry_pass
     if identity_pass is not None:
         matched = matched and identity_pass
 
     reasons: list[str] = []
-    if not type_pass:
+    if not is_health:
         reasons.append("Bukan surat keterangan kesehatan.")
+    elif not issuer_pass:
+        reasons.append("Surat harus dari rumah sakit, klinik, atau puskesmas, bukan bidan.")
     if identity_pass is False:
         reasons.append("Nama pada surat tidak cocok dengan referensi.")
     if not health_status_pass:
@@ -417,8 +453,38 @@ def analyze_health_letter_image(
     if not reasons:
         reasons.append("Surat keterangan kesehatan lolos: SEHAT, nama cocok, tanggal dibuat terbaca.")
 
+    blockers: list[str] = []
+    if not is_health:
+        blockers.append("DOCUMENT_TYPE")
+    if not issuer_pass:
+        blockers.append("HEALTH_ISSUER")
+    if not health_status_pass:
+        blockers.append("HEALTH_STATUS")
+    if not expiry_pass:
+        blockers.append("HEALTH_CHECK_EXPIRY")
+    if identity_pass is False:
+        blockers.append("IDENTITY")
+    if not exam:
+        expiry_reason = "Tanggal pemeriksaan tidak terbaca."
+    elif not expiry_pass:
+        expiry_reason = "Surat kesehatan kadaluarsa."
+    else:
+        expiry_reason = ""
+
     out["validation"] = {
-        "document_type_pass": type_pass,
+        "document_profile_id": "keterangan_kesehatan",
+        "validation_engine": "ornith",
+        "document_type_pass": is_health,
+        "issuer_type": issuer,
+        "issuer_pass": issuer_pass,
+        "holder_name": str(parsed.get("holder_name") or ""),
+        "health_exam_date": exam,
+        "health_check": {
+            "exam_date": exam,
+            "valid_until": until,
+            "reason": expiry_reason,
+        },
+        "explanation": {"primary_blockers": blockers},
         "identity_pass": identity_pass,
         "identity": identity,
         "health_status_pass": health_status_pass,
@@ -452,6 +518,9 @@ def overlay_health_ai_on_validation(validation: dict[str, Any], ai_out: dict[str
     out["health_ai"] = {"llm": ai_out.get("llm"), "extraction": ext}
     exam = val.get("issued_date") or ext.get("issued_date") or out.get("health_exam_date")
     until = val.get("valid_until") or ext.get("valid_until") or out.get("health_valid_until")
+    if val.get("issuer_type"):
+        out["issuer_type"] = val.get("issuer_type")
+        out["issuer_pass"] = val.get("issuer_pass")
     if exam:
         out["health_exam_date"] = exam
         out["issued_date"] = exam
@@ -462,7 +531,12 @@ def overlay_health_ai_on_validation(validation: dict[str, Any], ai_out: dict[str
             hc["valid_until"] = until
             out["health_valid_until"] = until
         out["health_check"] = hc
-        if out.get("health_expiry_pass") is False and not until:
+        exam_day = None
+        try:
+            exam_day = date.fromisoformat(str(exam)[:10])
+        except ValueError:
+            exam_day = None
+        if out.get("health_expiry_pass") is False and not until and exam_day and exam_day <= date.today():
             out["health_expiry_pass"] = True
             explanation = dict(out.get("explanation") or {})
             blockers = [
@@ -481,6 +555,14 @@ def overlay_health_ai_on_validation(validation: dict[str, Any], ai_out: dict[str
     if ext.get("is_health_certificate") is False:
         out["document_type_pass"] = False
         out["document_matched"] = False
+    if val.get("issuer_pass") is False:
+        out["document_matched"] = False
+        explanation = dict(out.get("explanation") or {})
+        blockers = list(explanation.get("primary_blockers") or [])
+        if "HEALTH_ISSUER" not in blockers:
+            blockers.append("HEALTH_ISSUER")
+        explanation["primary_blockers"] = blockers
+        out["explanation"] = explanation
     return out
 
 
