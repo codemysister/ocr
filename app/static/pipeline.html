@@ -235,6 +235,7 @@
       Untuk <strong>pemadanan_npwp</strong>: AI (Ornith) — kartu NPWP 16 digit atau Ikhtisar Profil DJP.
       Untuk <strong>rekening</strong>: AI (Ornith) — nama boleh sebagian atau tersensor.
       Untuk <strong>bpjs</strong>: AI (Ornith) — nama boleh terpotong; NIK di nama file bisa mencocokkan kartu.
+      Untuk <strong>iuran</strong>: AI (Ornith) — layar Info Iuran; modal tanpa nama tetap lolos.
       Untuk <strong>vaksinasi_1</strong>: AI (Ornith) — dosis pertama; tahap 2 yang ikut tercantum tidak menggagalkan.
       Untuk <strong>vaksinasi_2</strong>: AI (Ornith) — dosis kedua; tahap 1 yang ikut tercantum tidak menggagalkan.
       Untuk <strong>vaksinasi_3</strong>: AI (Ornith) — booster; vaksin primer 2 tidak dihitung booster.
@@ -452,6 +453,10 @@
       return (docType || "").trim() === "bpjs";
     }
 
+    function isIuranProfile(docType) {
+      return (docType || "").trim() === "iuran";
+    }
+
     function isVaksin1Profile(docType) {
       return (docType || "").trim() === "vaksinasi_1";
     }
@@ -483,16 +488,17 @@
       const cv = isCvProfile(docInput.value);
       const rekening = isRekeningProfile(docInput.value);
       const bpjs = isBpjsProfile(docInput.value);
+      const iuran = isIuranProfile(docInput.value);
       const vaksin1 = isVaksin1Profile(docInput.value);
       const vaksin2 = isVaksin2Profile(docInput.value);
       const vaksin3 = isVaksin3Profile(docInput.value);
       const mutasi = isMutasiProfile(docInput.value);
       const health = isHealthLetterProfile(docInput.value);
       const bankDoc = isBankDocProfile(docInput.value);
-      const special = foto || cv || npwp || pemadanan || rekening || bpjs || vaksin1 || vaksin2 || vaksin3;
+      const special = foto || cv || npwp || pemadanan || rekening || bpjs || iuran || vaksin1 || vaksin2 || vaksin3;
       if (healthAiHint) healthAiHint.style.display = health ? "" : "none";
       document.querySelectorAll('input[name="ocrMode"]').forEach((el) => {
-        el.disabled = health || npwp || pemadanan || bpjs || vaksin1 || vaksin2 || vaksin3;
+        el.disabled = health || npwp || pemadanan || bpjs || iuran || vaksin1 || vaksin2 || vaksin3;
       });
       ocrSection.classList.toggle("hidden-for-foto", special);
       panelOcr.classList.toggle("hidden-for-foto", special);
@@ -515,7 +521,7 @@
       stPrep.style.display = special ? "none" : "";
       stOcr.style.display = special ? "none" : "";
       stVal.style.display = special ? "none" : "";
-      stImg.style.display = foto || npwp || pemadanan || rekening || bpjs || vaksin1 || vaksin2 || vaksin3 ? "" : "none";
+      stImg.style.display = foto || npwp || pemadanan || rekening || bpjs || iuran || vaksin1 || vaksin2 || vaksin3 ? "" : "none";
       stIngest.style.display = cv ? "" : "none";
       stCvSearch.style.display = cv ? "" : "none";
       if (cv) {
@@ -587,6 +593,15 @@
         pipelineHint.textContent =
           "vaksinasi_1: AI Ornith wajib. Lolos jika riwayat memuat dosis pertama, meski tahap 2 juga tercantum. NIK di nama file yang cocok tetap lolos.";
         previewTitle.textContent = "Gambar kartu vaksin";
+        jsonTitle.textContent = "Hasil validasi";
+      } else if (iuran) {
+        fileLabel.textContent = "Gambar layar Info Iuran";
+        fileInputEl.accept = "image/*";
+        expectedLabel.textContent = "Nama peserta (opsional)";
+        expectedInputEl.placeholder = "Nama boleh terpotong. Modal tanpa nama tetap lolos.";
+        pipelineHint.textContent =
+          "iuran: AI Ornith wajib. Layar Info Iuran, bukan Info Peserta. Modal tanpa tagihan pribadi lolos meski nama tidak tampil. NIK di nama file yang cocok tetap lolos.";
+        previewTitle.textContent = "Gambar Info Iuran";
         jsonTitle.textContent = "Hasil validasi";
       } else if (bpjs) {
         fileLabel.textContent = "Gambar kartu BPJS Kesehatan";
@@ -858,7 +873,7 @@
         "</p>";
       html += "<p>" + esc((valData.explanation && valData.explanation.summary) || data.error_message || "") + "</p>";
       html += "<ul>";
-      html += "<li>Nama di kartu: " + esc(data.holder_name || valData.holder_name || "—") + "</li>";
+      html += "<li>Nama: " + esc(data.holder_name || valData.holder_name || "—") + "</li>";
       html += "<li>NIK: " + esc(data.nik || valData.nik || "—") + "</li>";
       html += "<li>Cocok identitas: " + esc(method || "—") + "</li>";
       html += "</ul>";
@@ -1233,7 +1248,7 @@
         return;
       }
 
-      if (isBpjsProfile(document_type)) {
+      if (isBpjsProfile(document_type) || isIuranProfile(document_type)) {
         stImg.classList.add("run");
         const fd = new FormData();
         fd.append("file", f);
@@ -1269,7 +1284,7 @@
             null,
             2,
           );
-          showPreviewFromBlob(f, "BPJS Kesehatan");
+          showPreviewFromBlob(f, isIuranProfile(document_type) ? "Info Iuran" : "BPJS Kesehatan");
           setStatus(valid ? "Selesai — VALID" : "Selesai — TIDAK VALID", valid ? "ok" : "error");
         } catch (e) {
           stImg.classList.remove("run");

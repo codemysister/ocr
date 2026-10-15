@@ -74,6 +74,7 @@ from systems.validation.npwp_ai import analyze_npwp_image
 from systems.validation.pemadanan_npwp_ai import analyze_pemadanan_npwp_image
 from systems.validation.rekening_ai import analyze_rekening_image
 from systems.validation.bpjs_ai import analyze_bpjs_image, parse_bpjs_name_from_filename
+from systems.validation.iuran_ai import analyze_iuran_image
 from systems.validation.vaksinasi_1_ai import analyze_vaksinasi_1_image
 from systems.validation.vaksinasi_2_ai import analyze_vaksinasi_2_image
 from systems.validation.vaksinasi_3_ai import analyze_vaksinasi_3_image
@@ -126,6 +127,7 @@ class PipelineResult:
             "pemadanan_npwp_ai_unavailable",
             "rekening_ai_unavailable",
             "bpjs_ai_unavailable",
+            "iuran_ai_unavailable",
             "vaksinasi_1_ai_unavailable",
             "vaksinasi_2_ai_unavailable",
             "vaksinasi_3_ai_unavailable",
@@ -728,6 +730,80 @@ def _run_pipeline_bytes_impl(
             "ocr": {
                 "success": True,
                 "mode": "ornith_bpjs_ai",
+                "model": llm_meta.get("model"),
+                "extraction": ai_out.get("extraction"),
+                "timing": {"total_wall_s": round(timing.ocr_s, 3)},
+            },
+            "validation": {
+                "document_profile_id": canonical_id,
+                "keywords_from_profile": keywords,
+                **validation_detail,
+            },
+            "verdict": validation_detail.get("verdict"),
+            "is_own_document": validation_detail.get("is_own_document"),
+            "document_type_current": validation_detail.get("document_type_current"),
+            "document_type_current_label": validation_detail.get("document_type_current_label"),
+            "error_code": validation_detail.get("error_code"),
+            "error_message": validation_detail.get("error_message"),
+            "error_cases": validation_detail.get("error_cases") or [],
+            "timing": timing.as_dict(),
+        }
+        timing.total_s = time.perf_counter() - t_total0
+        return PipelineResult(
+            ok=True,
+            payload=payload,
+            timing=timing,
+            document_matched=matched,
+        )
+
+    if canonical_id == "iuran":
+        expected_nik = parse_nik16_from_filename(filename) or ""
+        holder_ref = name_ref or parse_bpjs_name_from_filename(filename)
+        t_val0 = time.perf_counter()
+        try:
+            ai_out = analyze_iuran_image(
+                raw,
+                document_type=doc_type,
+                expected_name=holder_ref,
+                expected_nik=expected_nik,
+            )
+        except ValueError as e:
+            timing.total_s = time.perf_counter() - t_total0
+            return PipelineResult(ok=False, error=str(e), error_kind="preprocess_error", timing=timing)
+        except Exception as e:
+            timing.total_s = time.perf_counter() - t_total0
+            return PipelineResult(
+                ok=False, error=str(e), error_kind="iuran_ai_unavailable", timing=timing
+            )
+        timing.validation_s = time.perf_counter() - t_val0
+        llm_meta = ai_out.get("llm") if isinstance(ai_out.get("llm"), dict) else {}
+        if isinstance(llm_meta.get("latency_s"), (int, float)):
+            timing.ocr_s = float(llm_meta["latency_s"])
+        if ai_out.get("error") or not isinstance(ai_out.get("validation"), dict):
+            timing.total_s = time.perf_counter() - t_total0
+            return PipelineResult(
+                ok=False,
+                error=f"AI iuran gagal: {ai_out.get('error') or 'empty_extraction'}",
+                error_kind="iuran_ai_unavailable",
+                timing=timing,
+            )
+        validation_detail = ai_out["validation"]
+        matched = bool(validation_detail.get("document_matched"))
+        payload = {
+            "success": True,
+            "valid": matched,
+            "document_matched": matched,
+            "holder_name": validation_detail.get("holder_name"),
+            "nik": validation_detail.get("nik"),
+            "name_match_method": validation_detail.get("name_match_method"),
+            "ocr_mode": "ornith",
+            "ocr_engine": "ornith",
+            "pp_ocr_tier": None,
+            "validation_mode": "image",
+            "preprocess": {"skipped": True, "reason": "iuran_ai", **(ai_out.get("image_prepare") or {})},
+            "ocr": {
+                "success": True,
+                "mode": "ornith_iuran_ai",
                 "model": llm_meta.get("model"),
                 "extraction": ai_out.get("extraction"),
                 "timing": {"total_wall_s": round(timing.ocr_s, 3)},

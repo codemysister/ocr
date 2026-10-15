@@ -65,6 +65,7 @@ app = FastAPI(
         "`pemadanan_npwp` memakai Ornith AI; kartu NPWP 16 digit atau Ikhtisar Profil, nama boleh terpotong, NIK filename bisa lolos. "
         "`rekening` memakai Ornith AI; nama boleh sebagian atau tersensor. "
         "`bpjs` (Kartu Indonesia Sehat) memakai Ornith AI. "
+        "`iuran` memakai Ornith AI; modal tanpa tagihan pribadi lolos meski nama tidak tampil. "
         "`vaksinasi_1` memakai Ornith AI; dosis pertama tetap lolos bila tahap 2 juga tercantum. "
         "`vaksinasi_2` memakai Ornith AI; dosis kedua tetap lolos bila tahap 1 juga tercantum. "
         "`vaksinasi_3` memakai Ornith AI; booster tetap lolos bila tahap 1 atau 2 juga tercantum. "

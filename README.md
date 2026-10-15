@@ -61,8 +61,7 @@ Set `OCR_IMAGE=akunanda/ocr:latest` di `.env` jika ingin pull, bukan build.
 
 | Referensi | URL |
 |-----------|-----|
-| Spesifikasi lengkap | [API.md](./API.md) — endpoint, profil dokumen, error UI, env |
-| Checklist validasi per dokumen | [VALIDASI_DOKUMEN.md](./VALIDASI_DOKUMEN.md) — nama, NIK, bank, dll. per jenis file |
+| Spesifikasi lengkap | [API.md](./API.md) — endpoint, aturan validasi per dokumen, error UI, env |
 | Swagger (interaktif) | `/docs` |
 | Index JSON | `GET /api/v1` |
 | Katalog error | `GET /systems/validation/api/v1/error-catalog` |

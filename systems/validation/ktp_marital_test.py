@@ -1992,6 +1992,110 @@ def test_vaksinasi_1_ai_dose_and_name() -> None:
     assert other["error_code"] == "vaksinasi_1.name_mismatch"
 
 
+def test_iuran_ai_modal_name_and_nik() -> None:
+    from systems.validation.iuran_ai import iuran_validation_from_extraction
+
+    modal = iuran_validation_from_extraction(
+        {
+            "is_info_iuran": True,
+            "holder_name": "",
+            "name_displayed": False,
+            "modal_tanpa_tagihan": True,
+            "nik": "",
+            "confidence": 90,
+        },
+        expected_name="Aiga Tara Nasucha",
+        expected_nik="3216085009070001",
+    )
+    assert modal["document_matched"] is True
+    assert modal["name_match_method"] == "modal"
+
+    named = iuran_validation_from_extraction(
+        {
+            "is_info_iuran": True,
+            "holder_name": "ANGGUN RAMADHANI",
+            "name_displayed": True,
+            "modal_tanpa_tagihan": False,
+            "nik": "3275045610060008",
+            "confidence": 90,
+        },
+        expected_name="ANGGUN RAMADHANI",
+        expected_nik="3275045610060008",
+    )
+    assert named["document_matched"] is True
+
+    truncated = iuran_validation_from_extraction(
+        {
+            "is_info_iuran": True,
+            "holder_name": "SITI",
+            "name_displayed": True,
+            "modal_tanpa_tagihan": False,
+            "nik": "3212017010070005",
+            "confidence": 90,
+        },
+        expected_name="Tiara Putri",
+        expected_nik="3212017010070005",
+    )
+    assert truncated["document_matched"] is True
+    assert truncated["name_match_method"] == "nik"
+
+    other = iuran_validation_from_extraction(
+        {
+            "is_info_iuran": True,
+            "holder_name": "Budi Santoso",
+            "name_displayed": True,
+            "modal_tanpa_tagihan": False,
+            "nik": "",
+            "confidence": 80,
+        },
+        expected_name="Anggun Ramadhani",
+    )
+    assert other["document_matched"] is False
+    assert other["error_code"] == "iuran.name_mismatch"
+
+    peserta = iuran_validation_from_extraction(
+        {
+            "is_info_iuran": False,
+            "holder_name": "Anggun Ramadhani",
+            "name_displayed": True,
+            "modal_tanpa_tagihan": False,
+            "notes": "Ini layar Info Peserta.",
+            "confidence": 80,
+        },
+        expected_name="Anggun Ramadhani",
+    )
+    assert peserta["error_code"] == "iuran.wrong_document"
+
+    riwayat = iuran_validation_from_extraction(
+        {
+            "is_info_iuran": False,
+            "holder_name": "",
+            "name_displayed": False,
+            "modal_tanpa_tagihan": False,
+            "notes": "Info Riwayat Pembayaran. Peserta tidak memiliki riwayat pembayaran iuran.",
+            "confidence": 80,
+        },
+        expected_name="Muhammad Anwar",
+        expected_nik="3175040410060006",
+    )
+    assert riwayat["document_matched"] is True
+    assert riwayat["name_match_method"] == "modal"
+
+    pandawa = iuran_validation_from_extraction(
+        {
+            "is_info_iuran": False,
+            "holder_name": "RIXXX HAXXXX MAXXXX",
+            "name_displayed": True,
+            "modal_tanpa_tagihan": False,
+            "notes": "Chat Pandawa Nama Peserta Tagihan Status Pembayaran Lunas.",
+            "confidence": 80,
+        },
+        expected_name="Risky Haikal Mahtum",
+    )
+    assert pandawa["document_matched"] is True
+    assert pandawa["name_match_method"] == "masked"
+
+
 def test_bpjs_ai_truncated_name_and_nik() -> None:
     from systems.validation.bpjs_ai import (
         bpjs_validation_from_extraction,
@@ -2115,6 +2219,7 @@ if __name__ == "__main__":
     test_vaksinasi_1_ai_dose_and_name()
     test_bpjs_ai_truncated_name_and_nik()
     test_npwp_ai_format_lama_flag()
+    test_iuran_ai_modal_name_and_nik()
     test_pemadanan_npwp_ai_identity()
     test_portrait_ai_gates_profile_and_blue_only()
     print("ok")
