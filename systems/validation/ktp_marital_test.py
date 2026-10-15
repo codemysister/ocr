@@ -1492,6 +1492,73 @@ def test_rekening_ai_accepts_partial_and_masked_name() -> None:
     )
     assert glued["name_pass"] is True
 
+    glued_words = rekening_validation_from_extraction(
+        {**base, "holder_name": "Nayla andhrafitriyani", "account_number": "1560027773102"},
+        expected_name="Nayla andhra fitriyani",
+        expected_bank="mandiri",
+        expected_account="1560027773102",
+    )
+    assert glued_words["document_matched"] is True
+
+    missing_digits = rekening_validation_from_extraction(
+        {**base, "holder_name": "Nadia Afritiarani", "account_number": "166000778061"},
+        expected_name="Nadia Afritiarani",
+        expected_bank="mandiri",
+        expected_account="1660007778061",
+    )
+    assert missing_digits["account_pass"] is True
+    assert missing_digits["document_matched"] is True
+
+    two_missing = rekening_validation_from_extraction(
+        {**base, "holder_name": "NAYLA SAIDAH", "account_number": "16700132666"},
+        expected_name="Nayla Sa'idah",
+        expected_bank="mandiri",
+        expected_account="1670011326666",
+    )
+    assert two_missing["account_pass"] is True
+    assert two_missing["document_matched"] is True
+
+    hidden_name = rekening_validation_from_extraction(
+        {**base, "holder_name": "Tabungan NOW IDR", "account_number": "1660007606288"},
+        expected_name="abdullah fariq purnama",
+        expected_bank="mandiri",
+        expected_account="1660007606288",
+    )
+    assert hidden_name["document_matched"] is True
+    assert hidden_name["name_match_method"] == "account"
+
+    odd_length = rekening_validation_from_extraction(
+        {**base, "holder_name": "ASHA FAUZIA RAHMA", "account_number": "60014403566"},
+        expected_name="Asha Fauzia Rahma",
+        expected_bank="mandiri",
+        expected_account="1850003928840",
+    )
+    assert odd_length["document_matched"] is True
+    assert odd_length["account_pass"] is False
+
+    different_account = rekening_validation_from_extraction(
+        {**base, "holder_name": "ASHA FAUZIA RAHMA", "account_number": "1670011380341"},
+        expected_name="Asha Fauzia Rahma",
+        expected_bank="mandiri",
+        expected_account="1850003928840",
+    )
+    assert different_account["document_matched"] is False
+    assert different_account["error_code"] == "rekening.account_mismatch"
+
+    mas_home = rekening_validation_from_extraction(
+        {
+            **base,
+            "is_savings_account": False,
+            "bank": "mas",
+            "holder_name": "Shane Ricardo Santoso",
+            "account_number": "1005852068",
+        },
+        expected_name="Shane Ricardo Santoso",
+        expected_bank="mas",
+        expected_account="1005852068",
+    )
+    assert mas_home["document_matched"] is True
+
     statement = rekening_validation_from_extraction(
         {**base, "is_savings_account": False, "is_statement": True, "holder_name": "Deva Apriana"},
         expected_name="Deva Apriana",

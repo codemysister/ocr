@@ -34,24 +34,27 @@ from systems.validation.llm_fallback import complete_vision
 from systems.validation.user_errors import attach_user_errors
 
 REKENING_SYSTEM_PROMPT = """Kamu membaca bukti rekening tabungan dari aplikasi bank Indonesia (bukan mutasi/e-statement).
-Jangan mengarang. Salin teks yang terlihat, termasuk huruf yang disensor.
+Jangan mengarang. Jangan menulis analisis. Jangan memakai tag think. Salin teks yang terlihat, termasuk huruf yang disensor.
 
-Kembalikan HANYA satu objek JSON (tanpa markdown):
-- is_savings_account (boolean): true jika ini halaman bukti/detail rekening tabungan.
+Kembalikan HANYA satu objek JSON lengkap (tanpa markdown):
+- is_savings_account (boolean): true jika ini halaman bukti/detail rekening tabungan,
+  atau beranda aplikasi bank yang menampilkan nama pemilik dan nomor tabungan
+  (contoh "Halo, NAMA" dan "MAS Saving").
   false jika mutasi, e-statement, KTP, atau dokumen lain.
 - is_statement (boolean): true jika ini mutasi atau e-statement.
 - bank (string): salah satu "mandiri", "mas", "lain", atau "" jika tidak terlihat.
 - holder_name (string): nama orang pemilik rekening.
   Utamakan nama yang tercetak pada kartu debit/ATM (di bawah gambar kartu, sering dekat logo GPN)
-  atau label Nama / Nama Pemilik / Atas Nama.
+  atau label Nama / Nama Pemilik / Atas Nama / Halo.
   Jangan isi nama produk, alias rekening, atau judul layar.
   Bukan "Tabungan NOW", "Tabungan NOW IDR", "Tabungan Payroll", "Livin",
   "Detail Rekening", "Sebagai Rekening Utama", atau teks di samping ikon pensil.
+  Jika nama tidak terlihat, isi string kosong. Jangan menyalin nama dari instruksi.
   Jika nama disensor, salin sensornya apa adanya (mis. Dxxa, D**a).
 - account_number (string): nomor rekening tabungan 10–13 digit.
   Biasanya angka besar tepat di atas atau di bawah tulisan jenis tabungan
-  (misalnya di atas "Tabungan NOW IDR"). Salin angka itu.
-  Bukan nomor kartu 16 digit yang tercetak di kartu debit.
+  (misalnya di atas "Tabungan NOW IDR" atau "Tabungan Payroll"). Salin angka itu.
+  Bukan nomor kartu 16 digit yang tercetak di kartu debit. Jika keduanya ada, ambil yang 10–13 digit.
 - confidence (number 0-100)
 - notes (string): alasan singkat bahasa Indonesia, maksimal 12 kata
 """
@@ -59,9 +62,10 @@ Kembalikan HANYA satu objek JSON (tanpa markdown):
 
 def rekening_user_prompt(*, expected_name: str = "", expected_bank: str = "") -> str:
     lines = [
+        "Balas hanya satu objek JSON lengkap. Jangan analisis dan jangan tag think.",
         "Ambil nama pemilik dari kartu debit atau label nama orang, bukan nama produk Tabungan NOW.",
-        "Ambil nomor rekening tabungan, bukan nomor kartu 16 digit.",
-        "Kembalikan JSON saja.",
+        "Salin angka 10–13 digit di bawah gambar kartu sebagai nomor rekening. Jangan dikosongkan jika angka itu terlihat. Jangan ambil nomor 16 digit yang ada di kartu.",
+        "Beranda Bank MAS yang menampilkan MAS Saving dan nama pemilik juga bukti rekening.",
     ]
     if expected_name.strip():
         lines.insert(1, f"Nama referensi pemilik: {expected_name.strip()}")
@@ -87,6 +91,32 @@ def _name_tokens(value: str) -> list[str]:
     # Tanda petik di nama (Sa'idah, Ma'arif) tidak memisahkan kata.
     text = re.sub(r"[''`´’]", "", value or "")
     return [m.group(0).casefold() for m in _TOKEN_RE.finditer(text)]
+
+
+def _token_matches_expected(token: str, expected: list[str]) -> bool:
+    if len(token) >= 3 and token in expected:
+        return True
+    if any(_mask_matches_token(token, item) for item in expected):
+        return True
+    for start in range(len(expected)):
+        glued = ""
+        for item in expected[start:]:
+            glued += item
+            if glued == token and len(token) >= 5:
+                return True
+            if len(glued) >= len(token):
+                break
+    return False
+
+
+def _is_product_name(value: str) -> bool:
+    compact = re.sub(r"[^a-z]", "", (value or "").casefold())
+    return compact.startswith("tabungan") or compact in {
+        "livin",
+        "detailrekening",
+        "sebagairekeningutama",
+        "massaving",
+    }
 
 
 def _mask_matches_token(pattern: str, token: str) -> bool:
@@ -124,12 +154,11 @@ def rekening_holder_name_matches(expected: str, extracted: str) -> dict[str, Any
 
     method = "partial"
     for token in got:
-        exact = token in exp and len(token) >= 3
-        masked = any(_mask_matches_token(token, item) for item in exp)
-        if masked:
-            method = "masked"
-        if not exact and not masked:
-            return {"pass": False, "method": "none", "identity": scores}
+        if _token_matches_expected(token, exp):
+            if any(_mask_matches_token(token, item) for item in exp):
+                method = "masked"
+            continue
+        return {"pass": False, "method": "none", "identity": scores}
     return {"pass": True, "method": method, "identity": scores}
 
 
@@ -146,6 +175,8 @@ def rekening_validation_from_extraction(
     is_savings = _as_bool(parsed.get("is_savings_account"))
     is_statement = _as_bool(parsed.get("is_statement"))
     holder = str(parsed.get("holder_name") or "").strip()
+    if _is_product_name(holder):
+        holder = ""
     account_raw = str(parsed.get("account_number") or "").strip()
     exp_name = (expected_name or "").strip()
     exp_bank = normalize_expected_bank(expected_bank or "")
@@ -165,6 +196,18 @@ def rekening_validation_from_extraction(
     account_info = validate_account_in_ocr(account_raw, exp_acct) if len(exp_acct) >= 10 else None
     account_pass = account_info.get("account_pass") if account_info else None
     acct_digits = normalize_account_digits(account_raw)
+    if (
+        not is_statement
+        and not is_savings
+        and detected_bank in {"mandiri", "mas"}
+        and holder
+        and len(acct_digits) in {10, 13}
+    ):
+        is_savings = True
+
+    if account_pass is True and not holder:
+        name_pass = True
+        name_info = {"pass": True, "method": "account", "identity": identity}
 
     if detected_bank is None and account_pass is True:
         if len(exp_acct) == 13 and exp_acct[:3] in MANDIRI_ACCOUNT_PREFIXES:
@@ -181,10 +224,23 @@ def rekening_validation_from_extraction(
     else:
         bank_pass = detected_bank == exp_bank
 
+    notes_early = str(parsed.get("notes") or "").casefold()
+    if is_statement and "detail rekening" in notes_early and "e-statement" not in notes_early:
+        is_statement = False
+
+    # 11–12 digit di halaman Mandiri bukan nomor rekening 13 digit. Jangan gagalkan
+    # bukti yang namanya sudah cocok hanya karena angka itu beda.
+    odd_length_account = (
+        account_pass is False
+        and name_pass is True
+        and name_info.get("method") == "full"
+        and 10 < len(acct_digits) < 13
+    )
+
     type_pass = is_savings and not is_statement
     identity_or_account = _rekening_identity_and_account_pass(
         has_name_ref=bool(exp_name),
-        has_account_ref=len(exp_acct) >= 10,
+        has_account_ref=len(exp_acct) >= 10 and not odd_length_account,
         identity_pass=name_pass if isinstance(name_pass, bool) else None,
         account_pass=account_pass if isinstance(account_pass, bool) else None,
     )
@@ -216,6 +272,8 @@ def rekening_validation_from_extraction(
         detail_lines.append(f"Nama pemilik tidak cocok: {holder or 'tidak terbaca'}.")
     if account_pass is True:
         detail_lines.append("Nomor rekening cocok.")
+    elif odd_length_account:
+        detail_lines.append("Angka yang terlihat bukan nomor rekening 10 atau 13 digit.")
     elif account_pass is False:
         blockers.append("ACCOUNT")
         detail_lines.append("Nomor rekening tidak cocok.")
@@ -336,7 +394,7 @@ def analyze_rekening_image(
         rekening_user_prompt(expected_name=expected_name, expected_bank=expected_bank),
         image_mime="image/jpeg",
         system_text=REKENING_SYSTEM_PROMPT,
-        max_tokens=int(os.environ.get("LLM_REKENING_AI_MAX_TOKENS", "512")),
+        max_tokens=int(os.environ.get("LLM_REKENING_AI_MAX_TOKENS", "1536")),
         temperature=0.0,
         base_url=base_url,
         model=model,
@@ -355,9 +413,58 @@ def analyze_rekening_image(
         "success": meta.get("success"),
         "error": meta.get("error"),
     }
-    if not content:
-        return {"error": meta.get("error") or "empty_content", "llm": llm, "image_prepare": prep_meta}
-    parsed = _parse_health_json(content)
+    parsed = _parse_health_json(content) if content else None
+    if parsed:
+        seen_digits = re.sub(r"\D", "", str(parsed.get("account_number") or ""))
+        if _as_bool(parsed.get("is_savings_account")) and not (10 <= len(seen_digits) <= 13):
+            retry_text, retry_meta = complete_vision(
+                prepared,
+                "Salin angka besar di bawah gambar kartu ke account_number. Itu nomor rekening 10–13 digit, bukan nomor 16 digit di kartu. JSON saja.",
+                image_mime="image/jpeg",
+                system_text="Kamu membalas hanya satu objek JSON dengan account_number berisi digit yang terlihat.",
+                max_tokens=300,
+                temperature=0.0,
+                base_url=base_url,
+                model=model,
+                timeout_s=float(
+                    os.environ.get(
+                        "LLM_REKENING_AI_TIMEOUT_S",
+                        os.environ.get("LLM_HEALTH_AI_TIMEOUT_S", "120"),
+                    )
+                ),
+                extra=extra,
+            )
+            parsed_retry = _parse_health_json(retry_text or "")
+            retry_digits = re.sub(r"\D", "", str((parsed_retry or {}).get("account_number") or ""))
+            if 10 <= len(retry_digits) <= 13:
+                parsed["account_number"] = retry_digits
+                if isinstance(retry_meta.get("latency_s"), (int, float)):
+                    llm["latency_s"] = float(llm.get("latency_s") or 0) + float(retry_meta["latency_s"])
+    if not parsed:
+        retry_text, retry_meta = complete_vision(
+            prepared,
+            "Balas hanya JSON. account_number adalah angka 10 atau 13 digit, bukan nomor kartu 16 digit. "
+            "Jika nama orang tidak terlihat, holder_name kosong.\n"
+            '{"is_savings_account":true,"is_statement":false,"bank":"mandiri","holder_name":"","account_number":"","confidence":80,"notes":""}',
+            image_mime="image/jpeg",
+            system_text="Kamu membalas hanya satu objek JSON.",
+            max_tokens=400,
+            temperature=0.0,
+            base_url=base_url,
+            model=model,
+            timeout_s=float(
+                os.environ.get(
+                    "LLM_REKENING_AI_TIMEOUT_S",
+                    os.environ.get("LLM_HEALTH_AI_TIMEOUT_S", "120"),
+                )
+            ),
+            extra=extra,
+        )
+        if retry_text:
+            content = retry_text
+            parsed = _parse_health_json(retry_text)
+            if isinstance(retry_meta.get("latency_s"), (int, float)):
+                llm["latency_s"] = float(llm.get("latency_s") or 0) + float(retry_meta["latency_s"])
     if not parsed:
         return {
             "error": "invalid_json",

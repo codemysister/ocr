@@ -103,7 +103,12 @@ def _loose_json_object(text: str) -> dict[str, Any] | None:
     return {str(key).casefold(): value for key, value in parsed.items()}
 
 
+def _strip_closed_think(text: str) -> str:
+    return re.sub(r"<think>.*?</think>", "", text or "", flags=re.S | re.I).strip()
+
+
 def _parse_health_json(text: str) -> dict[str, Any] | None:
+    text = _strip_closed_think(text)
     obj = _extract_json_object(text)
     if obj:
         return obj

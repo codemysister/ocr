@@ -364,6 +364,20 @@ def validate_account_in_ocr(ocr_text: str, expected_account: str) -> dict[str, A
                 matched = True
                 method = "one_digit_token"
                 break
+    if not matched:
+        for n in found:
+            if len(n) < 10 or len(exp) < 10 or len(n) >= len(exp):
+                continue
+            if n[:6] != exp[:6] or len(exp) - len(n) > 2:
+                continue
+            index = 0
+            for digit in exp:
+                if index < len(n) and n[index] == digit:
+                    index += 1
+            if index == len(n):
+                matched = True
+                method = "missing_digit_token"
+                break
 
     return {
         "expected_account": exp,
