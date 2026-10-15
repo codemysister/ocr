@@ -522,6 +522,17 @@ def test_skck_ai_expiry_and_name() -> None:
     )
     assert ok is False and code == "skck.name_mismatch"
 
+    ok, code = codes(
+        {
+            "is_skck": True,
+            "holder_name": "ANGGUN RAMADHANI",
+            "valid_from": "29 MEI 2026",
+            "valid_until": "29 NOVEMBER 2026",
+        },
+        name="Anggun Ramadhani",
+    )
+    assert ok is True and code is None
+
 
 _KESANGGUPAN_BODY = """
 SURAT PERNYATAAN KESANGGUPAN

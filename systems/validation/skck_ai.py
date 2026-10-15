@@ -15,7 +15,7 @@ from systems.validation.keterangan_kesehatan_ai import (
     health_ai_model,
 )
 from systems.validation.llm_fallback import complete_vision
-from systems.validation.skck_validity import format_id_date
+from systems.validation.skck_validity import extract_skck_validity_dates, format_id_date
 
 SKCK_SYSTEM_PROMPT = """Kamu membaca Surat Keterangan Catatan Kepolisian (SKCK).
 Jangan mengarang. Jangan menulis analisis. Jangan memakai tag think.
@@ -25,8 +25,11 @@ Kembalikan HANYA satu objek JSON:
   false jika KTP, KK, surat lain, atau bukan SKCK.
 - holder_name (string): nama pemohon yang tercetak. Kosong jika tidak ada.
 - identity_number (string): NIK 16 digit jika terlihat, else "".
-- valid_from (string): tanggal "Berlaku untuk" atau "Valid from", format YYYY-MM-DD. Kosong jika tidak ada.
-- valid_until (string): tanggal "Sampai dengan" atau "Until", format YYYY-MM-DD. Kosong jika tidak ada.
+- valid_from (string): tanggal baris "Berlaku dari" / "Valid from" / "Berlaku untuk", format YYYY-MM-DD.
+  Bukan tanggal lahir dan bukan tanggal "berada di Indonesia dari".
+- valid_until (string): tanggal baris masa berlaku "Sampai/dengan" / "Sampai dengan" / "To" / "Until"
+  yang berpasangan dengan Berlaku dari. Bukan tanggal "selama berada di Indonesia".
+  Contoh tertulis "29 NOVEMBER 2026" menjadi "2026-11-29". Kosong hanya jika baris itu tidak ada.
 - confidence (number 0-100)
 - notes (string): maksimal 12 kata
 """
@@ -35,7 +38,7 @@ Kembalikan HANYA satu objek JSON:
 def skck_user_prompt(*, expected_name: str = "") -> str:
     lines = [
         "Apakah ini SKCK?",
-        "Salin nama pemohon, tanggal Berlaku untuk, dan tanggal Sampai dengan.",
+        "Salin nama pemohon, tanggal Berlaku dari, dan tanggal Sampai/dengan pada masa berlaku SKCK.",
         "Balas hanya satu objek JSON.",
     ]
     if expected_name.strip():
@@ -50,6 +53,17 @@ def _as_bool(value: Any) -> bool:
         return bool(value)
     text = str(value or "").strip().casefold()
     return text in {"true", "ya", "yes", "1"}
+
+
+def _skck_date(value: Any) -> str | None:
+    iso = _iso_date(value)
+    if iso:
+        return iso
+    text = str(value or "").strip()
+    if not text or text.lower() in {"null", "none", "-"}:
+        return None
+    extracted = extract_skck_validity_dates(f"Sampai dengan {text}")
+    return extracted.get("valid_until")
 
 
 def skck_validation_from_extraction(
@@ -71,8 +85,8 @@ def skck_validation_from_extraction(
     exp_nik = re.sub(r"\D", "", expected_nik or "")
     if len(exp_nik) != 16:
         exp_nik = ""
-    valid_from = _iso_date(parsed.get("valid_from"))
-    valid_until = _iso_date(parsed.get("valid_until"))
+    valid_from = _skck_date(parsed.get("valid_from"))
+    valid_until = _skck_date(parsed.get("valid_until"))
     as_of = today or date.today()
 
     identity_pass = None

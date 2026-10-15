@@ -66,7 +66,7 @@ app = FastAPI(
         "`rekening` memakai Ornith AI; nama boleh sebagian atau tersensor. "
         "`bpjs` (Kartu Indonesia Sehat) memakai Ornith AI. "
         "`iuran` memakai Ornith AI; modal tanpa tagihan pribadi lolos meski nama tidak tampil. "
-        "`skck` memakai Ornith AI; harus SKCK, nama cocok, dan tanggal Sampai dengan belum lewat. "
+        "`skck` memakai Ornith AI; harus SKCK, nama cocok, dan masa berlaku (Berlaku dari sampai Sampai/dengan) belum lewat. "
         "`vaksinasi_1` memakai Ornith AI; dosis pertama tetap lolos bila tahap 2 juga tercantum. "
         "`vaksinasi_2` memakai Ornith AI; dosis kedua tetap lolos bila tahap 1 juga tercantum. "
         "`vaksinasi_3` memakai Ornith AI; booster tetap lolos bila tahap 1 atau 2 juga tercantum. "

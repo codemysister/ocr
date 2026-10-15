@@ -129,7 +129,7 @@ String yang dikirim klien untuk menentukan **profil validasi**. Server menormali
 | `kk` | Kartu Keluarga | OCR + keyword fuzzy |
 | `rekening` | Rekening | **Ornith AI** — nama boleh sebagian atau tersensor |
 | `mutasi` | Mutasi | OCR + keyword fuzzy |
-| `skck` | SKCK | **Ornith AI** — SKCK, nama, tanggal Sampai dengan belum lewat |
+| `skck` | SKCK | **Ornith AI** — SKCK, nama, masa berlaku (Berlaku dari–Sampai/dengan) belum lewat |
 | `bpjs` | BPJS Kesehatan (KIS) | **Ornith AI** — nama boleh terpotong, NIK filename bisa menyelamatkan |
 | `bpjs_tk` | BPJS Ketenagakerjaan | OCR + keyword AND/OR + identitas |
 | `bpjs_kesanggupan` | Kesanggupan BPJS Kesehatan | OCR + keyword AND/OR + identitas |
@@ -438,7 +438,7 @@ flowchart TD
 | KK | `kk`, `kartu keluarga` | Opsional | ✅ | Keyword KK ≥70%; nama bisa dari baris tabel anggota |
 | Rekening | `rekening`, `rekening tabungan` | Opsional | ❌ (AI vision) | **Ornith** — bukti tabungan, `expected_bank` wajib; nama dan nomor rekening keduanya cocok bila keduanya diisi |
 | Mutasi | `mutasi`, `e-statement` | Tidak dipakai | ✅ | Ada `tabungan` **dan** `e-statement`; `expected_bank` + `expected_account` wajib |
-| SKCK | `skck` | Opsional | ❌ (AI vision) | **Ornith** — harus SKCK, nama cocok jika diisi, tanggal Sampai dengan terbaca dan belum lewat |
+| SKCK | `skck` | Opsional | ❌ (AI vision) | **Ornith** — harus SKCK, nama cocok jika diisi, tanggal masa berlaku terbaca dan belum lewat |
 | BPJS KIS | `bpjs`, `bpjs kesehatan`, `kartu indonesia sehat` | **Disarankan wajib** | ❌ (AI vision) | **Ornith** — KIS, nama boleh terpotong, NIK filename bisa lolos |
 | BPJS TK | `bpjs_tk`, `bpjs ketenagakerjaan` | **Disarankan wajib** | ✅ | Keyword kartu TK ≥70% **dan** identitas (jika nama diisi) |
 | Kesanggupan BPJS | `bpjs_kesanggupan`, `kesanggupan bpjs` | **Disarankan wajib** | ✅ | Surat kesanggupan ≥70%, **materai**, **dan** identitas (jika nama diisi) |
@@ -631,7 +631,9 @@ curl -X POST "https://checkinpro-ocr.web.id/api/v1/pipeline" \
 |------|------------|
 | Jenis dokumen | Harus SKCK / Surat Keterangan Catatan Kepolisian |
 | `identity_pass` | Jika `expected_name` diisi — fuzzy nama ≥ 65, atau NIK 16 digit di surat sama dengan nama file |
-| `skck_expiry_pass` | Tanggal **Sampai dengan** terbaca dan belum lewat. Tanggal **Berlaku untuk** tidak boleh di masa depan |
+| `skck_valid_from` | Tanggal **Berlaku dari** / **Valid from** / **Berlaku untuk**. Bukan tanggal lahir dan bukan masa “berada di Indonesia” |
+| `skck_valid_until` | Tanggal **Sampai/dengan** / **Sampai dengan** / **To** / **Until** yang berpasangan dengan Berlaku dari. Contoh tertulis `29 NOVEMBER 2026` dibaca sebagai `2026-11-29` |
+| `skck_expiry_pass` | `skck_valid_until` terbaca dan belum lewat. `skck_valid_from`, jika ada, tidak boleh di masa depan |
 
 **Kode error validasi (HTTP 200, `document_matched: false`):**
 
@@ -639,9 +641,9 @@ curl -X POST "https://checkinpro-ocr.web.id/api/v1/pipeline" \
 |--------------|------|
 | `skck.wrong_document` | Bukan SKCK |
 | `skck.name_mismatch` | Nama pada SKCK tidak cocok |
-| `skck.expiry_missing` | Tanggal Sampai dengan tidak terbaca |
-| `skck.expired` | SKCK sudah kadaluarsa |
-| `skck.not_yet_valid` | Tanggal Berlaku untuk masih di masa depan |
+| `skck.expiry_missing` | Tanggal Sampai/dengan pada masa berlaku tidak terbaca |
+| `skck.expired` | Tanggal Sampai/dengan sudah lewat |
+| `skck.not_yet_valid` | Tanggal Berlaku dari masih di masa depan |
 
 Gagal AI → HTTP **503** `pipeline.skck_ai_unavailable`.
 
