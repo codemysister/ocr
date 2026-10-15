@@ -151,6 +151,18 @@
       max-height: min(420px, 55vh);
       object-fit: contain;
     }
+    .fail-preview.full {
+      width: 100%;
+      height: auto;
+      min-height: 0;
+      max-height: none;
+    }
+    .fail-preview.full img {
+      width: 100%;
+      height: auto;
+      max-height: none;
+      object-fit: contain;
+    }
     .fail-preview img {
       max-width: 100%;
       max-height: 100%;
@@ -304,6 +316,7 @@
       <button type="button" class="filter-btn active" data-filter="">Semua</button>
       <button type="button" class="filter-btn" data-filter="validation_fail">Validasi</button>
       <button type="button" class="filter-btn" data-filter="pipeline_error">Pipeline</button>
+      <button type="button" class="filter-btn" id="btnFull">Mode penuh</button>
       <button type="button" class="primary" id="btnRefresh">Muat ulang</button>
       <button type="button" class="danger" id="btnClear">Hapus data</button>
       <span class="status" id="status">Memuat…</span>
@@ -316,11 +329,13 @@
     const contentEl = document.getElementById("content");
     const statusEl = document.getElementById("status");
     const btnRefresh = document.getElementById("btnRefresh");
+    const btnFull = document.getElementById("btnFull");
     const btnClear = document.getElementById("btnClear");
     const filterBtns = document.querySelectorAll(".filter-btn");
 
     let filter = "";
     let lastFailures = [];
+    let previewFull = sessionStorage.getItem("failPreviewFull") !== "0";
 
     function esc(s) {
       return String(s ?? "")
@@ -369,10 +384,15 @@
       return false;
     }
 
+    function syncFullButton() {
+      btnFull.classList.toggle("active", previewFull);
+      btnFull.textContent = previewFull ? "Mode penuh" : "Mode ringkas";
+    }
+
     function renderFailurePreview(f, large, idx) {
       if (!f.folder || !f.file) return "";
       const url = datasetFileUrl(f.folder, f.file);
-      const cls = large ? "fail-preview large" : "fail-preview";
+      const cls = previewFull ? "fail-preview full" : large ? "fail-preview large" : "fail-preview";
       const copyImgBtn = isImageFile(f.file)
         ? `<button type="button" class="copy-btn copy-img-btn" data-copy="image" data-idx="${idx}" title="Copy gambar ke clipboard">Copy gambar</button>`
         : "";
@@ -441,7 +461,7 @@
       }
       contentEl.innerHTML = `<div class="fail-cards">${lastFailures.map((f, idx) => {
         const tag = failureKindLabel(f.failure_kind);
-        const previewOnly = isPreviewOnlyFailure(f);
+        const previewOnly = previewFull || isPreviewOnlyFailure(f);
         const responseText = pipelineResponseText(f);
         const ocrBlock = f.ocr_text
           ? `<div class="fail-ocr">
@@ -551,6 +571,14 @@
         loadData();
       });
     });
+
+    btnFull.addEventListener("click", () => {
+      previewFull = !previewFull;
+      sessionStorage.setItem("failPreviewFull", previewFull ? "1" : "0");
+      syncFullButton();
+      renderFailures(lastFailures);
+    });
+    syncFullButton();
 
     btnRefresh.addEventListener("click", loadData);
     btnClear.addEventListener("click", async () => {
