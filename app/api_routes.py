@@ -113,7 +113,7 @@ def api_info() -> dict:
                 "description": (
                     "OCR → validasi. HTTP 200 juga jika dokumen tidak lolos: "
                     "baca error_message, jangan explanation.summary. "
-                    "document_type=keterangan_kesehatan, npwp, pemadanan_npwp, rekening, bpjs, iuran, skck, vaksinasi_1, vaksinasi_2, dan vaksinasi_3: wajib Ornith AI (ocr_mode diabaikan). "
+                    "document_type selain cv memakai Ornith AI (ocr_mode diabaikan), kecuali foto_profile yang memakai AI gambar. "
                     "npwp mengembalikan format_lama (true jika nomor bukan NIK 16 digit). "
                     "rekening menerima nama sebagian atau tersensor (Deva / Dxxa untuk Deva Apriana)."
                 ),
@@ -339,12 +339,36 @@ def _pipeline_http_error(result: PipelineResult) -> HTTPException:
                 "env": ["LLM_REKENING_AI_BASE_URL", "LLM_HEALTH_AI_BASE_URL", "LLM_REKENING_AI_MODEL"],
             }
         )
+    elif kind == "mutasi_ai_unavailable":
+        extra.update(
+            {
+                "code": "MUTASI_AI_UNAVAILABLE",
+                "engine": "ornith",
+                "env": ["LLM_MUTASI_AI_BASE_URL", "LLM_HEALTH_AI_BASE_URL", "LLM_MUTASI_AI_MODEL"],
+            }
+        )
     elif kind == "bpjs_ai_unavailable":
         extra.update(
             {
                 "code": "BPJS_AI_UNAVAILABLE",
                 "engine": "ornith",
                 "env": ["LLM_BPJS_AI_BASE_URL", "LLM_HEALTH_AI_BASE_URL", "LLM_BPJS_AI_MODEL"],
+            }
+        )
+    elif kind == "ktp_ai_unavailable":
+        extra.update(
+            {
+                "code": "KTP_AI_UNAVAILABLE",
+                "engine": "ornith",
+                "env": ["LLM_KTP_AI_BASE_URL", "LLM_HEALTH_AI_BASE_URL", "LLM_KTP_AI_MODEL"],
+            }
+        )
+    elif kind == "kk_ai_unavailable":
+        extra.update(
+            {
+                "code": "KK_AI_UNAVAILABLE",
+                "engine": "ornith",
+                "env": ["LLM_KK_AI_BASE_URL", "LLM_HEALTH_AI_BASE_URL", "LLM_KK_AI_MODEL"],
             }
         )
     elif kind == "skck_ai_unavailable":
@@ -385,6 +409,23 @@ def _pipeline_http_error(result: PipelineResult) -> HTTPException:
                 "code": "VAKSINASI_3_AI_UNAVAILABLE",
                 "engine": "ornith",
                 "env": ["LLM_VAKSINASI_3_AI_BASE_URL", "LLM_HEALTH_AI_BASE_URL", "LLM_VAKSINASI_3_AI_MODEL"],
+            }
+        )
+    elif kind in {
+        "bpjs_tk_ai_unavailable",
+        "bpjs_kesanggupan_ai_unavailable",
+        "jkn_ai_unavailable",
+        "ijasah_ai_unavailable",
+        "transkrip_ai_unavailable",
+        "formulir_okb_ai_unavailable",
+        "formulir_lamaran_ai_unavailable",
+        "surat_lamaran_ai_unavailable",
+    }:
+        extra.update(
+            {
+                "code": kind.upper(),
+                "engine": "ornith",
+                "env": ["LLM_HEALTH_AI_BASE_URL"],
             }
         )
     elif kind == "opencv_unavailable":
@@ -495,6 +536,10 @@ async def api_pipeline(
         "",
         description="Untuk document_type=rekening: nomor rekening referensi (opsional jika ada di filename)",
     ),
+    expected_card_number: str = Form(
+        "",
+        description="Wajib untuk document_type=bpjs (KIS) dan jkn (Info Peserta). Nomor kartu dari input yang satunya.",
+    ),
     job_position: str = Form(
         "",
         description="Posisi kerja. Untuk KTP + Helper: status perkawinan harus BELUM KAWIN.",
@@ -588,6 +633,14 @@ async def api_pipeline(
             log_safe_failure(subsystem="pipeline", method="POST", path=path, http_status=400, detail=detail)
             raise HTTPException(status_code=400, detail=detail)
 
+    if canonical_id in {"bpjs", "jkn"}:
+        from systems.validation.bpjs_ai import norm_card_number
+
+        if not norm_card_number(expected_card_number):
+            detail = user_error_http_detail("pipeline.missing_expected_card_number")
+            log_safe_failure(subsystem="pipeline", method="POST", path=path, http_status=400, detail=detail)
+            raise HTTPException(status_code=400, detail=detail)
+
     resolved_ocr_mode: OcrMode = ocr_mode or default_ocr_mode()  # type: ignore[assignment]
     result = run_pipeline_bytes(
         raw,
@@ -604,6 +657,7 @@ async def api_pipeline(
         cv_experience_query=cv_experience_query.strip(),
         expected_bank=expected_bank.strip(),
         expected_account=expected_account.strip(),
+        expected_card_number=expected_card_number.strip(),
         job_position=job_position.strip(),
     )
 

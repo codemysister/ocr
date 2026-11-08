@@ -37,10 +37,29 @@ REKENING_SYSTEM_PROMPT = """Kamu membaca bukti rekening tabungan dari aplikasi b
 Jangan mengarang. Jangan menulis analisis. Jangan memakai tag think. Salin teks yang terlihat, termasuk huruf yang disensor.
 
 Kembalikan HANYA satu objek JSON lengkap (tanpa markdown):
-- is_savings_account (boolean): true jika ini halaman bukti/detail rekening tabungan,
-  atau beranda aplikasi bank yang menampilkan nama pemilik dan nomor tabungan
-  (contoh "Halo, NAMA" dan "MAS Saving").
-  false jika mutasi, e-statement, KTP, atau dokumen lain.
+- is_savings_account (boolean): true hanya jika ini halaman depan aplikasi bank.
+  Halaman depan Mandiri/Livin: layar rekening yang menampilkan gambar kartu debit,
+  nomor rekening 10–13 digit di dekat kartu, dan jenis tabungan (Tabungan NOW / Payroll).
+  Tetap halaman depan jika ada "Lihat Detail", "Sebagai Rekening Utama", "Intip Saldo",
+  "Push Notification", atau "Daftar Kartu" dengan nama pemilik di kartu GPN.
+  Halaman depan Bank MAS: beranda dengan "Halo, NAMA" dan MAS Saving plus nomor tabungan.
+  false untuk buku tabungan fisik, halaman dalam, kertas distempel, tanda tangan petugas,
+  mutasi, e-statement, beranda saldo Livin, KTP, atau dokumen lain.
+  Beranda saldo Livin (latar biru, "Tabungan NOW IDR", saldo Rp, tombol Transfer Rupiah /
+  Bayar / Top-up / Kartu Fisik, tab Transaksi atau e-Statement) bukan halaman depan.
+  Daftar "Produk Anda" (tab Tabungan/Deposito/Kartu Kredit, Tabungan & Giro, Tabungan Emas,
+  Lihat SPT) juga bukan halaman depan.
+  Layar "Yeay, Pembukaan Rekening Berhasil" (nomor rekening baru, Cara Setor Dana,
+  Lanjut ke Beranda) juga bukan halaman depan.
+- is_account_opening (boolean): true jika ini halaman sukses pembukaan rekening.
+  Layar ini ditolak.
+- is_front_page (boolean): true untuk halaman depan di atas, termasuk layar kartu Tabungan NOW
+  dengan Daftar Kartu dan nama di kartu GPN. false untuk selain itu.
+- is_transaction_home (boolean): true jika yang terlihat saldo, tombol transfer/bayar/top-up,
+  atau tab Transaksi / e-Statement. Layar ini ditolak.
+- is_product_list (boolean): true jika judulnya Produk Anda atau daftar produk
+  (Tabungan & Giro, Tabungan Emas, Deposito, Kartu Kredit, Lihat SPT). Layar ini ditolak.
+- is_passbook (boolean): true jika ini buku tabungan kertas, printout, stempel cabang, atau tanda tangan petugas.
 - is_statement (boolean): true jika ini mutasi atau e-statement.
 - bank (string): salah satu "mandiri", "mas", "lain", atau "" jika tidak terlihat.
 - holder_name (string): nama orang pemilik rekening.
@@ -65,7 +84,11 @@ def rekening_user_prompt(*, expected_name: str = "", expected_bank: str = "") ->
         "Balas hanya satu objek JSON lengkap. Jangan analisis dan jangan tag think.",
         "Ambil nama pemilik dari kartu debit atau label nama orang, bukan nama produk Tabungan NOW.",
         "Salin angka 10–13 digit di bawah gambar kartu sebagai nomor rekening. Jangan dikosongkan jika angka itu terlihat. Jangan ambil nomor 16 digit yang ada di kartu.",
-        "Beranda Bank MAS yang menampilkan MAS Saving dan nama pemilik juga bukti rekening.",
+        "Layar dengan gambar kartu, nomor rekening, Tabungan NOW, dan nama di kartu GPN pada Daftar Kartu adalah halaman depan. Tombol Sebagai Rekening Utama, Intip Saldo, atau Lihat Detail tidak membuatnya ditolak.",
+        "Buku tabungan kertas, stempel cabang, dan halaman dalam bukan halaman depan.",
+        "Beranda biru dengan saldo Rp, Transfer Rupiah, Bayar, Top-up, tab Transaksi, atau e-Statement bukan halaman depan. is_transaction_home true dan is_front_page false.",
+        "Halaman Produk Anda, Tabungan & Giro, Tabungan Emas, atau Lihat SPT bukan halaman depan. is_product_list true dan is_front_page false.",
+        "Halaman Yeay Pembukaan Rekening Berhasil, Cara Setor Dana, atau Lanjut ke Beranda bukan halaman depan. is_account_opening true dan is_front_page false.",
     ]
     if expected_name.strip():
         lines.insert(1, f"Nama referensi pemilik: {expected_name.strip()}")
@@ -162,6 +185,82 @@ def rekening_holder_name_matches(expected: str, extracted: str) -> dict[str, Any
     return {"pass": True, "method": method, "identity": scores}
 
 
+def _notes_say_account_detail(notes: str) -> bool:
+    compact = re.sub(r"[^a-z0-9]", "", (notes or "").casefold())
+    return any(
+        token in compact
+        for token in (
+            "sebagairekeningutama",
+            "daftarkartu",
+            "intipsaldo",
+            "gpnsilver",
+            "lihatdetail",
+        )
+    )
+
+
+def _notes_say_account_opening(notes: str) -> bool:
+    compact = re.sub(r"[^a-z0-9]", "", (notes or "").casefold())
+    return any(
+        token in compact
+        for token in (
+            "pembukaanrekening",
+            "rekeningberhasil",
+            "carasetordana",
+            "lanjutkeberanda",
+            "setordanaminimal",
+        )
+    )
+
+
+def _notes_say_product_list(notes: str) -> bool:
+    compact = re.sub(r"[^a-z0-9]", "", (notes or "").casefold())
+    return any(
+        token in compact
+        for token in (
+            "produkanda",
+            "tabungangiro",
+            "tabunganemas",
+            "lihatspt",
+            "semuakartu",
+            "livintabunganemas",
+        )
+    )
+
+
+def _notes_say_transaction_home(notes: str) -> bool:
+    compact = re.sub(r"[^a-z0-9]", "", (notes or "").casefold())
+    return any(
+        token in compact
+        for token in (
+            "transferrupiah",
+            "bayarva",
+            "topup",
+            "kartufisik",
+            "estatement",
+            "belumadatransaksi",
+            "tabtransaksi",
+            "transaksi",
+        )
+    )
+
+
+def _notes_say_passbook(notes: str) -> bool:
+    compact = re.sub(r"[^a-z0-9]", "", (notes or "").casefold())
+    return any(
+        token in compact
+        for token in (
+            "bukutabungan",
+            "stempel",
+            "tandatangan",
+            "halamandalam",
+            "tabmandiri",
+            "kopcabang",
+            "petugasbank",
+        )
+    )
+
+
 def rekening_validation_from_extraction(
     parsed: dict[str, Any],
     *,
@@ -196,18 +295,34 @@ def rekening_validation_from_extraction(
     account_info = validate_account_in_ocr(account_raw, exp_acct) if len(exp_acct) >= 10 else None
     account_pass = account_info.get("account_pass") if account_info else None
     acct_digits = normalize_account_digits(account_raw)
+    notes_early = str(parsed.get("notes") or "").casefold()
+    has_front_flag = "is_front_page" in parsed
+    front_page = _as_bool(parsed.get("is_front_page")) if has_front_flag else True
+    passbook = _as_bool(parsed.get("is_passbook")) or _notes_say_passbook(notes_early)
+    transaction_home = _as_bool(parsed.get("is_transaction_home")) or _notes_say_transaction_home(notes_early)
+    product_list = _as_bool(parsed.get("is_product_list")) or _notes_say_product_list(notes_early)
+    account_opening = _as_bool(parsed.get("is_account_opening")) or _notes_say_account_opening(notes_early)
+    account_detail = _notes_say_account_detail(notes_early)
+    bad_screen = passbook or transaction_home or product_list or account_opening
+    not_front = bad_screen or (has_front_flag and not front_page and not account_detail)
+    if account_detail and not bad_screen:
+        is_savings = True
+        front_page = True
     if (
         not is_statement
         and not is_savings
+        and not not_front
         and detected_bank in {"mandiri", "mas"}
         and holder
         and len(acct_digits) in {10, 13}
     ):
         is_savings = True
+    if not_front:
+        is_savings = False
 
-    if account_pass is True and not holder:
-        name_pass = True
-        name_info = {"pass": True, "method": "account", "identity": identity}
+    if not holder:
+        name_pass = False
+        name_info = {"pass": False, "method": "missing", "identity": identity}
 
     if detected_bank is None and account_pass is True:
         if len(exp_acct) == 13 and exp_acct[:3] in MANDIRI_ACCOUNT_PREFIXES:
@@ -224,7 +339,6 @@ def rekening_validation_from_extraction(
     else:
         bank_pass = detected_bank == exp_bank
 
-    notes_early = str(parsed.get("notes") or "").casefold()
     if is_statement and "detail rekening" in notes_early and "e-statement" not in notes_early:
         is_statement = False
 
@@ -244,13 +358,18 @@ def rekening_validation_from_extraction(
         identity_pass=name_pass if isinstance(name_pass, bool) else None,
         account_pass=account_pass if isinstance(account_pass, bool) else None,
     )
-    matched = type_pass and bank_pass is True and identity_or_account is True
+    matched = type_pass and bank_pass is True and identity_or_account is True and bool(holder)
 
     blockers: list[str] = []
     detail_lines: list[str] = []
     if is_statement:
         blockers.append("EXCLUSION")
         detail_lines.append("Ini mutasi atau e-statement, bukan bukti rekening tabungan.")
+    elif not_front:
+        blockers.append("DOCUMENT_TYPE")
+        detail_lines.append(
+            "Gambar bukan halaman depan rekening. Beranda transaksi, buku tabungan, stempel, atau halaman lain ditolak."
+        )
     elif is_savings:
         detail_lines.append("Gambar dikenali sebagai bukti rekening tabungan.")
     else:
@@ -269,7 +388,10 @@ def rekening_validation_from_extraction(
         detail_lines.append(f"Nama pemilik cocok ({how}): {holder or '—'}.")
     elif name_pass is False:
         blockers.append("IDENTITY")
-        detail_lines.append(f"Nama pemilik tidak cocok: {holder or 'tidak terbaca'}.")
+        if not holder:
+            detail_lines.append("Nama pemilik rekening tidak terlihat.")
+        else:
+            detail_lines.append(f"Nama pemilik tidak cocok: {holder}.")
     if account_pass is True:
         detail_lines.append("Nomor rekening cocok.")
     elif odd_length_account:
@@ -325,6 +447,8 @@ def rekening_validation_from_extraction(
             "validation_mode": "image",
             "validation_engine": "ornith",
             "is_savings_account": is_savings,
+            "is_front_page": front_page if has_front_flag else None,
+            "is_passbook": passbook,
             "is_statement": is_statement,
             "holder_name": holder,
             "account_number": account_raw,
@@ -445,7 +569,8 @@ def analyze_rekening_image(
             prepared,
             "Balas hanya JSON. account_number adalah angka 10 atau 13 digit, bukan nomor kartu 16 digit. "
             "Jika nama orang tidak terlihat, holder_name kosong.\n"
-            '{"is_savings_account":true,"is_statement":false,"bank":"mandiri","holder_name":"","account_number":"","confidence":80,"notes":""}',
+            "Balas hanya JSON sesuai gambar. Jangan menyalin nilai dari contoh.\n"
+            '{"is_savings_account":false,"is_front_page":false,"is_passbook":false,"is_statement":false,"bank":"","holder_name":"","account_number":"","confidence":0,"notes":""}',
             image_mime="image/jpeg",
             system_text="Kamu membalas hanya satu objek JSON.",
             max_tokens=400,

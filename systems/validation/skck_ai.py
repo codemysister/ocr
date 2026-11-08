@@ -27,9 +27,13 @@ Kembalikan HANYA satu objek JSON:
 - identity_number (string): NIK 16 digit jika terlihat, else "".
 - valid_from (string): tanggal baris "Berlaku dari" / "Valid from" / "Berlaku untuk", format YYYY-MM-DD.
   Bukan tanggal lahir dan bukan tanggal "berada di Indonesia dari".
+- valid_from_text (string): salin persis teks tanggal di kanan "Berlaku dari" / "Valid from",
+  contoh "04 DESEMBER 2025". Kosong jika baris itu tidak ada.
 - valid_until (string): tanggal baris masa berlaku "Sampai/dengan" / "Sampai dengan" / "To" / "Until"
   yang berpasangan dengan Berlaku dari. Bukan tanggal "selama berada di Indonesia".
-  Contoh tertulis "29 NOVEMBER 2026" menjadi "2026-11-29". Kosong hanya jika baris itu tidak ada.
+  Contoh tertulis "04 JUNI 2026" menjadi "2026-06-04". Kosong hanya jika baris itu tidak ada.
+- valid_until_text (string): salin persis teks tanggal di kanan "Sampai dengan" / "Until",
+  contoh "04 JUNI 2026". Jangan menukar dengan tanggal Berlaku dari.
 - confidence (number 0-100)
 - notes (string): maksimal 12 kata
 """
@@ -38,7 +42,8 @@ Kembalikan HANYA satu objek JSON:
 def skck_user_prompt(*, expected_name: str = "") -> str:
     lines = [
         "Apakah ini SKCK?",
-        "Salin nama pemohon, tanggal Berlaku dari, dan tanggal Sampai/dengan pada masa berlaku SKCK.",
+        "Salin nama pemohon, teks tanggal Berlaku dari, dan teks tanggal Sampai dengan. Jangan ditukar.",
+        "Masa berlaku yang Sampai dengan-nya sudah lewat tidak valid.",
         "Balas hanya satu objek JSON.",
     ]
     if expected_name.strip():
@@ -66,6 +71,22 @@ def _skck_date(value: Any) -> str | None:
     return extracted.get("valid_until")
 
 
+def _resolve_skck_dates(parsed: dict[str, Any]) -> tuple[str | None, str | None]:
+    """Utamakan teks di kanan Berlaku dari dan Sampai dengan, bukan tebakan ISO."""
+    from_text = str(parsed.get("valid_from_text") or "").strip()
+    until_text = str(parsed.get("valid_until_text") or "").strip()
+    notes = str(parsed.get("notes") or "").strip()
+    parts = [notes]
+    if from_text:
+        parts.append(f"Berlaku dari {from_text}")
+    if until_text:
+        parts.append(f"Sampai dengan {until_text}")
+    labeled = extract_skck_validity_dates("\n".join(parts))
+    valid_from = labeled.get("valid_from") or _skck_date(from_text) or _skck_date(parsed.get("valid_from"))
+    valid_until = labeled.get("valid_until") or _skck_date(until_text) or _skck_date(parsed.get("valid_until"))
+    return valid_from, valid_until
+
+
 def skck_validation_from_extraction(
     parsed: dict[str, Any],
     *,
@@ -85,8 +106,7 @@ def skck_validation_from_extraction(
     exp_nik = re.sub(r"\D", "", expected_nik or "")
     if len(exp_nik) != 16:
         exp_nik = ""
-    valid_from = _skck_date(parsed.get("valid_from"))
-    valid_until = _skck_date(parsed.get("valid_until"))
+    valid_from, valid_until = _resolve_skck_dates(parsed)
     as_of = today or date.today()
 
     identity_pass = None

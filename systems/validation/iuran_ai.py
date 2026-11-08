@@ -26,11 +26,19 @@ Kembalikan HANYA satu objek JSON:
   1. Layar Info Iuran (tagihan atau sisa saldo).
   2. Modal "tidak memiliki tagihan pribadi" atau "jenis peserta tidak terkategori",
      meskipun latar belakangnya Menu Lainnya atau ikon Info Peserta.
-  3. Layar Info Riwayat Pembayaran / Pembayaran Iuran, termasuk tulisan
-     "Peserta tidak memiliki riwayat pembayaran iuran".
+  3. Tulisan "Peserta tidak memiliki riwayat pembayaran iuran" tanpa daftar bayar.
   4. Chatbot Pandawa atau WhatsApp BPJS Kesehatan yang menampilkan
      Nama Peserta, Tagihan, dan Status Pembayaran.
-  false jika hanya Info Peserta (faskes), kartu KIS, BPJS Ketenagakerjaan, vaksin, atau KTP.
+  false untuk layar Info Riwayat Pembayaran yang berisi daftar bayar
+  (Pembayaran Iuran, Channel, Tgl Bayar, Status Lunas, Pembayaran Denda).
+  false juga jika hanya Info Peserta (faskes), kartu KIS, BPJS Ketenagakerjaan, vaksin, atau KTP.
+  Layar berjudul "Info Peserta" dengan "Jenis Tampilan: Kepesertaan Terdaftar",
+  kartu anggota (Peserta, Istri, Anak), tanggal lahir, dan Faskes
+  BUKAN iuran. Untuk layar itu is_info_iuran = false dan is_info_peserta = true.
+- is_info_peserta (boolean): true jika judulnya Info Peserta atau daftar Kepesertaan Terdaftar.
+- is_payment_history (boolean): true jika ini daftar Info Riwayat Pembayaran yang sudah ada nominal, channel, tanggal bayar, atau status lunas.
+- has_tagihan (boolean): true hanya jika ada tagihan, sisa saldo, atau judul Info Iuran.
+  false untuk daftar riwayat pembayaran.
 - holder_name (string): nama peserta yang terlihat, termasuk huruf X yang menyensor.
   Jika ada beberapa nama, salin yang paling mirip dengan nama referensi.
   Kosong jika nama tidak tampil.
@@ -45,7 +53,8 @@ Kembalikan HANYA satu objek JSON:
 
 def iuran_user_prompt(*, expected_name: str = "") -> str:
     lines = [
-        "Apakah ini bukti iuran JKN (layar Info Iuran, modal tanpa tagihan, riwayat pembayaran, atau chat Pandawa)?",
+        "Apakah ini bukti iuran JKN (layar Info Iuran, modal tanpa tagihan, atau chat Pandawa)?",
+        "Daftar Info Riwayat Pembayaran yang berisi nominal, channel, tanggal bayar, atau status lunas bukan Info Iuran. is_payment_history true.",
         "Salin nama peserta apa adanya, termasuk huruf X. Balas hanya satu objek JSON.",
     ]
     if expected_name.strip():
@@ -85,12 +94,34 @@ def iuran_validation_from_extraction(
         or "jenispresentidakterkategori" in compact
         or "tidakmemilikiriwayatpembayaran" in compact
     )
-    riwayat = "inforiwayatpembayaran" in compact or "pembayaran iuran" in notes_blob
+    riwayat_list = not modal_notes and (
+        _as_bool(parsed.get("is_payment_history"))
+        or any(
+            token in compact
+            for token in ("inforiwayatpembayaran", "pembayarandenda", "tglbayar", "statuslunas")
+        )
+    )
     pandawa = "namapeserta" in compact and ("tagihan" in compact or "statuspembayaran" in compact)
-    if modal_notes or riwayat or pandawa:
+    if modal_notes or pandawa:
         is_doc = True
     if modal_notes or "tidakmemilikiriwayatpembayaran" in compact:
         modal = True
+    if riwayat_list:
+        is_doc = False
+        modal = False
+    peserta_screen = _as_bool(parsed.get("is_info_peserta")) or any(
+        token in compact
+        for token in ("infopeserta", "kepesertaanterdaftar", "jenistampilan", "faskes1")
+    )
+    iuran_signal = (
+        modal_notes
+        or pandawa
+        or _as_bool(parsed.get("has_tagihan"))
+        or any(token in compact for token in ("infoiuran", "totaltagihan", "sisasaldo", "tagihan"))
+    )
+    if peserta_screen and not iuran_signal:
+        is_doc = False
+        modal = False
     name_displayed = _as_bool(parsed.get("name_displayed")) if "name_displayed" in parsed else bool(holder)
     nik = _digits(str(parsed.get("nik") or ""))
     if len(nik) != 16:
@@ -139,6 +170,8 @@ def iuran_validation_from_extraction(
     else:
         blockers.append("DOCUMENT_TYPE")
         detail_lines.append("Gambar bukan layar Info Iuran.")
+        if riwayat_list:
+            detail_lines.append("Gambar adalah riwayat pembayaran, bukan Info Iuran.")
     if name_method == "modal":
         detail_lines.append("Modal tanpa tagihan pribadi; nama peserta tidak ditampilkan.")
     elif name_pass is True:
@@ -279,10 +312,13 @@ def analyze_iuran_image(
     if not parsed:
         retry_text, retry_meta = complete_vision(
             prepared,
-            "Balas hanya JSON.\n"
-            '{"is_info_iuran":true,"holder_name":"","name_displayed":false,"modal_tanpa_tagihan":false,"nik":"","confidence":80,"notes":""}',
+            "Balas hanya JSON sesuai gambar. Jangan menyalin nilai true dari contoh.\n"
+            '{"is_info_iuran":false,"is_info_peserta":false,"has_tagihan":false,"holder_name":"","name_displayed":false,"modal_tanpa_tagihan":false,"nik":"","confidence":0,"notes":""}',
             image_mime="image/jpeg",
-            system_text="Kamu membalas hanya satu objek JSON.",
+            system_text=(
+                "Kamu membalas hanya satu objek JSON. "
+                "Info Peserta atau Kepesertaan Terdaftar bukan Info Iuran."
+            ),
             max_tokens=400,
             temperature=0.0,
             base_url=base_url,

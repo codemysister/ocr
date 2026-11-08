@@ -22,16 +22,28 @@ ERROR_CATALOG: dict[str, str] = {
     "pipeline.npwp_ai_unavailable": "AI NPWP tidak merespons. Coba lagi nanti.",
     "pipeline.pemadanan_npwp_ai_unavailable": "AI pemadanan NPWP tidak merespons. Coba lagi nanti.",
     "pipeline.rekening_ai_unavailable": "AI rekening tidak merespons. Coba lagi nanti.",
+    "pipeline.mutasi_ai_unavailable": "AI mutasi tidak merespons. Coba lagi nanti.",
     "pipeline.bpjs_ai_unavailable": "AI BPJS Kesehatan tidak merespons. Coba lagi nanti.",
+    "pipeline.ktp_ai_unavailable": "AI KTP tidak merespons. Coba lagi nanti.",
+    "pipeline.kk_ai_unavailable": "AI Kartu Keluarga tidak merespons. Coba lagi nanti.",
     "pipeline.iuran_ai_unavailable": "AI Info Iuran tidak merespons. Coba lagi nanti.",
     "pipeline.skck_ai_unavailable": "AI SKCK tidak merespons. Coba lagi nanti.",
     "pipeline.vaksinasi_1_ai_unavailable": "AI vaksinasi dosis 1 tidak merespons. Coba lagi nanti.",
     "pipeline.vaksinasi_2_ai_unavailable": "AI vaksinasi dosis 2 tidak merespons. Coba lagi nanti.",
     "pipeline.vaksinasi_3_ai_unavailable": "AI vaksinasi booster tidak merespons. Coba lagi nanti.",
+    "pipeline.bpjs_tk_ai_unavailable": "AI BPJS Ketenagakerjaan tidak merespons. Coba lagi nanti.",
+    "pipeline.bpjs_kesanggupan_ai_unavailable": "AI surat kesanggupan BPJS tidak merespons. Coba lagi nanti.",
+    "pipeline.jkn_ai_unavailable": "AI Info Peserta JKN tidak merespons. Coba lagi nanti.",
+    "pipeline.ijasah_ai_unavailable": "AI ijazah tidak merespons. Coba lagi nanti.",
+    "pipeline.transkrip_ai_unavailable": "AI transkrip tidak merespons. Coba lagi nanti.",
+    "pipeline.formulir_okb_ai_unavailable": "AI formulir OKB tidak merespons. Coba lagi nanti.",
+    "pipeline.formulir_lamaran_ai_unavailable": "AI formulir lamaran tidak merespons. Coba lagi nanti.",
+    "pipeline.surat_lamaran_ai_unavailable": "AI surat lamaran tidak merespons. Coba lagi nanti.",
     "pipeline.ocr_error": "Gagal membaca teks dokumen. Coba unggah ulang.",
     "pipeline.internal": "Terjadi kesalahan sistem saat memproses dokumen.",
     "pipeline.missing_expected_bank": "Bank referensi wajib diisi (mandiri atau mas).",
     "pipeline.missing_expected_account": "Nomor rekening referensi wajib diisi.",
+    "pipeline.missing_expected_card_number": "Nomor kartu wajib diisi. KIS dan BPJS dicek sebagai input terpisah.",
     "pipeline.missing_expected_identity": "Isi nama dan/atau nomor rekening referensi.",
     "pipeline.missing_ocr_text": "Teks OCR kosong.",
     "generic.validation_failed": "Dokumen tidak lolos validasi.",
@@ -68,6 +80,7 @@ ERROR_CATALOG: dict[str, str] = {
     # BPJS / JKN / iuran / vaksin
     "bpjs.wrong_document": "Dokumen ini bukan kartu BPJS Kesehatan (KIS) yang valid.",
     "bpjs.name_mismatch": "Nama pada kartu BPJS Kesehatan tidak cocok.",
+    "bpjs.card_mismatch": "Nomor kartu tidak sama dengan nomor yang dikirim.",
     "bpjs_tk.wrong_document": "Dokumen ini bukan kartu BPJS Ketenagakerjaan yang valid.",
     "bpjs_tk.name_mismatch": "Nama pada kartu BPJS Ketenagakerjaan tidak cocok.",
     "bpjs_kesanggupan.wrong_document": "Dokumen ini bukan surat kesanggupan BPJS yang valid.",
@@ -75,6 +88,7 @@ ERROR_CATALOG: dict[str, str] = {
     "bpjs_kesanggupan.stamp_missing": "Surat kesanggupan BPJS wajib memakai materai merah.",
     "jkn.wrong_document": "Dokumen ini bukan layar Info Peserta JKN yang valid.",
     "jkn.name_mismatch": "Nama peserta JKN tidak cocok.",
+    "jkn.card_mismatch": "Nomor kartu tidak sama dengan nomor yang dikirim.",
     "iuran.wrong_document": "Dokumen ini bukan layar Info Iuran JKN yang valid.",
     "iuran.name_mismatch": "Nama pada Info Iuran tidak cocok.",
     "vaksinasi_1.wrong_document": "Dokumen ini bukan sertifikat vaksinasi dosis 1 yang valid.",
@@ -124,12 +138,24 @@ PIPELINE_KIND_TO_CODE: dict[str, str] = {
     "npwp_ai_unavailable": "pipeline.npwp_ai_unavailable",
     "pemadanan_npwp_ai_unavailable": "pipeline.pemadanan_npwp_ai_unavailable",
     "rekening_ai_unavailable": "pipeline.rekening_ai_unavailable",
+    "mutasi_ai_unavailable": "pipeline.mutasi_ai_unavailable",
     "bpjs_ai_unavailable": "pipeline.bpjs_ai_unavailable",
+    "ktp_ai_unavailable": "pipeline.ktp_ai_unavailable",
+    "kk_ai_unavailable": "pipeline.kk_ai_unavailable",
     "iuran_ai_unavailable": "pipeline.iuran_ai_unavailable",
     "skck_ai_unavailable": "pipeline.skck_ai_unavailable",
     "vaksinasi_1_ai_unavailable": "pipeline.vaksinasi_1_ai_unavailable",
     "vaksinasi_2_ai_unavailable": "pipeline.vaksinasi_2_ai_unavailable",
     "vaksinasi_3_ai_unavailable": "pipeline.vaksinasi_3_ai_unavailable",
+    "bpjs_tk_ai_unavailable": "pipeline.bpjs_tk_ai_unavailable",
+    "bpjs_kesanggupan_ai_unavailable": "pipeline.bpjs_kesanggupan_ai_unavailable",
+    "jkn_ai_unavailable": "pipeline.jkn_ai_unavailable",
+    "ijasah_ai_unavailable": "pipeline.ijasah_ai_unavailable",
+    "transkrip_ai_unavailable": "pipeline.transkrip_ai_unavailable",
+    "formulir_okb_ai_unavailable": "pipeline.formulir_okb_ai_unavailable",
+    "formulir_lamaran_ai_unavailable": "pipeline.formulir_lamaran_ai_unavailable",
+    "surat_lamaran_ai_unavailable": "pipeline.surat_lamaran_ai_unavailable",
+    "missing_expected_card_number": "pipeline.missing_expected_card_number",
     "mistral_unavailable": "pipeline.ocr_unavailable",
     "ocr_error": "pipeline.ocr_error",
     "ocr_value_error": "pipeline.ocr_error",
@@ -337,6 +363,12 @@ def infer_error_cases(validation: dict[str, Any]) -> list[dict[str, str]]:
         profile == "bpjs_kesanggupan" and validation.get("stamp_pass") is False
     ):
         add("bpjs_kesanggupan.stamp_missing")
+
+    if "CARD_MISMATCH" in blockers or validation.get("card_numbers_match") is False:
+        if profile == "bpjs":
+            add("bpjs.card_mismatch")
+        elif profile == "jkn":
+            add("jkn.card_mismatch")
 
     if "SKCK_EXPIRY" in blockers or (
         profile == "skck" and validation.get("skck_expiry_pass") is False

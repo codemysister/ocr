@@ -28,7 +28,10 @@ Jangan awali dengan kata JSON, jangan pakai bullet, jangan pakai markdown.
 - holder_name (string): nama peserta yang tercetak di kartu, apa adanya (boleh terpotong).
   Bukan nama faskes, alamat, atau judul "Kartu Indonesia Sehat".
 - nik (string): NIK 16 digit jika terlihat, else "".
-- card_number (string): nomor kartu BPJS jika terlihat, else "".
+- card_number (string): nomor kartu pada Kartu Indonesia Sehat, else "".
+- info_peserta_card_number (string): nomor peserta pada layar Info Peserta jika ikut terlihat di gambar yang sama, else "".
+- info_peserta_nik (string): NIK pada layar Info Peserta jika ikut terlihat, else "".
+  Jika nomor KIS dan nomor Info Peserta berbeda, tetap salin keduanya apa adanya. Jangan disamakan.
 - confidence (number 0-100)
 - notes (string): alasan singkat bahasa Indonesia, maksimal 12 kata
 """
@@ -36,7 +39,8 @@ Jangan awali dengan kata JSON, jangan pakai bullet, jangan pakai markdown.
 
 def bpjs_user_prompt(*, expected_name: str = "") -> str:
     lines = [
-        "Apakah ini kartu BPJS Kesehatan (KIS)? Ambil nama peserta dan NIK.",
+        "Apakah ini kartu BPJS Kesehatan (KIS)? Ambil nama peserta, nomor kartu, dan NIK.",
+        "Jika layar Info Peserta ikut terlihat, isi info_peserta_card_number terpisah. Jangan samakan nomor yang berbeda.",
         "Kembalikan JSON saja.",
     ]
     if expected_name.strip():
@@ -70,12 +74,66 @@ def parse_bpjs_name_from_filename(filename: str) -> str:
     return stem.split("_", 1)[1].replace("_", " ").strip()
 
 
+def participant_ids_conflict(left: list[str], right: list[str]) -> bool:
+    """True bila kedua sisi punya nomor kartu atau NIK dan ada yang tidak sama."""
+
+    def bucket(values: list[str]) -> tuple[set[str], set[str]]:
+        cards: set[str] = set()
+        niks: set[str] = set()
+        for raw in values:
+            for digits in re.findall(r"\d+", str(raw or "")):
+                if len(digits) == 16:
+                    niks.add(digits)
+                elif 11 <= len(digits) <= 15:
+                    cards.add(digits.lstrip("0") or digits)
+        return cards, niks
+
+    left_cards, left_niks = bucket(left)
+    right_cards, right_niks = bucket(right)
+    if left_cards and right_cards and left_cards != right_cards:
+        return True
+    if left_niks and right_niks and left_niks != right_niks:
+        return True
+    return False
+
+
+def norm_card_number(value: str) -> str:
+    """Nomor kartu BPJS 11–15 digit, tanpa pemisah. Nol di depan diabaikan saat banding."""
+    digits = re.sub(r"\D", "", value or "")
+    if not (11 <= len(digits) <= 15):
+        return ""
+    return digits.lstrip("0") or digits
+
+
+def payload_cards_mismatch(expected: str, visible: list[str], *, require_all: bool) -> bool:
+    """True jika nomor payload diisi dan nomor pada dokumen tidak sama."""
+    exp = norm_card_number(expected)
+    if not exp:
+        return False
+    found = {norm_card_number(item) for item in visible}
+    found.discard("")
+    if not found:
+        return True
+    if require_all:
+        return any(item != exp for item in found)
+    return exp not in found
+
+
+def _cards_in_text(text: str) -> set[str]:
+    found: set[str] = set()
+    for digits in re.findall(r"\d+", text or ""):
+        if 11 <= len(digits) <= 15:
+            found.add(digits.lstrip("0") or digits)
+    return found
+
+
 def bpjs_validation_from_extraction(
     parsed: dict[str, Any],
     *,
     document_type: str = "bpjs",
     expected_name: str = "",
     expected_nik: str = "",
+    expected_card_number: str = "",
     llm: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     profile = "bpjs"
@@ -85,6 +143,12 @@ def bpjs_validation_from_extraction(
     if len(nik) != 16:
         nik = ""
     card_number = str(parsed.get("card_number") or "").strip()
+    info_card = str(parsed.get("info_peserta_card_number") or "").strip()
+    info_nik = str(parsed.get("info_peserta_nik") or "").strip()
+    card_text = " ".join([card_number, info_card, str(parsed.get("notes") or "")])
+    numbers_conflict = len(_cards_in_text(card_text)) > 1 or participant_ids_conflict([nik], [info_nik])
+    payload_mismatch = payload_cards_mismatch(expected_card_number, [card_number, info_card], require_all=True)
+    numbers_conflict = numbers_conflict or payload_mismatch
     exp_name = (expected_name or "").strip()
     exp_nik = _digits(expected_nik)
     if len(exp_nik) != 16:
@@ -115,7 +179,7 @@ def bpjs_validation_from_extraction(
         identity_pass = None
         name_method = "skipped"
 
-    matched = is_kis and identity_pass is not False
+    matched = is_kis and identity_pass is not False and not numbers_conflict
     blockers: list[str] = []
     detail_lines: list[str] = []
     if is_kis:
@@ -123,6 +187,9 @@ def bpjs_validation_from_extraction(
     else:
         blockers.append("DOCUMENT_TYPE")
         detail_lines.append("Gambar bukan kartu BPJS Kesehatan (KIS).")
+    if numbers_conflict:
+        blockers.insert(0, "CARD_MISMATCH")
+        detail_lines.insert(0, "Nomor kartu tidak sama dengan nomor yang dikirim.")
     if name_pass is True:
         detail_lines.append(f"Nama peserta cocok: {holder}.")
     elif nik_pass is True:
@@ -170,6 +237,10 @@ def bpjs_validation_from_extraction(
         document_matched=matched,
         name_extraction=name_extraction,
     )
+    if numbers_conflict:
+        verdict = dict(verdict)
+        verdict["document_matched"] = False
+        verdict["summary"] = "Nomor kartu tidak sama dengan nomor yang dikirim."
     return attach_user_errors(
         {
             "valid": matched,
@@ -181,6 +252,9 @@ def bpjs_validation_from_extraction(
             "holder_name": holder,
             "nik": nik,
             "card_number": card_number,
+            "info_peserta_card_number": info_card,
+            "card_numbers_match": not numbers_conflict,
+            "expected_card_number": norm_card_number(expected_card_number),
             "name_pass": name_pass,
             "nik_pass": nik_pass,
             "name_match_method": name_method,
@@ -216,6 +290,7 @@ def analyze_bpjs_image(
     document_type: str = "bpjs",
     expected_name: str = "",
     expected_nik: str = "",
+    expected_card_number: str = "",
     llm_base_url: str | None = None,
     llm_model: str | None = None,
 ) -> dict[str, Any]:
@@ -271,6 +346,7 @@ def analyze_bpjs_image(
         document_type=document_type,
         expected_name=expected_name,
         expected_nik=expected_nik,
+        expected_card_number=expected_card_number,
         llm=llm,
     )
     return {

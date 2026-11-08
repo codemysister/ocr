@@ -29,7 +29,12 @@ Jangan awali dengan kata JSON, jangan pakai bullet, jangan pakai markdown.
   Ikhtisar Profil Wajib Pajak,
   atau Surat Keterangan Aktivasi NIK (Kop DJP, judul "SURAT KETERANGAN AKTIVASI NIK").
   Pada surat aktivasi, NIK 16 digit adalah NPWP hasil pemadanan. Status Nonaktif tetap true.
-  false jika KTP, KK, BPJS, atau kartu NPWP format lama 15 digit (contoh 09.123.456.7-890.000).
+  false jika KTP, KK, BPJS, kartu NPWP format lama 15 digit (contoh 09.123.456.7-890.000),
+  atau halaman login (Selamat Datang, ID Pengguna, Kata Sandi, tombol Masuk).
+  NIK di kolom login bukan bukti pemadanan.
+  Selain ketiga dokumen itu, false.
+- document_kind (string): "kartu_npwp", "ikhtisar", "aktivasi", atau "lain".
+- is_login (boolean): true jika ini form login Coretax/DJP, bukan kartu, ikhtisar, atau surat aktivasi.
 - holder_name (string): nama wajib pajak, apa adanya.
 - npwp_number (string): nomor NPWP 16 digit. Pada surat aktivasi, salin NIK ke sini.
   Jika ada nomor 16 digit dan nomor format lama, ambil yang 16 digit. Kosong jika tidak terbaca.
@@ -41,9 +46,10 @@ Jangan awali dengan kata JSON, jangan pakai bullet, jangan pakai markdown.
 def pemadanan_user_prompt(*, expected_name: str = "") -> str:
     lines = [
         "Apakah ini bukti pemadanan NPWP?",
-        "Kartu NPWP 16 digit, Ikhtisar Profil DJP, dan Surat Keterangan Aktivasi NIK semuanya lolos.",
+        "Hanya kartu NPWP 16 digit, Ikhtisar Profil DJP, dan Surat Keterangan Aktivasi NIK yang lolos.",
+        "Selain itu is_pemadanan_npwp false dan document_kind lain.",
         "Pada surat aktivasi, salin NIK 16 digit sebagai nomor NPWP.",
-        "KTP dan kartu format lama 15 digit bukan pemadanan.",
+        "KTP, KK, BPJS, format lama 15 digit, dan form login bukan pemadanan.",
         "Kembalikan JSON saja.",
     ]
     if expected_name.strip():
@@ -86,19 +92,33 @@ def pemadanan_validation_from_extraction(
     digits = _digits(number)
     nik_field = _digits(str(parsed.get("nik") or ""))
     notes_blob = str(parsed.get("notes") or "").casefold()
-    compact = re.sub(r"[\s\-]", "", notes_blob)
+    compact = re.sub(r"[^a-z0-9]", "", notes_blob)
     aktivasi = "aktivasinik" in compact or "suratketeranganaktivasi" in compact
-    if len(digits) != 16 and len(nik_field) == 16 and (aktivasi or is_doc):
+    ikhtisar = "ikhtisarprofil" in compact or "ikhtisarwajibpajak" in compact
+    login_screen = _as_bool(parsed.get("is_login")) or any(
+        token in compact
+        for token in (
+            "selamatdatang",
+            "katasandi",
+            "lupakatasandi",
+            "idpengguna",
+            "penggunabaru",
+            "belumaktivasi",
+            "sayabukanrobot",
+        )
+    )
+    kind = re.sub(r"[^a-z_]", "", str(parsed.get("document_kind") or "").casefold())
+    if login_screen or _is_old_npwp_only(number):
+        is_doc = False
+    elif kind:
+        is_doc = kind in {"kartu_npwp", "ikhtisar", "aktivasi"}
+    elif aktivasi or ikhtisar:
+        is_doc = True
+    elif any(marker in notes_blob for marker in ("ini ktp", "kartu keluarga", "bukan npwp", "bukan hasil pemadanan", "bpjs")):
+        is_doc = False
+    if len(digits) != 16 and len(nik_field) == 16 and (aktivasi or is_doc) and not login_screen:
         digits = nik_field
         number = nik_field
-    if aktivasi:
-        is_doc = True
-    elif len(digits) == 16 and not any(
-        marker in notes_blob for marker in ("ini ktp", "kartu keluarga", "bukan npwp", "bpjs")
-    ):
-        is_doc = True
-    elif _is_old_npwp_only(number):
-        is_doc = False
     nik = digits if len(digits) == 16 else ""
     format_lama = len(digits) != 16
     exp_name = (expected_name or "").strip()
@@ -139,6 +159,8 @@ def pemadanan_validation_from_extraction(
     else:
         blockers.append("DOCUMENT_TYPE")
         detail_lines.append("Gambar bukan bukti pemadanan NPWP.")
+        if login_screen:
+            detail_lines.append("Gambar adalah form login, bukan bukti pemadanan.")
     if format_lama:
         detail_lines.append("Nomor NPWP bukan 16 digit.")
     if name_pass is False and nik_pass is not True:

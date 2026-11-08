@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 from typing import Any
 
 from systems.validation.document_profiles import profile_label
@@ -23,8 +24,11 @@ Kembalikan HANYA satu objek JSON (tanpa markdown):
 - is_profile_photo (boolean): true jika ini foto orang untuk pas foto / foto profil
   (wajah orang sebagai subjek utama, pose foto formal atau close-up). false jika KTP, dokumen,
   screenshot, pemandangan, atau bukan foto orang.
-- is_blue_background (boolean): true hanya jika latar belakang dominan biru solid
-  seperti pas foto resmi. false jika putih, merah, abu-abu, motif, atau ruangan.
+- is_blue_background (boolean): true hanya jika latar adalah kain/backdrop biru solid
+  seperti pas foto resmi: warna rata, tanpa tekstur tembok.
+  false jika biru itu warna cat dinding, tembok, ruangan, gorden, atau ada tekstur/bayangan dinding.
+  false juga untuk putih, merah, abu-abu, motif, atau ruangan.
+- is_wall (boolean): true jika latar adalah dinding atau tembok, termasuk dinding yang dicat biru.
 - confidence (number 0-100)
 - notes (string): alasan singkat bahasa Indonesia, maksimal 12 kata
 """
@@ -32,7 +36,8 @@ Kembalikan HANYA satu objek JSON (tanpa markdown):
 
 def portrait_user_prompt() -> str:
     return (
-        "Apakah gambar ini foto profil/pas foto, dan apakah latar belakangnya biru? "
+        "Apakah gambar ini foto profil/pas foto, dan apakah latarnya backdrop biru solid? "
+        "Dinding yang dicat biru bukan latar pas foto. is_wall true dan is_blue_background false. "
         "Kembalikan JSON saja."
     )
 
@@ -57,6 +62,15 @@ def portrait_validation_from_extraction(
     profile = "foto_profile"
     is_profile = _as_bool(parsed.get("is_profile_photo"))
     is_blue = _as_bool(parsed.get("is_blue_background"))
+    notes_raw = str(parsed.get("notes") or "")
+    compact = re.sub(r"[^a-z0-9]", "", notes_raw.casefold())
+    wall = _as_bool(parsed.get("is_wall")) or (
+        any(token in compact for token in ("dinding", "tembok", "catdinding"))
+        and "bukandinding" not in compact
+        and "bukantembok" not in compact
+    )
+    if wall:
+        is_blue = False
     matched = is_profile and is_blue
 
     blockers: list[str] = []
@@ -71,6 +85,8 @@ def portrait_validation_from_extraction(
     else:
         blockers.append("BLUE_BACKGROUND")
         detail_lines.append("Latar belakang bukan biru solid.")
+        if wall:
+            detail_lines.append("Biru yang terlihat adalah warna dinding, bukan backdrop pas foto.")
 
     notes = str(parsed.get("notes") or "").strip()
     if notes:

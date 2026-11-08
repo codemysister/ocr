@@ -86,7 +86,7 @@ _UNTIL_LABEL_RE = re.compile(
     re.I,
 )
 _FROM_LABEL_RE = re.compile(
-    r"(?:berlaku\s+untuk|valid\s+from)",
+    r"(?:berlaku\s+dari(?:\s+tanggal)?|berlaku\s+untuk|valid\s+from)",
     re.I,
 )
 

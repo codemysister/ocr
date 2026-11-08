@@ -440,6 +440,18 @@ def test_skck_expiry_must_not_be_past() -> None:
     expired = evaluate_skck_expiry_gate(sample, profile_id="skck", today=date(2026, 11, 21))
     assert expired and expired["expiry_pass"] is False
 
+    image = (
+        "Untuk keperluan MELAMAR PEKERJAAN\n"
+        "Berlaku dari tanggal : 04 DESEMBER 2025\n"
+        "Valid from\n"
+        "Sampai dengan : 04 JUNI 2026\n"
+        "Until\n"
+    )
+    image_gate = evaluate_skck_expiry_gate(image, profile_id="skck", today=date(2026, 10, 27))
+    assert image_gate and image_gate["expiry_pass"] is False
+    assert image_gate["valid_from"] == "2025-12-04"
+    assert image_gate["valid_until"] == "2026-06-04"
+
     ok = validate_document_ocr(
         sample,
         document_type="skck",
@@ -532,6 +544,20 @@ def test_skck_ai_expiry_and_name() -> None:
         name="Anggun Ramadhani",
     )
     assert ok is True and code is None
+
+    ok, code = codes(
+        {
+            "is_skck": True,
+            "holder_name": "ANGGUN RAMADHANI",
+            "valid_from": "2026-12-04",
+            "valid_until": "2026-12-04",
+            "valid_from_text": "04 DESEMBER 2025",
+            "valid_until_text": "04 JUNI 2026",
+            "notes": "Berlaku dari 04 DESEMBER 2025. Sampai dengan 04 JUNI 2026.",
+        },
+        name="Anggun Ramadhani",
+    )
+    assert ok is False and code == "skck.expired"
 
 
 _KESANGGUPAN_BODY = """
@@ -1588,6 +1614,22 @@ def test_rekening_ai_accepts_partial_and_masked_name() -> None:
     assert apostrophe["name_pass"] is True
     assert apostrophe["document_matched"] is True
 
+    passbook = rekening_validation_from_extraction(
+        {
+            **base,
+            "is_front_page": False,
+            "is_passbook": True,
+            "holder_name": "AULIA FEBRIYZA",
+            "account_number": "1560028468471",
+            "notes": "Buku tabungan kertas dengan stempel cabang",
+        },
+        expected_name="Aulia Febriyza",
+        expected_bank="mandiri",
+        expected_account="1560028468471",
+    )
+    assert passbook["document_matched"] is False
+    assert passbook["error_code"] == "rekening.wrong_document"
+
     glued = rekening_validation_from_extraction(
         {**base, "holder_name": "SYAHRUL ARRIZAL MAARIF"},
         expected_name="Syahrul Arrizal Ma'arif",
@@ -1628,8 +1670,23 @@ def test_rekening_ai_accepts_partial_and_masked_name() -> None:
         expected_bank="mandiri",
         expected_account="1660007606288",
     )
-    assert hidden_name["document_matched"] is True
-    assert hidden_name["name_match_method"] == "account"
+    assert hidden_name["document_matched"] is False
+    assert hidden_name["error_code"] == "rekening.name_mismatch"
+
+    no_owner = rekening_validation_from_extraction(
+        {
+            **base,
+            "is_front_page": True,
+            "holder_name": "",
+            "account_number": "1730022558424",
+            "notes": "Detail Rekening tanpa nama pemilik",
+        },
+        expected_name="Siti Aminah",
+        expected_bank="mandiri",
+        expected_account="1730022558424",
+    )
+    assert no_owner["document_matched"] is False
+    assert no_owner["error_code"] == "rekening.name_mismatch"
 
     odd_length = rekening_validation_from_extraction(
         {**base, "holder_name": "ASHA FAUZIA RAHMA", "account_number": "60014403566"},
@@ -1670,6 +1727,85 @@ def test_rekening_ai_accepts_partial_and_masked_name() -> None:
         expected_account="1330035980275",
     )
     assert statement["error_code"] == "rekening.wrong_type_statement"
+
+    transaction_home = rekening_validation_from_extraction(
+        {
+            **base,
+            "is_front_page": True,
+            "is_transaction_home": True,
+            "holder_name": "Deva Apriana",
+            "account_number": "1620011962644",
+            "notes": "Tabungan NOW IDR. Saldo Rp 0. Transaksi. e-Statement. Transfer Rupiah.",
+        },
+        expected_name="Deva Apriana",
+        expected_bank="mandiri",
+        expected_account="1620011962644",
+    )
+    assert transaction_home["document_matched"] is False
+    assert transaction_home["error_code"] == "rekening.wrong_document"
+
+    transaction_notes = rekening_validation_from_extraction(
+        {
+            **base,
+            "is_front_page": True,
+            "holder_name": "Deva Apriana",
+            "account_number": "1620011962644",
+            "notes": "Belum ada transaksi pada bulan ini. Top-up. Bayar/VA.",
+        },
+        expected_name="Deva Apriana",
+        expected_bank="mandiri",
+        expected_account="1620011962644",
+    )
+    assert transaction_notes["document_matched"] is False
+    assert transaction_notes["error_code"] == "rekening.wrong_document"
+
+    product_list = rekening_validation_from_extraction(
+        {
+            **base,
+            "is_front_page": True,
+            "is_product_list": True,
+            "holder_name": "Erika Rizqi Nurhayati",
+            "account_number": "1560028474734",
+            "notes": "Produk Anda. Tabungan & Giro Perorangan. Tabungan Emas. Lihat SPT.",
+        },
+        expected_name="Erika Rizqi Nurhayati",
+        expected_bank="mandiri",
+        expected_account="1560028474734",
+    )
+    assert product_list["document_matched"] is False
+    assert product_list["error_code"] == "rekening.wrong_document"
+
+    opening = rekening_validation_from_extraction(
+        {
+            **base,
+            "is_front_page": True,
+            "is_account_opening": True,
+            "holder_name": "Erika Rizqi Nurhayati",
+            "account_number": "1560028475350",
+            "notes": "Yeay, Pembukaan Rekening Berhasil. Nomor Rekening. Cara Setor Dana. Lanjut ke Beranda.",
+        },
+        expected_name="Erika Rizqi Nurhayati",
+        expected_bank="mandiri",
+        expected_account="1560028475350",
+    )
+    assert opening["document_matched"] is False
+    assert opening["error_code"] == "rekening.wrong_document"
+
+    detail_card = rekening_validation_from_extraction(
+        {
+            **base,
+            "is_savings_account": False,
+            "is_front_page": False,
+            "holder_name": "MEI NUR ADLUN",
+            "account_number": "1760007000324",
+            "notes": "Tabungan NOW IDR. Lihat Detail. Sebagai Rekening Utama. Daftar Kartu. GPN Silver.",
+        },
+        expected_name="Mei Nur Adlun",
+        expected_bank="mandiri",
+        expected_account="1760007000324",
+    )
+    assert detail_card["document_matched"] is True
+    assert detail_card["error_code"] is None
 
 
 def test_npwp_ai_format_lama_flag() -> None:
@@ -1792,15 +1928,29 @@ def test_pemadanan_npwp_ai_identity() -> None:
 
     new_card = pemadanan_validation_from_extraction(
         {
-            "is_pemadanan_npwp": False,
+            "is_pemadanan_npwp": True,
+            "document_kind": "kartu_npwp",
             "holder_name": "BUNGA SABRIYA",
             "npwp_number": "3172045809060002",
-            "notes": "Kartu NPWP format lama 15 digit, bukan hasil pemadanan.",
+            "notes": "Kartu NPWP 16 digit.",
         },
         expected_name="Bunga Sabriya",
         expected_nik="3172045809060002",
     )
     assert new_card["document_matched"] is True
+
+    bare_nik = pemadanan_validation_from_extraction(
+        {
+            "is_pemadanan_npwp": False,
+            "holder_name": "",
+            "npwp_number": "3172045809060002",
+            "notes": "Hanya ada NIK 16 digit.",
+        },
+        expected_name="Bunga Sabriya",
+        expected_nik="3172045809060002",
+    )
+    assert bare_nik["document_matched"] is False
+    assert bare_nik["error_code"] == "pemadanan_npwp.wrong_document"
 
     old_card = pemadanan_validation_from_extraction(
         {
@@ -1826,6 +1976,19 @@ def test_pemadanan_npwp_ai_identity() -> None:
     )
     assert aktivasi["document_matched"] is True
     assert aktivasi["nik"] == "3214066412070001"
+
+    login = pemadanan_validation_from_extraction(
+        {
+            "is_pemadanan_npwp": True,
+            "holder_name": "",
+            "npwp_number": "3215045608040002",
+            "notes": "Selamat Datang. ID Pengguna. Kata Sandi. Masuk. Coretax DJP.",
+        },
+        expected_name="Siti Aminah",
+        expected_nik="3215045608040002",
+    )
+    assert login["document_matched"] is False
+    assert login["error_code"] == "pemadanan_npwp.wrong_document"
 
     name = parse_bpjs_name_from_filename(
         "pemadanan npwp_M. CHAIRIL HAMZAH_3213080506990001.jpg"
@@ -2185,6 +2348,20 @@ def test_iuran_ai_modal_name_and_nik() -> None:
     assert riwayat["document_matched"] is True
     assert riwayat["name_match_method"] == "modal"
 
+    riwayat_lunas = iuran_validation_from_extraction(
+        {
+            "is_info_iuran": True,
+            "is_payment_history": True,
+            "holder_name": "DEVLINA CHRISTIN SINTOMARITO",
+            "name_displayed": True,
+            "has_tagihan": True,
+            "notes": "Info Riwayat Pembayaran. Pembayaran Iuran. Channel FINNET BTN. Tgl Bayar. Status Lunas.",
+        },
+        expected_name="Devlina Christin Sintomarito",
+    )
+    assert riwayat_lunas["document_matched"] is False
+    assert riwayat_lunas["error_code"] == "iuran.wrong_document"
+
     pandawa = iuran_validation_from_extraction(
         {
             "is_info_iuran": False,
@@ -2198,6 +2375,22 @@ def test_iuran_ai_modal_name_and_nik() -> None:
     )
     assert pandawa["document_matched"] is True
     assert pandawa["name_match_method"] == "masked"
+
+    keluarga = iuran_validation_from_extraction(
+        {
+            "is_info_iuran": True,
+            "is_info_peserta": True,
+            "has_tagihan": False,
+            "holder_name": "MARYATI",
+            "name_displayed": True,
+            "modal_tanpa_tagihan": False,
+            "notes": "Info Peserta. Kepesertaan Terdaftar. Faskes 1.",
+            "confidence": 90,
+        },
+        expected_name="MARYATI",
+    )
+    assert keluarga["document_matched"] is False
+    assert keluarga["error_code"] == "iuran.wrong_document"
 
 
 def test_bpjs_ai_truncated_name_and_nik() -> None:
@@ -2258,6 +2451,705 @@ def test_bpjs_ai_truncated_name_and_nik() -> None:
     )
 
 
+def test_bpjs_and_jkn_reject_different_card_numbers() -> None:
+    from systems.validation.bpjs_ai import bpjs_validation_from_extraction
+    from systems.validation.jkn_ai import jkn_validation_from_extraction
+
+    mismatch = {
+        "is_bpjs_kesehatan": True,
+        "holder_name": "NITA",
+        "nik": "3201066604990001",
+        "card_number": "0000999699491",
+        "info_peserta_card_number": "0002885506964",
+        "notes": "KIS dan Info Peserta nomornya beda.",
+    }
+    bpjs = bpjs_validation_from_extraction(mismatch, expected_name="Anita")
+    assert bpjs["document_matched"] is False
+    assert bpjs["card_numbers_match"] is False
+    assert bpjs["error_code"] == "bpjs.card_mismatch"
+
+    same = bpjs_validation_from_extraction(
+        {
+            "is_bpjs_kesehatan": True,
+            "holder_name": "ANITA",
+            "nik": "3201066604990001",
+            "card_number": "0002885506964",
+            "info_peserta_card_number": "0002885506964",
+        },
+        expected_name="Anita",
+    )
+    assert same["document_matched"] is True
+    assert same["error_code"] is None
+
+    jkn = jkn_validation_from_extraction(
+        {
+            "is_info_peserta": True,
+            "members": [
+                {
+                    "name": "ANITA",
+                    "nik": "",
+                    "card_number": "0002885506964",
+                    "status": "AKTIF",
+                }
+            ],
+            "bpjs_card_number": "0000999699491",
+            "bpjs_nik": "3201066604990001",
+            "notes": "Kepesertaan Terdaftar. Kartu Indonesia Sehat ikut terlihat.",
+        },
+        expected_name="Anita",
+    )
+    assert jkn["document_matched"] is False
+    assert jkn["error_code"] == "jkn.card_mismatch"
+
+    family = jkn_validation_from_extraction(
+        {
+            "is_info_peserta": True,
+            "members": [
+                {"name": "ANITA", "nik": "", "card_number": "0002885506964", "status": "AKTIF"},
+                {"name": "BUDI", "nik": "", "card_number": "0001111111111", "status": "AKTIF"},
+            ],
+        },
+        expected_name="Anita",
+    )
+    assert family["document_matched"] is True
+    assert family["error_code"] is None
+
+    kis_payload = bpjs_validation_from_extraction(
+        {
+            "is_bpjs_kesehatan": True,
+            "holder_name": "NITA",
+            "card_number": "0000999699491",
+            "nik": "3201066604990001",
+        },
+        expected_name="Nita",
+        expected_card_number="0002885506964",
+    )
+    assert kis_payload["document_matched"] is False
+    assert kis_payload["error_code"] == "bpjs.card_mismatch"
+
+    kis_same_payload = bpjs_validation_from_extraction(
+        {
+            "is_bpjs_kesehatan": True,
+            "holder_name": "ANITA",
+            "card_number": "0002885506964",
+        },
+        expected_name="Anita",
+        expected_card_number="0002885506964",
+    )
+    assert kis_same_payload["document_matched"] is True
+
+    jkn_payload = jkn_validation_from_extraction(
+        {
+            "is_info_peserta": True,
+            "members": [
+                {"name": "ANITA", "nik": "", "card_number": "0002885506964", "status": "AKTIF"}
+            ],
+        },
+        expected_name="Anita",
+        expected_card_number="0000999699491",
+    )
+    assert jkn_payload["document_matched"] is False
+    assert jkn_payload["error_code"] == "jkn.card_mismatch"
+
+    jkn_family_payload = jkn_validation_from_extraction(
+        {
+            "is_info_peserta": True,
+            "members": [
+                {"name": "ANITA", "nik": "", "card_number": "0002885506964", "status": "AKTIF"},
+                {"name": "BUDI", "nik": "", "card_number": "0001111111111", "status": "AKTIF"},
+            ],
+        },
+        expected_name="Anita",
+        expected_card_number="0002885506964",
+    )
+    assert jkn_family_payload["document_matched"] is True
+
+    from app.pipeline_runner import run_pipeline_bytes
+
+    missing = run_pipeline_bytes(b"xx", document_type="bpjs", expected_name="Anita")
+    assert missing.ok is False
+    assert missing.error_kind == "missing_expected_card_number"
+    assert missing.http_status_hint == 400
+    missing_jkn = run_pipeline_bytes(b"xx", document_type="jkn", expected_card_number="123")
+    assert missing_jkn.error_kind == "missing_expected_card_number"
+
+
+def test_ktp_ai_name_nik_and_helper() -> None:
+    from systems.validation.ktp_ai import ktp_validation_from_extraction
+
+    truncated = ktp_validation_from_extraction(
+        {
+            "is_ktp": True,
+            "holder_name": "TIARA",
+            "nik": "3212017010070005",
+            "marital_status": "BELUM KAWIN",
+            "confidence": 90,
+        },
+        expected_name="Tiara Putri",
+        expected_nik="3212017010070005",
+    )
+    assert truncated["name_pass"] is True
+    assert truncated["document_matched"] is True
+    assert truncated["error_code"] is None
+    assert truncated["marital_status"]["status"] == "belum_kawin"
+
+    nik_only = ktp_validation_from_extraction(
+        {"is_ktp": True, "holder_name": "", "nik": "3175066010000006", "marital_status": "KAWIN"},
+        expected_name="Shella Octhaviani",
+        expected_nik="3175066010000006",
+    )
+    assert nik_only["name_match_method"] == "nik"
+    assert nik_only["document_matched"] is True
+
+    wrong = ktp_validation_from_extraction(
+        {"is_ktp": True, "holder_name": "BUDI", "nik": "1111222233334444"},
+        expected_name="Tiara Putri",
+        expected_nik="3212017010070005",
+    )
+    assert wrong["error_code"] == "ktp.name_mismatch"
+
+    not_ktp = ktp_validation_from_extraction(
+        {"is_ktp": False, "holder_name": "Tiara", "nik": "3212017010070005"},
+        expected_name="Tiara Putri",
+    )
+    assert not_ktp["error_code"] == "ktp.wrong_document"
+
+    helper_ok = ktp_validation_from_extraction(
+        {
+            "is_ktp": True,
+            "holder_name": "Tiara Putri",
+            "nik": "3212017010070005",
+            "marital_status": "BELUM KAWIN",
+        },
+        expected_name="Tiara Putri",
+        job_position="Helper",
+    )
+    assert helper_ok["marital_pass"] is True
+    assert helper_ok["document_matched"] is True
+
+    helper_kawin = ktp_validation_from_extraction(
+        {
+            "is_ktp": True,
+            "holder_name": "Tiara Putri",
+            "marital_status": "KAWIN",
+        },
+        expected_name="Tiara Putri",
+        job_position="helper",
+    )
+    assert helper_kawin["marital_pass"] is False
+    assert helper_kawin["error_code"] == "ktp.helper_not_single"
+
+    helper_blank = ktp_validation_from_extraction(
+        {"is_ktp": True, "holder_name": "Tiara Putri", "marital_status": ""},
+        expected_name="Tiara Putri",
+        job_position="Helper",
+    )
+    assert helper_blank["error_code"] == "ktp.helper_not_single"
+
+
+def test_remaining_profiles_use_ornith() -> None:
+    from systems.validation.bpjs_kesanggupan_ai import bpjs_kesanggupan_validation_from_extraction
+    from systems.validation.bpjs_tk_ai import bpjs_tk_validation_from_extraction
+    from systems.validation.jkn_ai import jkn_validation_from_extraction
+    from systems.validation.simple_form_ai import form_validation_from_extraction
+
+    ijasah = form_validation_from_extraction(
+        {"is_ijasah": True, "holder_name": "SITI AMINAH"},
+        profile="ijasah",
+        expected_name="Siti Aminah",
+    )
+    assert ijasah["document_matched"] is True
+    assert ijasah["error_code"] is None
+
+    wrong_name = form_validation_from_extraction(
+        {"is_ijasah": True, "holder_name": "BUDI"},
+        profile="ijasah",
+        expected_name="Siti Aminah",
+    )
+    assert wrong_name["error_code"] == "ijasah.name_mismatch"
+
+    not_diploma = form_validation_from_extraction(
+        {"is_ijasah": False, "holder_name": "SITI AMINAH"},
+        profile="ijasah",
+        expected_name="Siti Aminah",
+    )
+    assert not_diploma["error_code"] == "ijasah.wrong_document"
+
+    tk = bpjs_tk_validation_from_extraction(
+        {"is_bpjs_tk": True, "holder_name": "", "nik": "3212017010070005"},
+        expected_name="Tiara Putri",
+        expected_nik="3212017010070005",
+    )
+    assert tk["name_match_method"] == "nik"
+    assert tk["document_matched"] is True
+
+    not_tk = bpjs_tk_validation_from_extraction(
+        {"is_bpjs_tk": False, "holder_name": "Tiara"},
+        expected_name="Tiara Putri",
+    )
+    assert not_tk["error_code"] == "bpjs_tk.wrong_document"
+
+    stamped = bpjs_kesanggupan_validation_from_extraction(
+        {"is_surat_kesanggupan": True, "holder_name": "EGY SUBAGJA", "has_physical_stamp": True},
+        expected_name="Egy Subagja",
+    )
+    assert stamped["stamp_pass"] is True
+    assert stamped["document_matched"] is True
+
+    no_stamp = bpjs_kesanggupan_validation_from_extraction(
+        {"is_surat_kesanggupan": True, "holder_name": "EGY SUBAGJA", "has_physical_stamp": False},
+        expected_name="Egy Subagja",
+    )
+    assert no_stamp["error_code"] == "bpjs_kesanggupan.stamp_missing"
+
+    jkn = jkn_validation_from_extraction(
+        {
+            "is_info_peserta": True,
+            "members": [{"name": "BAGUS", "nik": "3275010101010001", "status": "TIDAK AKTIF"}],
+        },
+        expected_name="Bagus Junda",
+    )
+    assert jkn["document_matched"] is True
+    assert jkn["jkn_status_label"] == "tidak_aktif"
+    assert jkn["error_code"] is None
+
+    iuran_bukan_peserta = jkn_validation_from_extraction(
+        {
+            "is_info_peserta": True,
+            "is_info_iuran": True,
+            "has_tagihan": True,
+            "members": [{"name": "CECEP RUKMANA", "nik": "", "status": ""}],
+            "notes": "Info Iuran. Sisa Saldo. Tagihan. Total Tagihan.",
+        },
+        expected_name="Cecep Rukmana",
+    )
+    assert iuran_bukan_peserta["document_matched"] is False
+    assert iuran_bukan_peserta["error_code"] == "jkn.wrong_document"
+
+    not_jkn = jkn_validation_from_extraction(
+        {"is_info_peserta": False, "members": []},
+        expected_name="Bagus",
+    )
+    assert not_jkn["error_code"] == "jkn.wrong_document"
+
+    empty_peserta = jkn_validation_from_extraction(
+        {
+            "is_info_peserta": True,
+            "members": [],
+            "notes": "Info Peserta. Jenis Tampilan. Kepesertaan terdaftar. Ubah.",
+        },
+        expected_name="Anita",
+        expected_card_number="0002885506964",
+    )
+    assert empty_peserta["document_matched"] is False
+    assert empty_peserta["error_code"] == "jkn.wrong_document"
+
+    chrome_only = jkn_validation_from_extraction(
+        {
+            "is_info_peserta": True,
+            "members": [{"name": "Kepesertaan terdaftar", "nik": "", "card_number": "", "status": ""}],
+        },
+        expected_name="Anita",
+    )
+    assert chrome_only["document_matched"] is False
+    assert chrome_only["error_code"] == "jkn.wrong_document"
+
+    kis_card = jkn_validation_from_extraction(
+        {
+            "is_info_peserta": True,
+            "is_kis_card": True,
+            "members": [
+                {
+                    "name": "NADILA FIRYNO SARAS",
+                    "nik": "3215034806060002",
+                    "card_number": "0002804344711",
+                    "status": "",
+                }
+            ],
+            "notes": "Kartu Indonesia Sehat. Nomor Kartu. Faskes CAMPEL.",
+        },
+        expected_name="Nadila Firyno Saras",
+        expected_card_number="0002804344711",
+    )
+    assert kis_card["document_matched"] is False
+    assert kis_card["error_code"] == "jkn.wrong_document"
+
+
+def test_pipeline_ijasah_skips_paddle_uses_ornith() -> None:
+    from app import pipeline_runner as pr
+    from systems.validation.simple_form_ai import analyze_ijasah_image as real_ai
+
+    calls = {"ocr_inner": 0}
+
+    def fake_ai(image_bytes, **kwargs):
+        from systems.validation.simple_form_ai import form_validation_from_extraction
+
+        parsed = {"is_ijasah": True, "holder_name": "SITI AMINAH"}
+        validation = form_validation_from_extraction(
+            parsed,
+            profile="ijasah",
+            expected_name=kwargs.get("expected_name") or "",
+        )
+        return {
+            "error": None,
+            "extraction": parsed,
+            "validation": validation,
+            "llm": {"model": "ornith-1.5-9b", "latency_s": 0.1},
+            "raw_content": "{}",
+        }
+
+    real_ocr = pr._run_ocr_inner
+
+    def counting_ocr(*args, **kwargs):
+        calls["ocr_inner"] += 1
+        return real_ocr(*args, **kwargs)
+
+    pr.analyze_ijasah_image = fake_ai
+    pr._run_ocr_inner = counting_ocr
+    try:
+        png = (
+            b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+            b"\x08\x02\x00\x00\x00\x90wS\xde\x00\x00\x00\x0cIDATx\x9cc\xf8\x0f\x00"
+            b"\x00\x01\x01\x00\x05\x18\xd8N\x00\x00\x00\x00IEND\xaeB`\x82"
+        )
+        result = pr.run_pipeline_bytes(
+            png,
+            document_type="ijasah",
+            expected_name="Siti Aminah",
+            ocr_mode="fast",
+        )
+        assert result.ok is True, result.error
+        assert result.document_matched is True
+        assert calls["ocr_inner"] == 0
+        assert result.payload["ocr"]["mode"] == "ornith_ijasah_ai"
+    finally:
+        pr.analyze_ijasah_image = real_ai
+        pr._run_ocr_inner = real_ocr
+
+
+def test_mutasi_ai_bank_and_account() -> None:
+    from systems.validation.mutasi_ai import mutasi_validation_from_extraction
+
+    ok = mutasi_validation_from_extraction(
+        {"is_mutation": True, "bank": "mandiri", "account_number": "1330035980275"},
+        expected_bank="mandiri",
+        expected_account="1330035980275",
+    )
+    assert ok["bank_pass"] is True
+    assert ok["account_pass"] is True
+    assert ok["identity_pass"] is None
+    assert ok["document_matched"] is True
+    assert ok["error_code"] is None
+
+    wrong_acct = mutasi_validation_from_extraction(
+        {"is_mutation": True, "bank": "mandiri", "account_number": "1330035980275"},
+        expected_bank="mandiri",
+        expected_account="1560027756842",
+    )
+    assert wrong_acct["account_pass"] is False
+    assert wrong_acct["error_code"] == "mutasi.account_mismatch"
+
+    leading_zero = mutasi_validation_from_extraction(
+        {"is_mutation": True, "bank": "mandiri", "account_number": "700013443119"},
+        expected_bank="mandiri",
+        expected_account="0700013443119",
+    )
+    assert leading_zero["account_pass"] is True
+    assert leading_zero["document_matched"] is True
+
+    one_digit = mutasi_validation_from_extraction(
+        {"is_mutation": True, "bank": "", "account_number": "1730021695987"},
+        expected_bank="mandiri",
+        expected_account="1730321695987",
+    )
+    assert one_digit["bank_pass"] is True
+    assert one_digit["document_matched"] is True
+
+    counterparty = mutasi_validation_from_extraction(
+        {"is_mutation": True, "bank": "mas", "account_number": "1360034647690"},
+        expected_bank="mandiri",
+        expected_account="1360034647690",
+    )
+    assert counterparty["detected_bank"] == "mandiri"
+    assert counterparty["document_matched"] is True
+
+    wrong_bank = mutasi_validation_from_extraction(
+        {"is_mutation": True, "bank": "mandiri", "account_number": "1004489264"},
+        expected_bank="mas",
+        expected_account="1200000001",
+    )
+    assert wrong_bank["error_code"] == "mutasi.wrong_bank"
+
+    detail_page = mutasi_validation_from_extraction(
+        {"is_mutation": False, "bank": "mandiri", "account_number": "1330035980275"},
+        expected_bank="mandiri",
+        expected_account="1330035980275",
+    )
+    assert detail_page["error_code"] == "mutasi.wrong_document"
+
+
+def test_pipeline_mutasi_skips_paddle_uses_ornith() -> None:
+    from app import pipeline_runner as pr
+    from systems.validation.mutasi_ai import analyze_mutasi_image as real_ai
+
+    calls = {"ocr_inner": 0}
+
+    def fake_ai(image_bytes, **kwargs):
+        from systems.validation.mutasi_ai import mutasi_validation_from_extraction
+
+        parsed = {
+            "is_mutation": True,
+            "bank": "mandiri",
+            "account_number": "1330035980275",
+        }
+        validation = mutasi_validation_from_extraction(
+            parsed,
+            expected_bank=kwargs.get("expected_bank") or "",
+            expected_account=kwargs.get("expected_account") or "",
+        )
+        return {
+            "error": None,
+            "extraction": parsed,
+            "validation": validation,
+            "llm": {"model": "ornith-1.5-9b", "latency_s": 0.1},
+            "raw_content": "{}",
+        }
+
+    real_ocr = pr._run_ocr_inner
+
+    def counting_ocr(*args, **kwargs):
+        calls["ocr_inner"] += 1
+        return real_ocr(*args, **kwargs)
+
+    pr.analyze_mutasi_image = fake_ai
+    pr._run_ocr_inner = counting_ocr
+    try:
+        png = (
+            b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+            b"\x08\x02\x00\x00\x00\x90wS\xde\x00\x00\x00\x0cIDATx\x9cc\xf8\x0f\x00"
+            b"\x00\x01\x01\x00\x05\x18\xd8N\x00\x00\x00\x00IEND\xaeB`\x82"
+        )
+        result = pr.run_pipeline_bytes(
+            png,
+            document_type="mutasi",
+            expected_name="Meli Saputri",
+            expected_bank="mandiri",
+            expected_account="1330035980275",
+            filename="mutasi rekening_Meli Saputri_1330035980275.jpg",
+            ocr_mode="fast",
+        )
+        assert result.ok is True, result.error
+        assert result.document_matched is True
+        assert calls["ocr_inner"] == 0
+        assert result.payload["ocr_engine"] == "ornith"
+        assert result.payload["ocr"]["mode"] == "ornith_mutasi_ai"
+    finally:
+        pr.analyze_mutasi_image = real_ai
+        pr._run_ocr_inner = real_ocr
+
+
+def test_kk_ai_name_or_nik() -> None:
+    from systems.validation.kk_ai import kk_validation_from_extraction
+
+    members = [
+        {"name": "BUDI SANTOSO", "nik": "3216061012920024"},
+        {"name": "SRI PUTRI", "nik": "3201175512030002"},
+    ]
+    both = kk_validation_from_extraction(
+        {
+            "is_kartu_keluarga": True,
+            "family_card_number": "3173030710200004",
+            "members": members,
+        },
+        expected_name="Sri Putri",
+        expected_nik="3201175512030002",
+    )
+    assert both["identity"]["kk_name_pass"] is True
+    assert both["identity"]["kk_nik_pass"] is True
+    assert both["document_matched"] is True
+    assert both["error_code"] is None
+    assert both["holder_name"] == "SRI PUTRI"
+
+    name_only = kk_validation_from_extraction(
+        {"is_kartu_keluarga": True, "members": members},
+        expected_name="Sri Putri",
+        expected_nik="3276025406070011",
+    )
+    assert name_only["identity"]["kk_name_pass"] is True
+    assert name_only["identity"]["kk_nik_pass"] is False
+    assert name_only["document_matched"] is True
+
+    nik_only = kk_validation_from_extraction(
+        {"is_kartu_keluarga": True, "members": members},
+        expected_name="Orang Lain Saja",
+        expected_nik="3201175512030002",
+    )
+    assert nik_only["name_match_method"] == "nik"
+    assert nik_only["document_matched"] is True
+
+    one_digit = kk_validation_from_extraction(
+        {
+            "is_kartu_keluarga": True,
+            "family_card_number": "3215052110120098",
+            "members": [{"name": "MAWAR", "nik": "3215054409060004"}],
+        },
+        expected_name="Bukan Nama",
+        expected_nik="3215054409060014",
+    )
+    assert one_digit["identity"]["kk_nik_pass"] is True
+    assert one_digit["document_matched"] is True
+
+    family_no_only = kk_validation_from_extraction(
+        {
+            "is_kartu_keluarga": True,
+            "family_card_number": "3173030710200004",
+            "members": members,
+        },
+        expected_name="Orang Lain Saja",
+        expected_nik="3173030710200004",
+    )
+    assert family_no_only["error_code"] == "kk.identity_mismatch"
+
+    neither = kk_validation_from_extraction(
+        {"is_kartu_keluarga": True, "members": members},
+        expected_name="Orang Lain Saja",
+        expected_nik="3276025406070011",
+    )
+    assert neither["error_code"] == "kk.identity_mismatch"
+
+    not_kk = kk_validation_from_extraction(
+        {"is_kartu_keluarga": False, "members": members},
+        expected_name="Sri Putri",
+    )
+    assert not_kk["error_code"] == "kk.wrong_document"
+
+    truncated = kk_validation_from_extraction(
+        {"is_kartu_keluarga": True, "members": [{"name": "TIARA", "nik": ""}]},
+        expected_name="Tiara Putri",
+    )
+    assert truncated["document_matched"] is True
+
+
+def test_pipeline_kk_skips_paddle_uses_ornith() -> None:
+    from app import pipeline_runner as pr
+    from systems.validation.kk_ai import analyze_kk_image as real_ai
+
+    calls = {"ocr_inner": 0}
+
+    def fake_ai(image_bytes, **kwargs):
+        from systems.validation.kk_ai import kk_validation_from_extraction
+
+        parsed = {
+            "is_kartu_keluarga": True,
+            "family_card_number": "3173030710200004",
+            "members": [{"name": "SRI PUTRI", "nik": "3201175512030002"}],
+        }
+        validation = kk_validation_from_extraction(
+            parsed,
+            expected_name=kwargs.get("expected_name") or "",
+            expected_nik=kwargs.get("expected_nik") or "",
+        )
+        return {
+            "error": None,
+            "extraction": parsed,
+            "validation": validation,
+            "llm": {"model": "ornith-1.5-9b", "latency_s": 0.1},
+            "raw_content": "{}",
+        }
+
+    real_ocr = pr._run_ocr_inner
+
+    def counting_ocr(*args, **kwargs):
+        calls["ocr_inner"] += 1
+        return real_ocr(*args, **kwargs)
+
+    pr.analyze_kk_image = fake_ai
+    pr._run_ocr_inner = counting_ocr
+    try:
+        png = (
+            b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+            b"\x08\x02\x00\x00\x00\x90wS\xde\x00\x00\x00\x0cIDATx\x9cc\xf8\x0f\x00"
+            b"\x00\x01\x01\x00\x05\x18\xd8N\x00\x00\x00\x00IEND\xaeB`\x82"
+        )
+        result = pr.run_pipeline_bytes(
+            png,
+            document_type="kk",
+            expected_name="Sri Putri",
+            filename="kk_SRI PUTRI_3201175512030002.jpg",
+            ocr_mode="fast",
+        )
+        assert result.ok is True, result.error
+        assert result.document_matched is True
+        assert calls["ocr_inner"] == 0
+        assert result.payload["ocr_engine"] == "ornith"
+        assert result.payload["ocr"]["mode"] == "ornith_kk_ai"
+        assert result.payload["validation"]["holder_name"] == "SRI PUTRI"
+    finally:
+        pr.analyze_kk_image = real_ai
+        pr._run_ocr_inner = real_ocr
+
+
+def test_pipeline_ktp_skips_paddle_uses_ornith() -> None:
+    from app import pipeline_runner as pr
+    from systems.validation.ktp_ai import analyze_ktp_image as real_ai
+
+    calls = {"ocr_inner": 0}
+
+    def fake_ai(image_bytes, **kwargs):
+        from systems.validation.ktp_ai import ktp_validation_from_extraction
+
+        parsed = {
+            "is_ktp": True,
+            "holder_name": "ANGGUN RAMADHANI",
+            "nik": "3275045610060008",
+            "marital_status": "BELUM KAWIN",
+        }
+        validation = ktp_validation_from_extraction(
+            parsed,
+            expected_name=kwargs.get("expected_name") or "",
+            expected_nik=kwargs.get("expected_nik") or "",
+            job_position=kwargs.get("job_position") or "",
+        )
+        return {
+            "error": None,
+            "extraction": parsed,
+            "validation": validation,
+            "llm": {"model": "ornith-1.5-9b", "base_url": "http://172.21.13.26:8080/v1", "latency_s": 0.1},
+            "raw_content": "{}",
+        }
+
+    real_ocr = pr._run_ocr_inner
+
+    def counting_ocr(*args, **kwargs):
+        calls["ocr_inner"] += 1
+        return real_ocr(*args, **kwargs)
+
+    pr.analyze_ktp_image = fake_ai
+    pr._run_ocr_inner = counting_ocr
+    try:
+        png = (
+            b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+            b"\x08\x02\x00\x00\x00\x90wS\xde\x00\x00\x00\x0cIDATx\x9cc\xf8\x0f\x00"
+            b"\x00\x01\x01\x00\x05\x18\xd8N\x00\x00\x00\x00IEND\xaeB`\x82"
+        )
+        result = pr.run_pipeline_bytes(
+            png,
+            document_type="ktp",
+            expected_name="ANGGUN RAMADHANI",
+            filename="ktp_ANGGUN RAMADHANI_3275045610060008.jpg",
+            ocr_mode="fast",
+        )
+        assert result.ok is True
+        assert result.document_matched is True
+        assert calls["ocr_inner"] == 0
+        assert result.payload["ocr_engine"] == "ornith"
+        assert result.payload["ocr"]["mode"] == "ornith_ktp_ai"
+        assert result.payload["validation"]["holder_name"] == "ANGGUN RAMADHANI"
+    finally:
+        pr.analyze_ktp_image = real_ai
+        pr._run_ocr_inner = real_ocr
+
+
 def test_portrait_ai_gates_profile_and_blue_only() -> None:
     from systems.validation.foto_profile_ai import portrait_validation_from_extraction
 
@@ -2272,6 +3164,18 @@ def test_portrait_ai_gates_profile_and_blue_only() -> None:
     )
     assert red["document_matched"] is False
     assert red["error_code"] == "foto_profile.not_blue"
+
+    wall = portrait_validation_from_extraction(
+        {
+            "is_profile_photo": True,
+            "is_blue_background": True,
+            "is_wall": True,
+            "notes": "Biru yang terlihat adalah warna dinding.",
+            "confidence": 90,
+        }
+    )
+    assert wall["document_matched"] is False
+    assert wall["error_code"] == "foto_profile.not_blue"
 
     doc = portrait_validation_from_extraction(
         {"is_profile_photo": False, "is_blue_background": True}
@@ -2324,8 +3228,17 @@ if __name__ == "__main__":
     test_vaksinasi_2_ai_dose_and_name()
     test_vaksinasi_1_ai_dose_and_name()
     test_bpjs_ai_truncated_name_and_nik()
+    test_bpjs_and_jkn_reject_different_card_numbers()
     test_npwp_ai_format_lama_flag()
     test_iuran_ai_modal_name_and_nik()
     test_pemadanan_npwp_ai_identity()
+    test_remaining_profiles_use_ornith()
+    test_pipeline_ijasah_skips_paddle_uses_ornith()
+    test_mutasi_ai_bank_and_account()
+    test_pipeline_mutasi_skips_paddle_uses_ornith()
+    test_kk_ai_name_or_nik()
+    test_pipeline_kk_skips_paddle_uses_ornith()
+    test_ktp_ai_name_nik_and_helper()
+    test_pipeline_ktp_skips_paddle_uses_ornith()
     test_portrait_ai_gates_profile_and_blue_only()
     print("ok")

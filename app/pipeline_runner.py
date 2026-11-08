@@ -70,12 +70,25 @@ from systems.validation.foto_profile_ai import analyze_portrait_image
 from systems.validation.npwp_ai import analyze_npwp_image
 from systems.validation.pemadanan_npwp_ai import analyze_pemadanan_npwp_image
 from systems.validation.rekening_ai import analyze_rekening_image
+from systems.validation.mutasi_ai import analyze_mutasi_image
 from systems.validation.bpjs_ai import analyze_bpjs_image, parse_bpjs_name_from_filename
+from systems.validation.ktp_ai import analyze_ktp_image
+from systems.validation.kk_ai import analyze_kk_image
 from systems.validation.iuran_ai import analyze_iuran_image
 from systems.validation.skck_ai import analyze_skck_image
 from systems.validation.vaksinasi_1_ai import analyze_vaksinasi_1_image
 from systems.validation.vaksinasi_2_ai import analyze_vaksinasi_2_image
 from systems.validation.vaksinasi_3_ai import analyze_vaksinasi_3_image
+from systems.validation.simple_form_ai import (
+    analyze_formulir_lamaran_image,
+    analyze_formulir_okb_image,
+    analyze_ijasah_image,
+    analyze_surat_lamaran_image,
+    analyze_transkrip_image,
+)
+from systems.validation.bpjs_tk_ai import analyze_bpjs_tk_image
+from systems.validation.bpjs_kesanggupan_ai import analyze_bpjs_kesanggupan_image
+from systems.validation.jkn_ai import analyze_jkn_image
 from systems.validation.user_errors import attach_user_errors
 
 OcrMode = Literal["mistral", "fast", "vl"]
@@ -124,15 +137,28 @@ class PipelineResult:
             "npwp_ai_unavailable",
             "pemadanan_npwp_ai_unavailable",
             "rekening_ai_unavailable",
+            "mutasi_ai_unavailable",
             "bpjs_ai_unavailable",
+            "ktp_ai_unavailable",
+            "kk_ai_unavailable",
             "iuran_ai_unavailable",
             "skck_ai_unavailable",
             "vaksinasi_1_ai_unavailable",
             "vaksinasi_2_ai_unavailable",
             "vaksinasi_3_ai_unavailable",
+            "bpjs_tk_ai_unavailable",
+            "bpjs_kesanggupan_ai_unavailable",
+            "jkn_ai_unavailable",
+            "ijasah_ai_unavailable",
+            "transkrip_ai_unavailable",
+            "formulir_okb_ai_unavailable",
+            "formulir_lamaran_ai_unavailable",
+            "surat_lamaran_ai_unavailable",
         ):
             return 503
         if self.error_kind == "empty_ocr":
+            return 400
+        if self.error_kind == "missing_expected_card_number":
             return 400
         return 500
 
@@ -259,6 +285,7 @@ def _run_pipeline_bytes_impl(
     cv_experience_query: str = "",
     expected_bank: str = "",
     expected_account: str = "",
+    expected_card_number: str = "",
     job_position: str = "",
     log_source: str = "pipeline",
 ) -> PipelineResult:
@@ -296,6 +323,18 @@ def _run_pipeline_bytes_impl(
         )
 
     canonical_id, keywords = resolved
+
+    if canonical_id in {"bpjs", "jkn"}:
+        from systems.validation.bpjs_ai import norm_card_number
+
+        if not norm_card_number(expected_card_number):
+            timing.total_s = time.perf_counter() - t_total0
+            return PipelineResult(
+                ok=False,
+                error="Nomor kartu wajib diisi.",
+                error_kind="missing_expected_card_number",
+                timing=timing,
+            )
 
     if is_cv_ingest_profile(canonical_id):
         try:
@@ -427,6 +466,158 @@ def _run_pipeline_bytes_impl(
             "ocr": {
                 "success": True,
                 "mode": "ornith_portrait_ai",
+                "model": llm_meta.get("model"),
+                "extraction": ai_out.get("extraction"),
+                "timing": {"total_wall_s": round(timing.ocr_s, 3)},
+            },
+            "validation": {
+                "document_profile_id": canonical_id,
+                "keywords_from_profile": keywords,
+                **validation_detail,
+            },
+            "verdict": validation_detail.get("verdict"),
+            "is_own_document": validation_detail.get("is_own_document"),
+            "document_type_current": validation_detail.get("document_type_current"),
+            "document_type_current_label": validation_detail.get("document_type_current_label"),
+            "error_code": validation_detail.get("error_code"),
+            "error_message": validation_detail.get("error_message"),
+            "error_cases": validation_detail.get("error_cases") or [],
+            "timing": timing.as_dict(),
+        }
+        timing.total_s = time.perf_counter() - t_total0
+        return PipelineResult(
+            ok=True,
+            payload=payload,
+            timing=timing,
+            document_matched=matched,
+        )
+
+    if canonical_id == "ktp":
+        expected_nik = parse_nik16_from_filename(filename) or ""
+        holder_ref = name_ref or parse_bpjs_name_from_filename(filename)
+        t_val0 = time.perf_counter()
+        try:
+            ai_out = analyze_ktp_image(
+                raw,
+                document_type=doc_type,
+                expected_name=holder_ref,
+                expected_nik=expected_nik,
+                job_position=job_position,
+            )
+        except ValueError as e:
+            timing.total_s = time.perf_counter() - t_total0
+            return PipelineResult(ok=False, error=str(e), error_kind="preprocess_error", timing=timing)
+        except Exception as e:
+            timing.total_s = time.perf_counter() - t_total0
+            return PipelineResult(
+                ok=False, error=str(e), error_kind="ktp_ai_unavailable", timing=timing
+            )
+        timing.validation_s = time.perf_counter() - t_val0
+        llm_meta = ai_out.get("llm") if isinstance(ai_out.get("llm"), dict) else {}
+        if isinstance(llm_meta.get("latency_s"), (int, float)):
+            timing.ocr_s = float(llm_meta["latency_s"])
+        if ai_out.get("error") or not isinstance(ai_out.get("validation"), dict):
+            timing.total_s = time.perf_counter() - t_total0
+            return PipelineResult(
+                ok=False,
+                error=f"AI KTP gagal: {ai_out.get('error') or 'empty_extraction'}",
+                error_kind="ktp_ai_unavailable",
+                timing=timing,
+            )
+        validation_detail = ai_out["validation"]
+        matched = bool(validation_detail.get("document_matched"))
+        payload = {
+            "success": True,
+            "valid": matched,
+            "document_matched": matched,
+            "holder_name": validation_detail.get("holder_name"),
+            "nik": validation_detail.get("nik"),
+            "name_match_method": validation_detail.get("name_match_method"),
+            "marital_pass": validation_detail.get("marital_pass"),
+            "job_position": validation_detail.get("job_position"),
+            "ocr_mode": "ornith",
+            "ocr_engine": "ornith",
+            "pp_ocr_tier": None,
+            "validation_mode": "image",
+            "preprocess": {"skipped": True, "reason": "ktp_ai", **(ai_out.get("image_prepare") or {})},
+            "ocr": {
+                "success": True,
+                "mode": "ornith_ktp_ai",
+                "model": llm_meta.get("model"),
+                "extraction": ai_out.get("extraction"),
+                "timing": {"total_wall_s": round(timing.ocr_s, 3)},
+            },
+            "validation": {
+                "document_profile_id": canonical_id,
+                "keywords_from_profile": keywords,
+                **validation_detail,
+            },
+            "verdict": validation_detail.get("verdict"),
+            "is_own_document": validation_detail.get("is_own_document"),
+            "document_type_current": validation_detail.get("document_type_current"),
+            "document_type_current_label": validation_detail.get("document_type_current_label"),
+            "error_code": validation_detail.get("error_code"),
+            "error_message": validation_detail.get("error_message"),
+            "error_cases": validation_detail.get("error_cases") or [],
+            "timing": timing.as_dict(),
+        }
+        timing.total_s = time.perf_counter() - t_total0
+        return PipelineResult(
+            ok=True,
+            payload=payload,
+            timing=timing,
+            document_matched=matched,
+        )
+
+    if canonical_id == "kk":
+        expected_nik = parse_nik16_from_filename(filename) or ""
+        holder_ref = name_ref or parse_bpjs_name_from_filename(filename)
+        t_val0 = time.perf_counter()
+        try:
+            ai_out = analyze_kk_image(
+                raw,
+                document_type=doc_type,
+                expected_name=holder_ref,
+                expected_nik=expected_nik,
+            )
+        except ValueError as e:
+            timing.total_s = time.perf_counter() - t_total0
+            return PipelineResult(ok=False, error=str(e), error_kind="preprocess_error", timing=timing)
+        except Exception as e:
+            timing.total_s = time.perf_counter() - t_total0
+            return PipelineResult(
+                ok=False, error=str(e), error_kind="kk_ai_unavailable", timing=timing
+            )
+        timing.validation_s = time.perf_counter() - t_val0
+        llm_meta = ai_out.get("llm") if isinstance(ai_out.get("llm"), dict) else {}
+        if isinstance(llm_meta.get("latency_s"), (int, float)):
+            timing.ocr_s = float(llm_meta["latency_s"])
+        if ai_out.get("error") or not isinstance(ai_out.get("validation"), dict):
+            timing.total_s = time.perf_counter() - t_total0
+            return PipelineResult(
+                ok=False,
+                error=f"AI Kartu Keluarga gagal: {ai_out.get('error') or 'empty_extraction'}",
+                error_kind="kk_ai_unavailable",
+                timing=timing,
+            )
+        validation_detail = ai_out["validation"]
+        matched = bool(validation_detail.get("document_matched"))
+        payload = {
+            "success": True,
+            "valid": matched,
+            "document_matched": matched,
+            "holder_name": validation_detail.get("holder_name"),
+            "nik": validation_detail.get("nik"),
+            "family_card_number": validation_detail.get("family_card_number"),
+            "name_match_method": validation_detail.get("name_match_method"),
+            "ocr_mode": "ornith",
+            "ocr_engine": "ornith",
+            "pp_ocr_tier": None,
+            "validation_mode": "image",
+            "preprocess": {"skipped": True, "reason": "kk_ai", **(ai_out.get("image_prepare") or {})},
+            "ocr": {
+                "success": True,
+                "mode": "ornith_kk_ai",
                 "model": llm_meta.get("model"),
                 "extraction": ai_out.get("extraction"),
                 "timing": {"total_wall_s": round(timing.ocr_s, 3)},
@@ -605,6 +796,80 @@ def _run_pipeline_bytes_impl(
             document_matched=matched,
         )
 
+    if canonical_id == "mutasi":
+        acct_ref = (expected_account or "").strip() or parse_account_from_filename(filename) or ""
+        t_val0 = time.perf_counter()
+        try:
+            ai_out = analyze_mutasi_image(
+                raw,
+                document_type=doc_type,
+                expected_bank=expected_bank,
+                expected_account=acct_ref,
+            )
+        except ValueError as e:
+            timing.total_s = time.perf_counter() - t_total0
+            return PipelineResult(ok=False, error=str(e), error_kind="preprocess_error", timing=timing)
+        except Exception as e:
+            timing.total_s = time.perf_counter() - t_total0
+            return PipelineResult(
+                ok=False, error=str(e), error_kind="mutasi_ai_unavailable", timing=timing
+            )
+        timing.validation_s = time.perf_counter() - t_val0
+        llm_meta = ai_out.get("llm") if isinstance(ai_out.get("llm"), dict) else {}
+        if isinstance(llm_meta.get("latency_s"), (int, float)):
+            timing.ocr_s = float(llm_meta["latency_s"])
+        if ai_out.get("error") or not isinstance(ai_out.get("validation"), dict):
+            timing.total_s = time.perf_counter() - t_total0
+            return PipelineResult(
+                ok=False,
+                error=f"AI mutasi gagal: {ai_out.get('error') or 'empty_extraction'}",
+                error_kind="mutasi_ai_unavailable",
+                timing=timing,
+            )
+        validation_detail = ai_out["validation"]
+        matched = bool(validation_detail.get("document_matched"))
+        payload = {
+            "success": True,
+            "valid": matched,
+            "document_matched": matched,
+            "detected_bank": validation_detail.get("detected_bank"),
+            "account_number": validation_detail.get("account_number"),
+            "bank_pass": validation_detail.get("bank_pass"),
+            "account_pass": validation_detail.get("account_pass"),
+            "ocr_mode": "ornith",
+            "ocr_engine": "ornith",
+            "pp_ocr_tier": None,
+            "validation_mode": "image",
+            "preprocess": {"skipped": True, "reason": "mutasi_ai", **(ai_out.get("image_prepare") or {})},
+            "ocr": {
+                "success": True,
+                "mode": "ornith_mutasi_ai",
+                "model": llm_meta.get("model"),
+                "extraction": ai_out.get("extraction"),
+                "timing": {"total_wall_s": round(timing.ocr_s, 3)},
+            },
+            "validation": {
+                "document_profile_id": canonical_id,
+                "keywords_from_profile": keywords,
+                **validation_detail,
+            },
+            "verdict": validation_detail.get("verdict"),
+            "is_own_document": validation_detail.get("is_own_document"),
+            "document_type_current": validation_detail.get("document_type_current"),
+            "document_type_current_label": validation_detail.get("document_type_current_label"),
+            "error_code": validation_detail.get("error_code"),
+            "error_message": validation_detail.get("error_message"),
+            "error_cases": validation_detail.get("error_cases") or [],
+            "timing": timing.as_dict(),
+        }
+        timing.total_s = time.perf_counter() - t_total0
+        return PipelineResult(
+            ok=True,
+            payload=payload,
+            timing=timing,
+            document_matched=matched,
+        )
+
     if canonical_id == "rekening":
         acct_ref = (expected_account or "").strip() or parse_account_from_filename(filename) or ""
         holder_ref = name_ref or parse_rekening_name_from_filename(filename) or ""
@@ -691,6 +956,7 @@ def _run_pipeline_bytes_impl(
                 document_type=doc_type,
                 expected_name=holder_ref,
                 expected_nik=expected_nik,
+                expected_card_number=expected_card_number,
             )
         except ValueError as e:
             timing.total_s = time.perf_counter() - t_total0
@@ -1205,6 +1471,93 @@ def _run_pipeline_bytes_impl(
             document_matched=matched,
         )
 
+    late_ai = {
+        "bpjs_tk": (analyze_bpjs_tk_image, "ornith_bpjs_tk_ai", "bpjs_tk_ai", "bpjs_tk_ai_unavailable", "AI BPJS Ketenagakerjaan gagal"),
+        "bpjs_kesanggupan": (analyze_bpjs_kesanggupan_image, "ornith_bpjs_kesanggupan_ai", "bpjs_kesanggupan_ai", "bpjs_kesanggupan_ai_unavailable", "AI surat kesanggupan BPJS gagal"),
+        "jkn": (analyze_jkn_image, "ornith_jkn_ai", "jkn_ai", "jkn_ai_unavailable", "AI Info Peserta JKN gagal"),
+        "ijasah": (analyze_ijasah_image, "ornith_ijasah_ai", "ijasah_ai", "ijasah_ai_unavailable", "AI ijazah gagal"),
+        "transkrip": (analyze_transkrip_image, "ornith_transkrip_ai", "transkrip_ai", "transkrip_ai_unavailable", "AI transkrip gagal"),
+        "formulir_okb": (analyze_formulir_okb_image, "ornith_formulir_okb_ai", "formulir_okb_ai", "formulir_okb_ai_unavailable", "AI formulir OKB gagal"),
+        "formulir_lamaran": (analyze_formulir_lamaran_image, "ornith_formulir_lamaran_ai", "formulir_lamaran_ai", "formulir_lamaran_ai_unavailable", "AI formulir lamaran gagal"),
+        "surat_lamaran": (analyze_surat_lamaran_image, "ornith_surat_lamaran_ai", "surat_lamaran_ai", "surat_lamaran_ai_unavailable", "AI surat lamaran gagal"),
+    }.get(canonical_id)
+    if late_ai is not None:
+        analyze_fn, ocr_mode_name, prep_reason, error_kind, fail_label = late_ai
+        expected_nik = parse_nik16_from_filename(filename) or ""
+        holder_ref = name_ref or parse_bpjs_name_from_filename(filename)
+        t_val0 = time.perf_counter()
+        try:
+            ai_out = analyze_fn(
+                raw,
+                document_type=doc_type,
+                expected_name=holder_ref,
+                expected_nik=expected_nik,
+                expected_card_number=expected_card_number if canonical_id == "jkn" else "",
+            )
+        except ValueError as e:
+            timing.total_s = time.perf_counter() - t_total0
+            return PipelineResult(ok=False, error=str(e), error_kind="preprocess_error", timing=timing)
+        except Exception as e:
+            timing.total_s = time.perf_counter() - t_total0
+            return PipelineResult(ok=False, error=str(e), error_kind=error_kind, timing=timing)
+        timing.validation_s = time.perf_counter() - t_val0
+        llm_meta = ai_out.get("llm") if isinstance(ai_out.get("llm"), dict) else {}
+        if isinstance(llm_meta.get("latency_s"), (int, float)):
+            timing.ocr_s = float(llm_meta["latency_s"])
+        if ai_out.get("error") or not isinstance(ai_out.get("validation"), dict):
+            timing.total_s = time.perf_counter() - t_total0
+            return PipelineResult(
+                ok=False,
+                error=f"{fail_label}: {ai_out.get('error') or 'empty_extraction'}",
+                error_kind=error_kind,
+                timing=timing,
+            )
+        validation_detail = ai_out["validation"]
+        matched = bool(validation_detail.get("document_matched"))
+        payload = {
+            "success": True,
+            "valid": matched,
+            "document_matched": matched,
+            "holder_name": validation_detail.get("holder_name"),
+            "nik": validation_detail.get("nik"),
+            "name_match_method": validation_detail.get("name_match_method"),
+            "stamp_pass": validation_detail.get("stamp_pass"),
+            "jkn_status_label": validation_detail.get("jkn_status_label"),
+            "jkn_status_display": validation_detail.get("jkn_status_display"),
+            "ocr_mode": "ornith",
+            "ocr_engine": "ornith",
+            "pp_ocr_tier": None,
+            "validation_mode": "image",
+            "preprocess": {"skipped": True, "reason": prep_reason, **(ai_out.get("image_prepare") or {})},
+            "ocr": {
+                "success": True,
+                "mode": ocr_mode_name,
+                "model": llm_meta.get("model"),
+                "extraction": ai_out.get("extraction"),
+                "timing": {"total_wall_s": round(timing.ocr_s, 3)},
+            },
+            "validation": {
+                "document_profile_id": canonical_id,
+                "keywords_from_profile": keywords,
+                **validation_detail,
+            },
+            "verdict": validation_detail.get("verdict"),
+            "is_own_document": validation_detail.get("is_own_document"),
+            "document_type_current": validation_detail.get("document_type_current"),
+            "document_type_current_label": validation_detail.get("document_type_current_label"),
+            "error_code": validation_detail.get("error_code"),
+            "error_message": validation_detail.get("error_message"),
+            "error_cases": validation_detail.get("error_cases") or [],
+            "timing": timing.as_dict(),
+        }
+        timing.total_s = time.perf_counter() - t_total0
+        return PipelineResult(
+            ok=True,
+            payload=payload,
+            timing=timing,
+            document_matched=matched,
+        )
+
     t_pre0 = time.perf_counter()
     use_direct_upload = skip_passthrough or (ocr_remote_enabled() and not enable_preprocess)
     try:
@@ -1646,6 +1999,7 @@ def run_pipeline_bytes(
     cv_experience_query: str = "",
     expected_bank: str = "",
     expected_account: str = "",
+    expected_card_number: str = "",
     job_position: str = "",
     log_source: str = "pipeline",
 ) -> PipelineResult:
@@ -1664,6 +2018,7 @@ def run_pipeline_bytes(
         cv_experience_query=cv_experience_query,
         expected_bank=expected_bank,
         expected_account=expected_account,
+        expected_card_number=expected_card_number,
         job_position=job_position,
         log_source=log_source,
     )

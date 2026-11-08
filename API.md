@@ -98,7 +98,7 @@ Baca field **`valid`** (`true` = VALID). Tidak ada OCR.
 
 **Engine OCR default pipeline:** **PP-OCRv6** lokal (`ocr_mode=fast`, tier `medium`). Mode `mistral` (cloud) dan `vl` (PaddleOCR-VL) opsional lewat query `ocr_mode`.
 
-**Khusus `keterangan_kesehatan`:** OCR **wajib Ornith AI** (vision multimodal). Query `ocr_mode` / `pp_ocr_tier` **diabaikan**; Paddle tidak dipanggil. Lihat [Surat keterangan kesehatan](#keterangan_kesehatan).
+**Profil pipeline** memakai Ornith AI. Query `ocr_mode` / `pp_ocr_tier` diabaikan. `cv` memakai ingest.
 
 ---
 
@@ -124,25 +124,25 @@ String yang dikirim klien untuk menentukan **profil validasi**. Server menormali
 
 | ID kanonik | Label | Mode validasi |
 |------------|-------|---------------|
-| `ktp` | KTP | OCR + keyword fuzzy |
+| `ktp` | KTP | **Ornith AI** — nama boleh terpotong, NIK filename bisa lolos; Helper wajib BELUM KAWIN |
 | `npwp` | NPWP | **Ornith AI** + `format_lama` (nomor bukan NIK 16 digit) |
-| `kk` | Kartu Keluarga | OCR + keyword fuzzy |
+| `kk` | Kartu Keluarga | **Ornith AI** — nama atau NIK salah satu anggota cukup lolos |
 | `rekening` | Rekening | **Ornith AI** — nama boleh sebagian atau tersensor |
-| `mutasi` | Mutasi | OCR + keyword fuzzy |
+| `mutasi` | Mutasi | **Ornith AI** — e-statement, bank + nomor rekening wajib, nama tidak dicek |
 | `skck` | SKCK | **Ornith AI** — SKCK, nama, masa berlaku (Berlaku dari–Sampai/dengan) belum lewat |
 | `bpjs` | BPJS Kesehatan (KIS) | **Ornith AI** — nama boleh terpotong, NIK filename bisa menyelamatkan |
-| `bpjs_tk` | BPJS Ketenagakerjaan | OCR + keyword AND/OR + identitas |
-| `bpjs_kesanggupan` | Kesanggupan BPJS Kesehatan | OCR + keyword AND/OR + identitas |
-| `jkn` | JKN (Info Peserta) | OCR + keyword OR + identitas |
+| `bpjs_tk` | BPJS Ketenagakerjaan | **Ornith AI** — kartu TK, nama boleh terpotong, NIK filename bisa lolos |
+| `bpjs_kesanggupan` | Kesanggupan BPJS Kesehatan | **Ornith AI** — surat kesanggupan + materai fisik |
+| `jkn` | JKN (Info Peserta) | **Ornith AI** — Info Peserta; status AKTIF/TIDAK AKTIF tidak memblokir |
 | `iuran` | Iuran JKN (Info Iuran) | **Ornith AI** — Info Iuran, modal tanpa nama tetap lolos, NIK filename bisa lolos |
 | `vaksinasi_1` | Vaksinasi COVID-19 (Dosis 1) | **Ornith AI** — dosis 1, nama boleh terpotong, NIK filename bisa lolos |
 | `vaksinasi_2` | Vaksinasi COVID-19 (Dosis 2) | **Ornith AI** — dosis 2, nama boleh terpotong, NIK filename bisa lolos |
 | `vaksinasi_3` | Vaksinasi COVID-19 (Booster) | **Ornith AI** — booster, nama boleh terpotong, NIK filename bisa lolos |
-| `ijasah` | Ijazah | OCR + keyword fuzzy |
-| `transkrip` | Transkrip Nilai | OCR + keyword fuzzy |
-| `formulir_okb` | Formulir OKB | OCR + keyword fuzzy |
-| `formulir_lamaran` | Formulir Lamaran Pekerjaan | OCR + keyword fuzzy |
-| `surat_lamaran` | Surat Lamaran | OCR + keyword fuzzy |
+| `ijasah` | Ijazah | **Ornith AI** |
+| `transkrip` | Transkrip Nilai | **Ornith AI** |
+| `formulir_okb` | Formulir OKB | **Ornith AI** |
+| `formulir_lamaran` | Formulir Lamaran Pekerjaan | **Ornith AI** |
+| `surat_lamaran` | Surat Lamaran | **Ornith AI** |
 | `pemadanan_npwp` | Pemadanan NPWP | **Ornith AI** — kartu NPWP 16 digit atau Ikhtisar Profil, nama boleh terpotong |
 | `keterangan_kesehatan` | Surat Keterangan Kesehatan | **Ornith AI vision** (wajib) + gate SEHAT / tanggal / nama |
 | `foto_profile` | Foto Profil | **Gambar** (wajah + latar biru) |
@@ -175,7 +175,7 @@ valid = document_matched = is_profile_photo AND is_blue_background
 
 **Ornith AI** (vision), bukan deteksi wajah OpenCV dan bukan Paddle. Query `ocr_mode` diabaikan. Respons: `ocr_mode: "ornith"`, `ocr.mode: "ornith_portrait_ai"`.
 
-Lolos hanya jika gambar adalah **foto profil / pas foto** dan **latar belakang biru**. Jumlah atau ukuran wajah tidak dicek.
+Lolos hanya jika gambar adalah **foto profil / pas foto** dan **latar backdrop biru solid**. Dinding yang dicat biru, termasuk biru muda bertekstur, ditolak (`foto_profile.not_blue`). Jumlah atau ukuran wajah tidak dicek.
 
 Jika AI tidak merespons: HTTP **503**, `detail.error_code` = `pipeline.portrait_ai_unavailable`.
 
@@ -206,7 +206,7 @@ Jika AI tidak merespons: HTTP **503**, `detail.error_code` = `pipeline.portrait_
 | `mistral` | Mistral OCR cloud | Butuh `MISTRAL_API_KEY`; mendukung `document_annotation` untuk nama |
 | `vl` | PaddleOCR-VL lokal | Layout parsing; set `full_json=true` untuk JSON penuh |
 
-**Pengecualian:** `document_type=keterangan_kesehatan` selalu memakai **`ocr_mode: ornith`** / engine **`ornith_health_ai`** (bukan baris tabel di atas).
+**Pengecualian:** profil pipeline memakai **Ornith** (`ocr_mode` diabaikan). `cv` memakai ingest, bukan OCR.
 
 ---
 
@@ -262,12 +262,13 @@ Content-Type: multipart/form-data
 | `file` | ✅ | Gambar dokumen (JPEG, PNG, WebP, PDF page, dll.) |
 | `document_type` | ✅ | ID kanonik atau alias, mis. `KTP`, `foto_profile` |
 | `expected_name` | — | Nama referensi user; kosong = skip cek identitas |
+| `expected_card_number` | Untuk `bpjs` dan `jkn` | Nomor kartu BPJS. KIS dan Info Peserta adalah dua input terpisah; nomor di gambar harus sama dengan field ini |
 
 **Query parameters**
 
 | Param | Default | Keterangan |
 |-------|---------|------------|
-| `ocr_mode` | **`fast`** | **`fast`** = PP-OCRv6 lokal (default) \| `mistral` \| `vl` — **diabaikan untuk `foto_profile` dan `keterangan_kesehatan`** (Ornith AI) |
+| `ocr_mode` | **`fast`** | **`fast`** = PP-OCRv6 lokal (default) \| `mistral` \| `vl` — **diabaikan** untuk profil yang memakai Ornith |
 | `pp_ocr_tier` | `medium` | Tier PP-OCRv6 saat `ocr_mode=fast` (default): `balanced` \| `medium` \| `small` \| `tiny` |
 | `include_preprocessed_image` | `false` | Sertakan `preprocessed_image.image_base64` |
 | `enable_preprocess` | **`false`** | `true` = crop/rotate/enhance penuh sebelum OCR; `false` = passthrough ringan atau raw (lihat di bawah) |
@@ -433,25 +434,25 @@ flowchart TD
 
 | Profil | `document_type` contoh | Wajib isi `expected_name`? | OCR? | Lolos jika |
 |--------|------------------------|----------------------------|------|------------|
-| KTP | `ktp`, `KTP`, `identitas` | Opsional (disarankan untuk cek milik) | ✅ | Keyword KTP ≥70% **dan** (nama kosong **atau** identitas ≥65) |
+| KTP | `ktp`, `KTP`, `identitas` | Opsional (disarankan untuk cek milik) | ❌ (AI vision) | **Ornith** — KTP/e-KTP; nama boleh terpotong; NIK filename bisa lolos; `job_position=helper` wajib BELUM KAWIN |
 | NPWP | `npwp`, `NPWP` | Opsional | ✅ | Keyword NPWP ≥70% **dan** identitas (jika dicek) |
-| KK | `kk`, `kartu keluarga` | Opsional | ✅ | Keyword KK ≥70%; nama bisa dari baris tabel anggota |
+| KK | `kk`, `kartu keluarga` | Opsional | ❌ (AI vision) | **Ornith** — Kartu Keluarga; nama atau NIK salah satu anggota cukup lolos |
 | Rekening | `rekening`, `rekening tabungan` | Opsional | ❌ (AI vision) | **Ornith** — bukti tabungan, `expected_bank` wajib; nama dan nomor rekening keduanya cocok bila keduanya diisi |
-| Mutasi | `mutasi`, `e-statement` | Tidak dipakai | ✅ | Ada `tabungan` **dan** `e-statement`; `expected_bank` + `expected_account` wajib |
+| Mutasi | `mutasi`, `e-statement` | Tidak dipakai | ❌ (AI vision) | **Ornith** — layar mutasi/e-statement; `expected_bank` + `expected_account` wajib; nama tidak dicek |
 | SKCK | `skck` | Opsional | ❌ (AI vision) | **Ornith** — harus SKCK, nama cocok jika diisi, tanggal masa berlaku terbaca dan belum lewat |
-| BPJS KIS | `bpjs`, `bpjs kesehatan`, `kartu indonesia sehat` | **Disarankan wajib** | ❌ (AI vision) | **Ornith** — KIS, nama boleh terpotong, NIK filename bisa lolos |
-| BPJS TK | `bpjs_tk`, `bpjs ketenagakerjaan` | **Disarankan wajib** | ✅ | Keyword kartu TK ≥70% **dan** identitas (jika nama diisi) |
-| Kesanggupan BPJS | `bpjs_kesanggupan`, `kesanggupan bpjs` | **Disarankan wajib** | ✅ | Surat kesanggupan ≥70%, **materai**, **dan** identitas (jika nama diisi) |
-| JKN | `jkn`, `info peserta` | **Disarankan wajib** | ✅ | Ada `info peserta` **atau** `faskes` **dan** identitas ≥65 (jika nama diisi). Status AKTIF/TIDAK AKTIF diekstrak, tidak memblokir |
+| BPJS KIS | `bpjs`, `bpjs kesehatan`, `kartu indonesia sehat` | **Disarankan wajib** | ❌ (AI vision) | **Ornith** — KIS; `expected_card_number` wajib dan harus sama dengan nomor di kartu |
+| BPJS TK | `bpjs_tk`, `bpjs ketenagakerjaan` | **Disarankan wajib** | ❌ (AI vision) | **Ornith** — kartu peserta ketenagakerjaan; nama boleh terpotong; NIK filename bisa lolos |
+| Kesanggupan BPJS | `bpjs_kesanggupan`, `kesanggupan bpjs` | **Disarankan wajib** | ❌ (AI vision) | **Ornith** — surat kesanggupan, nama jika diisi, **dan materai fisik** |
+| JKN | `jkn`, `info peserta` | **Disarankan wajib** | ❌ (AI vision) | **Ornith** — Info Peserta; `expected_card_number` wajib dan harus ada di nomor peserta |
 | Iuran JKN | `iuran`, `info iuran`, `iuran jkn` | **Disarankan wajib** | ❌ (AI vision) | **Ornith** — layar Info Iuran; modal tanpa nama lolos; nama boleh terpotong; NIK filename bisa lolos |
 | Vaksinasi 1 | `vaksinasi_1`, `vaksinasi 1`, `vaksin dosis pertama` | **Disarankan wajib** | ❌ (AI vision) | **Ornith** — dosis 1 (tahap 2 ikut tercantum tetap lolos), nama boleh terpotong, NIK filename bisa lolos |
 | Vaksinasi 2 | `vaksinasi_2`, `vaksinasi 2` | **Disarankan wajib** | ❌ (AI vision) | **Ornith** — dosis 2 (tahap 1 ikut tercantum tetap lolos), nama boleh terpotong, NIK filename bisa lolos |
 | Vaksinasi 3 | `vaksinasi_3`, `vaksinasi 3`, `vaksin booster` | **Disarankan wajib** | ❌ (AI vision) | **Ornith** — booster (tahap 1/2 ikut tercantum tetap lolos), primer 2 bukan booster |
-| Ijazah | `ijasah`, `ijazah` | Opsional | ✅ | Keyword ijazah/pendidikan ≥70% |
-| Transkrip | `transkrip`, `transkrip nilai` | Opsional | ✅ | Keyword transkrip/nilai ≥70% |
-| Formulir OKB | `formulir_okb`, `formulir okb` | Opsional | ✅ | Keyword formulir OKB ≥70% |
-| Formulir lamaran | `formulir_lamaran`, `formulir lamaran pekerjaan` | Opsional | ✅ | Keyword lamaran pekerjaan ≥70% |
-| Surat lamaran | `surat_lamaran`, `surat lamaran` | Opsional | ✅ | Keyword surat lamaran ≥70% |
+| Ijazah | `ijasah`, `ijazah` | Opsional | ❌ (AI vision) | **Ornith** — ijazah; nama jika diisi |
+| Transkrip | `transkrip`, `transkrip nilai` | Opsional | ❌ (AI vision) | **Ornith** — transkrip nilai; nama jika diisi |
+| Formulir OKB | `formulir_okb`, `formulir okb` | Opsional | ❌ (AI vision) | **Ornith** — formulir OKB; nama jika diisi |
+| Formulir lamaran | `formulir_lamaran`, `formulir lamaran pekerjaan` | Opsional | ❌ (AI vision) | **Ornith** — formulir lamaran; nama jika diisi |
+| Surat lamaran | `surat_lamaran`, `surat lamaran` | Opsional | ❌ (AI vision) | **Ornith** — surat lamaran; nama jika diisi |
 | Pemadanan NPWP | `pemadanan_npwp`, `pemadanan npwp` | Opsional | ❌ (AI vision) | **Ornith** — kartu NPWP 16 digit atau Ikhtisar Profil; format lama 15 digit tidak lolos |
 | Surat keterangan kesehatan | `keterangan_kesehatan`, `keterangan kesehatan` | Opsional | ❌ (AI vision) | **Ornith** — rumah sakit, klinik, atau puskesmas (bukan bidan); tertulis SEHAT; tanggal pemeriksaan terbaca |
 | CV | `cv`, `resume`, `curriculum vitae` | Disarankan (dimensi nama) | ❌ (match struktural) | **PDF/DOCX/MD/gambar** → ingest + match nama/pendidikan/pengalaman |
@@ -463,18 +464,9 @@ flowchart TD
 
 **Alias:** `kartu tanda penduduk`, `id card`, `identitas`
 
-**Keyword yang dicek (fuzzy, rata-rata ≥70%):**
+**Mode:** Ornith AI (`ocr_mode` diabaikan). Gagal AI → HTTP 503 `pipeline.ktp_ai_unavailable`.
 
-- `nik`, `nama`, `provinsi`, `kabupaten`, `agama`, `kewarganegaraan`, `status perkawinan`
-
-**Bonus skor (structural):**
-
-- NIK 16 digit di OCR
-- Kata `nik`
-
-**Identitas:** Ekstraksi nama dari baris `Nama` di OCR; prioritas `holder_name` dari Mistral `document_annotation` bila `ocr_mode=mistral`.
-
-**Tips upload:** Foto kartu fisik — set `PREPROCESS_CARD_WARP=1` agar kartu terisolasi dari latar.
+**Gate:** gambar adalah KTP atau e-KTP. Nama pada kartu boleh terpotong. NIK 16 digit di kartu yang sama dengan NIK di nama file tetap lolos meski nama tidak lengkap. Jika `job_position=helper`, status perkawinan wajib **BELUM KAWIN**.
 
 ```bash
 curl -X POST "https://checkinpro-ocr.web.id/api/v1/pipeline" \
@@ -512,7 +504,7 @@ curl -X POST "https://checkinpro-ocr.web.id/api/v1/pipeline" \
 
 **Mode:** Ornith AI (`ocr_mode` diabaikan). Gagal AI → HTTP 503 `pipeline.pemadanan_npwp_ai_unavailable`.
 
-**Gate:** kartu NPWP baru (nomor 16 digit) atau screenshot Ikhtisar Profil DJP. Kartu NPWP format lama 15 digit tidak lolos. Nama boleh terpotong. Nomor 16 digit yang sama dengan NIK filename tetap lolos meski nama meleset.
+**Gate:** hanya tiga dokumen yang lolos: kartu NPWP 16 digit, Ikhtisar Profil DJP, atau Surat Keterangan Aktivasi NIK. Selain itu ditolak (`pemadanan_npwp.wrong_document`), termasuk form login, KTP, dan kartu NPWP format lama 15 digit. NIK 16 digit saja, tanpa salah satu dari ketiga dokumen itu, tidak lolos. Nama boleh terpotong. Nomor 16 digit yang sama dengan NIK filename tetap lolos meski nama meleset.
 
 ```bash
 curl -X POST "https://checkinpro-ocr.web.id/api/v1/pipeline" \
@@ -527,9 +519,9 @@ curl -X POST "https://checkinpro-ocr.web.id/api/v1/pipeline" \
 
 **Alias:** `kartu keluarga`
 
-**Keyword:** `kartu keluarga`, `kepala keluarga`, `nik`
+**Mode:** Ornith AI (`ocr_mode` diabaikan). Gagal AI → HTTP 503 `pipeline.kk_ai_unavailable`.
 
-**Identitas khusus:** Bila nama referensi diisi, sistem juga memindai **baris tabel anggota** KK (bukan hanya kepala keluarga).
+**Gate:** gambar adalah Kartu Keluarga. Identitas lolos jika **nama atau NIK** salah satu anggota cocok (termasuk kepala keluarga). Nomor KK sendiri tidak dihitung sebagai NIK anggota. NIK boleh beda satu digit. Nama boleh terpotong.
 
 ```bash
 curl -X POST "https://checkinpro-ocr.web.id/api/v1/pipeline" \
@@ -548,8 +540,12 @@ curl -X POST "https://checkinpro-ocr.web.id/api/v1/pipeline" \
 
 **Yang dihitung sebagai bukti tabungan**
 
-- Halaman detail rekening tabungan (bukan e-statement).
-- Beranda aplikasi yang menampilkan nama pemilik dan nomor tabungan, misalnya "Halo, NAMA" bersama "MAS Saving".
+- Halaman depan aplikasi Mandiri/Livin: gambar kartu, nomor rekening, dan jenis tabungan. Layar dengan **Daftar Kartu**, nama di kartu GPN, serta **Sebagai Rekening Utama** / **Lihat Detail** tetap halaman depan.
+- Halaman depan Bank MAS: beranda dengan nama pemilik dan MAS Saving.
+- Buku tabungan kertas, halaman dalam, dan kertas yang distempel cabang **ditolak** (`rekening.wrong_document`).
+- Beranda Livin yang menampilkan saldo, tombol Transfer/Bayar/Top-up, atau tab Transaksi / e-Statement **ditolak** (`rekening.wrong_document`). Itu bukan layar Detail Rekening.
+- Daftar **Produk Anda** (Tabungan & Giro, Tabungan Emas, Deposito, Kartu Kredit, Lihat SPT) **ditolak** (`rekening.wrong_document`), meski nama dan nomor rekening terlihat.
+- Halaman sukses **Pembukaan Rekening Berhasil** (nomor rekening baru, Cara Setor Dana, Lanjut ke Beranda) **ditolak** (`rekening.wrong_document`).
 
 Label produk (`Tabungan NOW`, `Tabungan Payroll`, `Livin`, `Detail Rekening`) bukan nama pemilik. Nomor 16 digit di kartu debit bukan nomor rekening.
 
@@ -561,10 +557,9 @@ Label produk (`Tabungan NOW`, `Tabungan Payroll`, `Livin`, `Detail Rekening`) bu
 | `expected_name` | Opsional | Nama pemilik. Boleh sebagian, tersensor (`Dxxa`), atau menempel (`andhrafitriyani`) |
 | `expected_account` | Opsional | Nomor rekening. Mandiri **13 digit**, MAS **10 digit** |
 
-Bila nama **dan** nomor rekening sama-sama diisi, **keduanya** harus cocok. Dua pengecualian:
+Bila nama **dan** nomor rekening sama-sama diisi, **keduanya** harus cocok. Nama pemilik harus terlihat di halaman depan. Halaman yang hanya menampilkan nomor rekening, tanpa nama orang, ditolak (`rekening.name_mismatch`).
 
-- Nama orang tidak tercetak, tetapi nomor rekening cocok → lolos.
-- Angka yang terlihat 11–12 digit (bukan nomor rekening 10 atau 13 digit) dan nama lengkap sudah cocok → lolos. Nomor 10 atau 13 digit yang berbeda tetap gagal.
+Angka 11–12 digit yang bukan nomor rekening, sementara nama lengkap sudah cocok, tetap lolos. Nomor 10 atau 13 digit yang berbeda tetap gagal.
 
 Nomor yang hilang satu atau dua digit tetap cocok bila 6 digit pertama sama. Satu digit yang salah pada nomor 13 digit juga tetap cocok.
 
@@ -594,20 +589,16 @@ curl -X POST "https://checkinpro-ocr.web.id/api/v1/pipeline" \
 
 **Alias:** `mutasi rekening`, `e-statement`
 
-**Keyword wajib (keduanya):** `tabungan`, `e-statement`
+**Mode:** Ornith AI (`ocr_mode` diabaikan). Gagal AI → HTTP 503 `pipeline.mutasi_ai_unavailable`.
 
-**Validasi bank + rekening (wajib keduanya):**
+**Gate:** gambar adalah layar mutasi atau e-statement, bukan halaman detail rekening. `expected_name` tidak dicek.
 
-| Payload | Wajib? |
-|---------|--------|
-| `expected_bank` | **Ya** — `mandiri` atau `mas` |
-| `expected_account` | **Ya** — nomor rekening 10–13 digit |
+| Payload | Wajib? | Aturan |
+|---------|--------|--------|
+| `expected_bank` | **Ya** | `mandiri` atau `mas`. Bank pemilik mutasi, bukan bank lawan transfer. |
+| `expected_account` | **Ya** | Nomor rekening pemilik 10–13 digit. Boleh beda satu digit atau tanpa nol di depan. |
 
-**Identitas:** `expected_name` **tidak** dicek untuk profil mutasi.
-
-Pola filename benchmark: `mutasi rekening_{Nama}_{NoRek}.ext`
-
-`document_matched` = keyword dokumen OK **dan** `bank_pass` **dan** `account_pass`.
+`document_matched` = jenis dokumen OK **dan** `bank_pass` **dan** `account_pass`.
 
 ```bash
 curl -X POST "https://checkinpro-ocr.web.id/api/v1/pipeline" \
@@ -633,7 +624,7 @@ curl -X POST "https://checkinpro-ocr.web.id/api/v1/pipeline" \
 | `identity_pass` | Jika `expected_name` diisi — fuzzy nama ≥ 65, atau NIK 16 digit di surat sama dengan nama file |
 | `skck_valid_from` | Tanggal **Berlaku dari** / **Valid from** / **Berlaku untuk**. Bukan tanggal lahir dan bukan masa “berada di Indonesia” |
 | `skck_valid_until` | Tanggal **Sampai/dengan** / **Sampai dengan** / **To** / **Until** yang berpasangan dengan Berlaku dari. Contoh tertulis `29 NOVEMBER 2026` dibaca sebagai `2026-11-29` |
-| `skck_expiry_pass` | `skck_valid_until` terbaca dan belum lewat. `skck_valid_from`, jika ada, tidak boleh di masa depan |
+| `skck_expiry_pass` | `skck_valid_until` terbaca dan belum lewat. `skck_valid_from`, jika ada, tidak boleh di masa depan. Contoh `Berlaku dari 04 DESEMBER 2025` sampai `04 JUNI 2026` ditolak bila hari ini sudah lewat 4 Juni 2026 (`skck.expired`) |
 
 **Kode error validasi (HTTP 200, `document_matched: false`):**
 
@@ -729,15 +720,14 @@ curl -X POST "https://checkinpro-ocr.web.id/api/v1/pipeline" \
 
 **Mode:** Ornith AI (`ocr_mode` diabaikan). Gagal AI → HTTP 503 `pipeline.bpjs_ai_unavailable`.
 
-**Gate:** gambar adalah kartu BPJS Kesehatan (bukan TK, info iuran, atau vaksin). Nama di kartu boleh terpotong (`TIARA` lolos untuk `Tiara Putri`). NIK 16 digit di kartu yang sama dengan NIK di nama file tetap lolos meski nama tidak lengkap.
-
-**Identitas:** nama peserta dan NIK diekstrak oleh AI, lalu dicocokkan dengan `expected_name` dan NIK filename.
+**Gate:** gambar adalah kartu BPJS Kesehatan (bukan TK, info iuran, atau vaksin). `expected_card_number` wajib (nomor dari input BPJS/Info Peserta yang terpisah). Nomor kartu di KIS harus sama dengan nomor itu; kalau berbeda, `bpjs.card_mismatch`. Tanpa nomor di payload → HTTP 400 `pipeline.missing_expected_card_number`. Nama di kartu boleh terpotong (`TIARA` lolos untuk `Tiara Putri`). NIK 16 digit di kartu yang sama dengan NIK di nama file tetap lolos meski nama tidak lengkap.
 
 ```bash
 curl -X POST "https://checkinpro-ocr.web.id/api/v1/pipeline" \
   -F "file=@bpjs_Bagus.jpg" \
   -F "document_type=bpjs" \
-  -F "expected_name=Bagus Junda Winata"
+  -F "expected_name=Bagus Junda Winata" \
+  -F "expected_card_number=0002885506964"
 ```
 
 ---
@@ -746,25 +736,9 @@ curl -X POST "https://checkinpro-ocr.web.id/api/v1/pipeline" \
 
 **Alias:** `bpjs ketenagakerjaan`, `bpjs tk`, `jaminan ketenagakerjaan`, `kartu peserta bpjs`
 
-**Dokumen:** Kartu Peserta BPJS Ketenagakerjaan (jaminan sosial tenaga kerja).
+**Mode:** Ornith AI (`ocr_mode` diabaikan). Gagal AI → HTTP 503 `pipeline.bpjs_tk_ai_unavailable`.
 
-**Keyword (fuzzy ≥70%, AND antar grup):**
-
-1. Wajib: `kartu peserta`
-2. Minimal satu dari: `ketenagakerjaan`, `bpjs ketenagakerjaan`
-
-**Identitas:** Nama peserta (huruf kapital di kartu) dibandingkan dengan `expected_name` bila diisi.
-
-**Keyword terlarang (exclusion):** `syarat dan ketentuan`, `faskes tingkat`, `info iuran`, `kepesertaan terdaftar`
-
-**Preprocess:** Foto kartu fisik — isolasi kartu seperti KTP.
-
-```bash
-curl -X POST "https://checkinpro-ocr.web.id/api/v1/pipeline" \
-  -F "file=@bpjs_tk_Jorgi.jpg" \
-  -F "document_type=bpjs_tk" \
-  -F "expected_name=Jorgi Korleone"
-```
+**Gate:** kartu peserta BPJS Ketenagakerjaan, bukan KIS atau Info Iuran. Nama boleh terpotong. NIK 16 digit yang sama dengan nama file tetap lolos.
 
 ---
 
@@ -772,25 +746,9 @@ curl -X POST "https://checkinpro-ocr.web.id/api/v1/pipeline" \
 
 **Alias:** `kesanggupan bpjs`, `bpjs kesanggupan`, `surat kesanggupan bpjs`, `surat pernyataan kesanggupan`, `kesanggupan menanggung biaya`
 
-**Dokumen:** Surat Pernyataan Kesanggupan Menanggung Biaya BPJS Kesehatan (karyawan).
+**Mode:** Ornith AI (`ocr_mode` diabaikan). Gagal AI → HTTP 503 `pipeline.bpjs_kesanggupan_ai_unavailable`.
 
-**Keyword (fuzzy ≥70%, AND antar grup):**
-
-1. Minimal satu: `surat pernyataan kesanggupan`, `menanggung biaya bpjs kesehatan`, `menanggung biaya bpjs`
-2. Minimal satu: `tidak aktif`, `menanggung secara pribadi`, `syarat bekerja`, `peserta mandiri`, `virtual account`
-
-**Identitas:** Nama dari field `Nama Lengkap` / tanda tangan; dibandingkan dengan `expected_name` bila diisi.
-
-**Materai (wajib):** Stempel materai fisik (merah/keemasan) di area tanda tangan. Label kotak `Materai Rp10.000` tanpa stempel **tidak** lolos. Kode gagal: `bpjs_kesanggupan.stamp_missing`.
-
-**Keyword terlarang (exclusion):** `kartu indonesia sehat`, `ketenagakerjaan`
-
-```bash
-curl -X POST "https://checkinpro-ocr.web.id/api/v1/pipeline" \
-  -F "file=@bpjs_kesanggupan.jpg" \
-  -F "document_type=bpjs_kesanggupan" \
-  -F "expected_name=Egy Subagja"
-```
+**Gate:** surat pernyataan kesanggupan menanggung biaya BPJS Kesehatan. Nama dicek jika diisi. **Materai fisik** wajib (stempel merah/keemasan atau e-meterai). Kotak tulisan `Materai Rp10.000` tanpa stempel tidak lolos. Kode gagal: `bpjs_kesanggupan.stamp_missing`.
 
 ---
 
@@ -798,24 +756,9 @@ curl -X POST "https://checkinpro-ocr.web.id/api/v1/pipeline" \
 
 **Alias:** `jaminan kesehatan nasional`, `info peserta`, `mobile jkn`
 
-**Keyword (minimal satu harus terbaca, fuzzy ≥70%):**
+**Mode:** Ornith AI (`ocr_mode` diabaikan). Gagal AI → HTTP 503 `pipeline.jkn_ai_unavailable`.
 
-- `info peserta` **atau** `faskes`
-
-**Identitas:** Wajib dicek bila `expected_name` diisi — nama peserta di kartu Mobile JKN (biasanya huruf kapital; boleh salah satu anggota keluarga).
-
-**Status (ekstraksi, bukan gate):** Status kartu peserta yang namanya cocok dikembalikan di `jkn_status_label` (`aktif` \| `tidak_aktif` \| `null`) dan `jkn_status_display` (`AKTIF` / `TIDAK AKTIF`). Tidak menggagalkan `document_matched`.
-
-**Keyword terlarang (exclusion):** `info iuran`, `total tagihan`, `tidak memiliki tagihan pribadi`, `kartu indonesia sehat`, `bpjs ketenagakerjaan`
-
-**Preprocess:** Screenshot aplikasi — isolasi kartu fisik dilewati (sama seperti mutasi/rekening).
-
-```bash
-curl -X POST "https://checkinpro-ocr.web.id/api/v1/pipeline" \
-  -F "file=@JKN_Info_Peserta.jpg" \
-  -F "document_type=jkn" \
-  -F "expected_name=Bagus Junda Winata"
-```
+**Gate:** layar Info Peserta di Mobile JKN, bukan Info Iuran dan bukan Kartu Indonesia Sehat. Kartu KIS ditolak (`jkn.wrong_document`); kartu itu dicek lewat `document_type=bpjs`. Judul "Info Peserta" atau "Kepesertaan terdaftar" tanpa nama, NIK, atau nomor peserta ditolak (`jkn.wrong_document`). `expected_card_number` wajib (nomor dari input KIS yang terpisah) dan harus sama dengan nomor peserta yang terlihat; kalau tidak ada yang sama, `jkn.card_mismatch`. Tanpa nomor di payload → HTTP 400 `pipeline.missing_expected_card_number`. Daftar keluarga berisi sisa saldo, tagihan, atau total tagihan ditolak (`jkn.wrong_document`). Nama atau NIK salah satu peserta cukup. Status `AKTIF` / `TIDAK AKTIF` dikembalikan di `jkn_status_label` dan tidak menggagalkan validasi.
 
 ---
 
@@ -825,7 +768,7 @@ curl -X POST "https://checkinpro-ocr.web.id/api/v1/pipeline" \
 
 **Mode:** Ornith AI (`ocr_mode` diabaikan). Gagal AI → HTTP 503 `pipeline.iuran_ai_unavailable`.
 
-**Layar:** Mobile JKN → **Info Iuran** (bukan Info Peserta, kartu KIS, atau vaksin).
+**Layar:** Mobile JKN → **Info Iuran** (bukan Info Peserta, kartu KIS, vaksin, atau daftar riwayat pembayaran). Layar **Info Peserta / Kepesertaan Terdaftar** gagal sebagai `iuran.wrong_document`. Daftar **Info Riwayat Pembayaran** (nominal, channel, tanggal bayar, status lunas) juga ditolak (`iuran.wrong_document`).
 
 | Case | Ciri layar | Identitas |
 |------|------------|-----------|
@@ -909,9 +852,7 @@ Booster tetap lolos jika riwayat juga memuat tahap 1 atau tahap 2. `Vaksin prime
 
 **Alias:** `ijazah`
 
-**Mode:** OCR. Keyword: `ijazah`, `pendidikan`, `lulus`, `nomor ijazah` (fuzzy ≥70%).
-
-**Input:** `expected_name` opsional.
+**Mode:** Ornith AI (`ocr_mode` diabaikan). Gagal AI → HTTP 503 `pipeline.ijasah_ai_unavailable`.
 
 **Error:** `ijasah.wrong_document` · `ijasah.name_mismatch`
 
@@ -921,9 +862,7 @@ Booster tetap lolos jika riwayat juga memuat tahap 1 atau tahap 2. `Vaksin prime
 
 **Alias:** `transkrip nilai`
 
-**Mode:** OCR. Keyword: `transkrip`, `nilai`, `semester`, `ipk` (fuzzy ≥70%).
-
-**Input:** `expected_name` opsional.
+**Mode:** Ornith AI (`ocr_mode` diabaikan). Gagal AI → HTTP 503 `pipeline.transkrip_ai_unavailable`.
 
 **Error:** `transkrip.wrong_document` · `transkrip.name_mismatch`
 
@@ -931,9 +870,7 @@ Booster tetap lolos jika riwayat juga memuat tahap 1 atau tahap 2. `Vaksin prime
 
 ### `formulir_okb`
 
-**Mode:** OCR. Keyword: `formulir okb`, `okb`, `pemeriksaan` (fuzzy ≥70%).
-
-**Input:** `expected_name` opsional.
+**Mode:** Ornith AI (`ocr_mode` diabaikan). Gagal AI → HTTP 503 `pipeline.formulir_okb_ai_unavailable`.
 
 **Error:** `formulir_okb.wrong_document` · `formulir_okb.name_mismatch`
 
@@ -943,9 +880,7 @@ Booster tetap lolos jika riwayat juga memuat tahap 1 atau tahap 2. `Vaksin prime
 
 **Alias:** `formulir lamaran pekerjaan`
 
-**Mode:** OCR. Keyword: `formulir lamaran`, `lamaran pekerjaan`, `data pribadi` (fuzzy ≥70%).
-
-**Input:** `expected_name` opsional.
+**Mode:** Ornith AI (`ocr_mode` diabaikan). Gagal AI → HTTP 503 `pipeline.formulir_lamaran_ai_unavailable`.
 
 **Error:** `formulir_lamaran.wrong_document` · `formulir_lamaran.name_mismatch`
 
@@ -955,9 +890,7 @@ Booster tetap lolos jika riwayat juga memuat tahap 1 atau tahap 2. `Vaksin prime
 
 **Alias:** `surat lamaran`
 
-**Mode:** OCR. Keyword: `surat lamaran`, `yang bertanda tangan`, `pekerjaan` (fuzzy ≥70%).
-
-**Input:** `expected_name` opsional.
+**Mode:** Ornith AI (`ocr_mode` diabaikan). Gagal AI → HTTP 503 `pipeline.surat_lamaran_ai_unavailable`.
 
 **Error:** `surat_lamaran.wrong_document` · `surat_lamaran.name_mismatch`
 
@@ -1879,6 +1812,7 @@ Daftar lengkap kode per dokumen ada di `GET /systems/validation/api/v1/error-cat
 | 400 | `document_type` tidak dikenal | `pipeline.unknown_document_type` | Jenis dokumen tidak dikenali. |
 | 400 | Rekening/mutasi tanpa `expected_bank` | `pipeline.missing_expected_bank` | Bank referensi wajib diisi (mandiri atau mas). |
 | 400 | Mutasi tanpa norek | `pipeline.missing_expected_account` | Nomor rekening referensi wajib diisi. |
+| 400 | KIS atau Info Peserta tanpa nomor kartu | `pipeline.missing_expected_card_number` | Nomor kartu wajib diisi. KIS dan BPJS dicek sebagai input terpisah. |
 | 400 | OCR tidak menghasilkan teks | `pipeline.empty_ocr` | Teks pada dokumen tidak terbaca. Foto ulang dengan lebih jelas. |
 | 400 | `ocr_text` kosong (validate-document) | `pipeline.missing_ocr_text` | Teks OCR kosong. |
 | 503 | Paddle/Mistral/CV down | `pipeline.ocr_unavailable` / `pipeline.internal` | Layanan OCR sedang tidak tersedia. / Terjadi kesalahan sistem… |
