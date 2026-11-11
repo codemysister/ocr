@@ -30,7 +30,8 @@ Jangan mengarang data yang tidak terlihat di gambar. Jika tidak terbaca, isi nul
 Kembalikan HANYA satu objek JSON (tanpa markdown) dengan kunci persis:
 - document_type_label (string): mis. "Surat Keterangan Kesehatan"
 - is_health_certificate (boolean): true hanya jika ini surat keterangan sehat/dokter/MCU, bukan vaksin/KTP
-- holder_name (string): nama pasien/yang diperiksa
+- holder_name (string): nama LENGKAP pasien pada baris Nama, termasuk nama depan.
+  Bukan nama dokter. Jangan potong menjadi nama belakang saja.
 - identity_number (string): NIK jika ada (hanya digit), else ""
 - issuer_type (string): salah satu "rumah_sakit", "klinik", "puskesmas", "bidan", "lain".
   "bidan" jika surat dari bidan atau praktik bidan, meskipun ada kata klinik.
@@ -38,10 +39,15 @@ Kembalikan HANYA satu objek JSON (tanpa markdown) dengan kunci persis:
 - clinic_name (string): nama rumah sakit, klinik, atau puskesmas
 - city (string): kota/tempat surat diterbitkan
 - doctor_name (string): nama dokter pemeriksa
-- health_conclusion (string): salah satu "sehat", "tidak_sehat", "tidak_jelas"
-- health_conclusion_text (string): kutipan kesimpulan dari surat
-- issued_date (string|null): tanggal dibuat/tanggal pemeriksaan dalam YYYY-MM-DD. null jika tidak terbaca
-- issued_date_raw (string): tulisannya persis di surat (mis. "Bekasi, 15 Juni 2026")
+- health_conclusion (string): salah satu "sehat", "tidak_sehat", "tidak_jelas".
+  "sehat" jika tertulis SEHAT, atau pilihan "baik / sehat" yang dilingkari, digarisbawahi, atau dipilih.
+  Surat Keterangan Dokter dari klinik tetap surat kesehatan. Jangan isi tidak_jelas hanya karena judulnya bukan "sehat".
+  "tidak_sehat" hanya jika hasil yang dipilih adalah tidak sehat.
+- health_conclusion_text (string): kutip baris hasilnya, termasuk "baik / sehat" bila itu yang tercetak
+- issued_date (string|null): tanggal dibuat, yaitu tanggal di samping nama kota di atas tanda tangan dokter.
+  Bukan tanggal lahir dan bukan tanggal di nomor surat bila berbeda. Format YYYY-MM-DD. null jika tidak terbaca.
+  Urutan angka di kertas adalah hari/bulan/tahun. Salin tahun persis (2026 tetap 2026, jangan diubah jadi 2024).
+- issued_date_raw (string): tulisannya persis di surat (mis. "Bekasi, 15 Juni 2026" atau "Tambun Bekasi, 09/08/2026")
 - valid_until (string|null): tanggal kadaluarsa YYYY-MM-DD jika tertulis, else null
 - validity_duration_text (string): mis. "berlaku 3 bulan" jika ada
 - confidence (number 0-100)
@@ -138,11 +144,11 @@ def _parse_health_json(text: str) -> dict[str, Any] | None:
 
 def health_letter_user_prompt(*, expected_name: str = "", expected_nik: str = "") -> str:
     lines = [
-        "Baca gambar surat keterangan kesehatan ini.",
+        "Baca gambar surat keterangan kesehatan ini. Jika foto miring, baca setelah tegak.",
         "Surat harus dari rumah sakit, klinik, atau puskesmas. Surat bidan tidak lolos.",
-        "Ambil nama, kesimpulan sehat/tidak, tanggal pemeriksaan atau tanggal surat, "
-        "dan masa berlaku jika ada.",
-        "Validasi: penerbit, nama, tertulis SEHAT, dan tanggal pemeriksaan terbaca.",
+        "Salin nama pasien utuh dari baris Nama, bukan nama dokter.",
+        "Jika baik/sehat dilingkari atau dipilih, health_conclusion adalah sehat.",
+        "Ambil tanggal pemeriksaan atau tanggal surat, dan masa berlaku jika ada.",
     ]
     if expected_name.strip():
         lines.append(f"Nama referensi pemegang: {expected_name.strip()}")
@@ -212,6 +218,17 @@ def list_health_ai_models(base_url: str) -> list[str]:
         if isinstance(item, dict) and item.get("id"):
             ids.append(str(item["id"]))
     return ids
+
+
+def _signature_issued_date(raw: str) -> str | None:
+    """Tanggal dibuat = tanggal pada baris tempat/kota, bukan tanggal yang dikira model."""
+    text = " ".join((raw or "").split())
+    if not text:
+        return None
+    from systems.validation.keterangan_kesehatan import extract_health_check_dates
+
+    found = extract_health_check_dates(text)
+    return found.get("exam_date")
 
 
 def _iso_date(value: Any) -> str | None:
@@ -301,6 +318,74 @@ def _normalize_conclusion(value: Any) -> str:
     return "tidak_jelas"
 
 
+def _name_tokens(value: str) -> list[str]:
+    text = re.sub(r"[''`´’]", "", value or "")
+    return [m.group(0).casefold() for m in re.finditer(r"[a-z0-9]+", text, re.I)]
+
+
+def _trailing_patient_name(holder: str, expected: str) -> bool:
+    """Nama belakang yang utuh tetap cocok bila nama depan tidak terbaca."""
+    exp = _name_tokens(expected)
+    got = _name_tokens(holder)
+    if not got or not exp or len(got) >= len(exp):
+        return False
+    if exp[-len(got) :] != got:
+        return False
+    return sum(len(token) for token in got) >= 8
+
+
+def _marked_healthy(parsed: dict[str, Any], gate_pass: bool) -> bool:
+    conclusion = str(parsed.get("health_conclusion") or "").strip().casefold()
+    if conclusion == "sehat":
+        return True
+    if conclusion == "tidak_sehat":
+        return False
+    if gate_pass:
+        return True
+    from systems.validation.keterangan_kesehatan import extract_health_conclusion
+
+    blob = " ".join(
+        str(parsed.get(key) or "")
+        for key in ("document_type_label", "health_conclusion_text")
+    )
+    return bool(extract_health_conclusion(blob)["healthy"])
+
+
+def _orient_health_bytes(data: bytes) -> tuple[bytes, dict[str, Any]]:
+    """Tegakkan surat yang difoto menyamping sebelum dikirim ke model."""
+    import cv2
+
+    from systems.preprocessing.pipeline import (
+        _cv2_imdecode_bgr,
+        _document_horizontal_text_score,
+        _ink_center_upper_bias_gray,
+        _maybe_auto_rotate_quarters,
+    )
+
+    bgr = _cv2_imdecode_bgr(data)
+    if bgr is None:
+        return data, {"health_orient_applied": False}
+    rotated, meta = _maybe_auto_rotate_quarters(bgr, card_warped=False)
+    gray = cv2.cvtColor(rotated, cv2.COLOR_BGR2GRAY)
+    flipped = cv2.rotate(rotated, cv2.ROTATE_180)
+    gray_flipped = cv2.cvtColor(flipped, cv2.COLOR_BGR2GRAY)
+    score = float(_document_horizontal_text_score(gray))
+    score_flipped = float(_document_horizontal_text_score(gray_flipped))
+    tied = abs(score - score_flipped) / max(score, score_flipped, 1e-6) <= 0.025
+    used_flip = False
+    if tied and _ink_center_upper_bias_gray(gray_flipped) > _ink_center_upper_bias_gray(gray) + 0.04:
+        rotated = flipped
+        used_flip = True
+    steps = int(meta.get("auto_rotate_90ccw_steps") or 0)
+    info = {"health_orient_applied": steps != 0 or used_flip, "health_orient_180": used_flip, **meta}
+    if not info["health_orient_applied"]:
+        return data, info
+    ok, encoded = cv2.imencode(".jpg", rotated, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
+    if not ok:
+        return data, info
+    return encoded.tobytes(), info
+
+
 def analyze_health_letter_image(
     image_bytes: bytes,
     *,
@@ -323,9 +408,11 @@ def analyze_health_letter_image(
 
     from systems.preprocessing.pipeline import encode_image_bytes_for_ocr_remote_safe
 
+    oriented, orient_meta = _orient_health_bytes(image_bytes)
     prepared, prep_meta = encode_image_bytes_for_ocr_remote_safe(
-        image_bytes, max_long_side=1280
+        oriented, max_long_side=1280
     )
+    prep_meta = {**prep_meta, **orient_meta}
     thinking_on = (os.environ.get("LLM_HEALTH_AI_ENABLE_THINKING") or "").strip().lower() in {
         "1",
         "true",
@@ -385,18 +472,36 @@ def analyze_health_letter_image(
         profile_id="keterangan_kesehatan",
         today=today,
     ) or {}
-    if parsed.get("issued_date") and not gate.get("exam_date"):
+    signature = _signature_issued_date(str(parsed.get("issued_date_raw") or ""))
+    if signature:
+        gate["exam_date"] = signature
+        parsed["issued_date"] = signature
+        parsed["issued_date_display"] = format_id_date(signature)
+    elif parsed.get("issued_date") and not gate.get("exam_date"):
         gate["exam_date"] = parsed["issued_date"]
     if parsed.get("valid_until"):
         gate["valid_until"] = parsed["valid_until"]
+    exam_iso = gate.get("exam_date") or parsed.get("issued_date")
+    until_iso = gate.get("valid_until") or parsed.get("valid_until")
+    if exam_iso and until_iso and str(until_iso) < str(exam_iso):
+        gate["valid_until"] = None
+        parsed["valid_until"] = None
+        from systems.validation.keterangan_kesehatan import _validity_delta
+
+        try:
+            recomputed = _validity_delta(
+                str(parsed.get("validity_duration_text") or ""),
+                date.fromisoformat(str(exam_iso)[:10]),
+            )
+        except ValueError:
+            recomputed = None
+        if recomputed is not None:
+            gate["valid_until"] = recomputed.isoformat()
+            parsed["valid_until"] = recomputed.isoformat()
 
     is_health = bool(parsed.get("is_health_certificate"))
     conclusion = parsed.get("health_conclusion")
-    health_status_pass = conclusion == "sehat"
-    if conclusion == "tidak_sehat":
-        health_status_pass = False
-    elif conclusion == "tidak_jelas":
-        health_status_pass = bool(gate.get("health_status_pass"))
+    health_status_pass = _marked_healthy(parsed, bool(gate.get("health_status_pass")))
 
     identity_pass = None
     identity = None
@@ -405,9 +510,10 @@ def analyze_health_letter_image(
 
         holder = str(parsed.get("holder_name") or "")
         identity = compare_extracted_identity_scores(holder, expected_name)
-        identity_pass = float(identity.get("identity_combined_score") or 0.0) >= 65.0 and bool(
-            identity.get("token_gate_pass", True)
-        )
+        identity_pass = (
+            float(identity.get("identity_combined_score") or 0.0) >= 65.0
+            and bool(identity.get("token_gate_pass", True))
+        ) or _trailing_patient_name(holder, expected_name)
         exp_nik = re.sub(r"\D", "", expected_nik or "")
         got_nik = re.sub(r"\D", "", str(parsed.get("identity_number") or ""))
         if len(exp_nik) == 16 and got_nik == exp_nik:

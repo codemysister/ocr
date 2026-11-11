@@ -95,7 +95,7 @@ _PLACE_NUM_DATE_RE = re.compile(
     re.I,
 )
 _DATE_BEFORE_PLACE_RE = re.compile(
-    r"\b(\d{1,2})[/\-.](\d{1,2})(?:[/\-.](\d{2,4}))?\s+[a-z]{3,20}\s*[,.]?\s*(20\d{2}|20[\s.]*[2-3]\d)?",
+    r"(?<!\d[/\-.])\b(\d{1,2})[/\-.](\d{1,2})(?:[/\-.](\d{2,4}))?\s+[a-z]{3,20}\s*[,.]?\s*(20\d{2}|20[\s.]*[2-3]\d)?",
     re.I,
 )
 _GLUED_TEXT_DATE_RE = re.compile(
@@ -279,9 +279,24 @@ def _coerce_exam_year(raw: str, ocr_n: str) -> int | None:
     return None
 
 
+def _repair_ocr_day(day: int) -> int | None:
+    """66/11 sering adalah 06/11: angka 0 terbaca 6."""
+    if 1 <= day <= 31:
+        return day
+    if not 32 <= day <= 99:
+        return None
+    tens, ones = divmod(day, 10)
+    if tens in {6, 8, 9} and 1 <= ones <= 9:
+        return ones
+    return None
+
+
 def _safe_health_date(y: int, m: int, d: int) -> date | None:
+    day = _repair_ocr_day(d)
+    if day is None:
+        return None
     try:
-        return date(y, m, d)
+        return date(y, m, day)
     except ValueError:
         return None
 

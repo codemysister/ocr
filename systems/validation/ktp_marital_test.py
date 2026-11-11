@@ -710,6 +710,23 @@ def test_keterangan_kesehatan_sehat_and_expiry() -> None:
     assert missing_date["health_expiry_pass"] is False
     assert missing_date["error_code"] == "keterangan_kesehatan.date_missing"
 
+    from systems.validation.keterangan_kesehatan_ai import _marked_healthy, _trailing_patient_name
+
+    mora = {
+        "document_type_label": "Surat Keterangan Dokter",
+        "is_health_certificate": True,
+        "holder_name": "Safinatunnisa",
+        "health_conclusion": "tidak_jelas",
+        "health_conclusion_text": (
+            "menyatakan telah memeriksa kesehatan secara umum dari: Safinatunnisa"
+        ),
+    }
+    assert _trailing_patient_name("Safinatunnisa", "Syahwa Safinatunnisa") is True
+    assert _trailing_patient_name("Sari", "Rinda Sari") is False
+    assert _trailing_patient_name("Budi Santoso", "Syahwa Safinatunnisa") is False
+    assert _marked_healthy(mora, False) is True
+    assert _marked_healthy({"health_conclusion": "tidak_sehat", "health_conclusion_text": "tidak sehat"}, False) is False
+
     expired = validate_document_ocr(
         "SURAT KETERANGAN KESEHATAN\nNama: CITRA AMELIA\ndinyatakan SEHAT.\n"
         "berlaku sampai dengan tanggal 01 Juni 2026\nBekasi, 01 Maret 2026\n",
@@ -1021,6 +1038,18 @@ def test_keterangan_kesehatan_reads_ocr_dates() -> None:
 
     putri_106 = extract_health_check_dates("15\n106 1 2026\nBekasi,\nDokter Pemeriksa")
     assert putri_106["exam_date"] == "2026-06-15"
+
+    repaired_day = extract_health_check_dates("Tangerang, 66 / 11 / 2026")
+    assert repaired_day["exam_date"] == "2026-11-06"
+
+    not_iso_fragment = extract_health_check_dates(
+        "berlaku selama 1 bulan yaitu sampai dengan tanggal 2026-07-11\n"
+        "Tangerang, 06 / 11 / 2026"
+    )
+    assert not_iso_fragment["exam_date"] == "2026-11-06"
+
+    signature = extract_health_check_dates("Tambun Bekasi, 09/08/2026")
+    assert signature["exam_date"] == "2026-08-09"
 
     jahra_roman = extract_health_check_dates(
         "NO. SK5-03.\n15\nVI...\n1....2006\nKesimpulan SEHAT\nKUSUHABEDIK2026"
