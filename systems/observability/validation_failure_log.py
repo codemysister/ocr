@@ -119,7 +119,7 @@ def _failure_detail(result: Any) -> tuple[str | None, str | None]:
     return "validation_fail", reason
 
 
-def _trim_log_file(path: Path, max_entries: int) -> None:
+def _trim_log_file(path: Path, max_entries: int, upload_dir: Path | None = None) -> None:
     if not path.is_file():
         return
     try:
@@ -143,9 +143,15 @@ def _trim_log_file(path: Path, max_entries: int) -> None:
         stored = row.get("stored_file") if isinstance(row, dict) else None
         if isinstance(stored, str) and stored:
             names.add(Path(stored).name)
-    if _UPLOAD_DIR.is_dir():
+    cleanup = upload_dir
+    if cleanup is None:
         try:
-            for path_file in _UPLOAD_DIR.iterdir():
+            cleanup = _UPLOAD_DIR if path.resolve() == _log_path().resolve() else None
+        except OSError:
+            cleanup = None
+    if cleanup is not None and cleanup.is_dir():
+        try:
+            for path_file in cleanup.iterdir():
                 if path_file.is_file() and path_file.name not in names:
                     path_file.unlink(missing_ok=True)
         except OSError:

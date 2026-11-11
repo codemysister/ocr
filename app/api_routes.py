@@ -45,6 +45,7 @@ from systems.observability.validation_success_log import (
     clear_validation_successes,
     count_validation_successes,
     read_validation_successes,
+    resolve_success_upload,
     success_log_stats,
 )
 from systems.validation.bank_rekening import (
@@ -946,6 +947,36 @@ def api_validation_successes(
         "total": stats["total"],
         "filtered_count": len(entries),
     }
+
+
+@router.get("/validation-successes/{entry_id}/file")
+def api_validation_success_file(
+    entry_id: str,
+    download: bool = Query(False, description="true = unduh, false = pratinjau"),
+) -> FileResponse:
+    """Gambar atau PDF yang lolos validasi, untuk pratinjau dan unduh."""
+    path = resolve_success_upload(entry_id)
+    if path is None:
+        raise HTTPException(status_code=404, detail="File berhasil tidak ditemukan.")
+    download_name = path.name
+    for row in read_validation_successes(limit=2000, offset=0):
+        if row.get("id") == entry_id and isinstance(row.get("file"), str) and row["file"].strip():
+            download_name = row["file"].rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+            break
+    media_type = {
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".png": "image/png",
+        ".webp": "image/webp",
+        ".gif": "image/gif",
+        ".pdf": "application/pdf",
+    }.get(path.suffix.casefold(), "application/octet-stream")
+    return FileResponse(
+        path,
+        media_type=media_type,
+        filename=download_name,
+        content_disposition_type="attachment" if download else "inline",
+    )
 
 
 @router.delete("/validation-successes")

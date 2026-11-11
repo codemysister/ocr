@@ -129,8 +129,8 @@
     }
     .fail-preview {
       flex-shrink: 0;
-      width: 140px;
-      height: 100px;
+      width: 72px;
+      height: 96px;
       border-radius: 8px;
       border: 1px solid var(--border);
       background: #151c26;
@@ -251,7 +251,7 @@
       max-height: 220px;
       overflow: auto;
     }
-    .fail-preview-wrap { position: relative; width: 100%; }
+    .fail-preview-wrap { position: relative; width: 72px; flex: 0 0 72px; }
     .fail-preview-wrap .copy-img-btn {
       position: absolute;
       top: 0.5rem;
@@ -287,7 +287,7 @@
 <body>
   <header>
     <h1>Data berhasil</h1>
-    <p>Dokumen yang lolos validasi (<code>document_matched</code>). Format kartu sama seperti Data gagal. Bisa dihapus dari halaman ini.</p>
+    <p>Dokumen yang lolos validasi (<code>document_matched</code>). Pratinjau gambar kecil; klik untuk melihat ukuran penuh. Bisa dihapus dari halaman ini.</p>
     <div class="nav-top">
       <a href="/">← Beranda</a>
       <a href="/dataset-test">Dataset benchmark</a>
@@ -356,27 +356,28 @@
       return `/api/v1/dataset/file?folder=${encodeURIComponent(folder || "")}&file=${encodeURIComponent(file || "")}`;
     }
 
+    function successMedia(f) {
+      if (f.stored_file && f.id) {
+        const url = `/api/v1/validation-successes/${encodeURIComponent(f.id)}/file`;
+        return { url, name: f.file || f.stored_file };
+      }
+      if (f.folder && f.file) {
+        return { url: datasetFileUrl(f.folder, f.file), name: f.file };
+      }
+      return null;
+    }
+
     function isImageFile(name) {
       return /\.(jpe?g|png|webp)$/i.test(name || "");
     }
 
-    function isPreviewOnlyFailure(f) {
-      if (f.document_type === "foto_profile") return true;
-      if (!f.ocr_text && isImageFile(f.file)) return true;
-      return false;
-    }
-
-    function renderFailurePreview(f, large, idx) {
-      if (!f.folder || !f.file) return "";
-      const url = datasetFileUrl(f.folder, f.file);
-      const cls = large ? "fail-preview large" : "fail-preview";
-      const copyImgBtn = isImageFile(f.file)
-        ? `<button type="button" class="copy-btn copy-img-btn" data-copy="image" data-idx="${idx}" title="Copy gambar ke clipboard">Copy gambar</button>`
-        : "";
-      if (isImageFile(f.file)) {
-        return `<div class="fail-preview-wrap">${copyImgBtn}<div class="${cls}"><img src="${url}" alt="${esc(f.file)}" loading="lazy" title="Klik untuk perbesar" /></div></div>`;
+    function renderFailurePreview(f) {
+      const media = successMedia(f);
+      if (!media) return "";
+      if (isImageFile(media.name) || isImageFile(f.stored_file)) {
+        return `<div class="fail-preview-wrap"><div class="fail-preview"><img src="${media.url}" alt="${esc(media.name)}" loading="lazy" title="Klik untuk perbesar" /></div></div>`;
       }
-      return `<div class="${cls}"><a href="${url}" target="_blank" rel="noopener">Buka file</a></div>`;
+      return `<div class="fail-preview"><a href="${media.url}" target="_blank" rel="noopener">Buka file</a></div>`;
     }
 
     function pipelineResponseText(f) {
@@ -450,7 +451,6 @@
       }
       contentEl.innerHTML = `<div class="fail-cards">${lastSuccesses.map((f, idx) => {
         const tag = successKindLabel();
-        const previewOnly = isPreviewOnlyFailure(f);
         const responseText = pipelineResponseText(f);
         const ocrBlock = f.ocr_text
           ? `<div class="fail-ocr">
@@ -496,9 +496,9 @@
             ? `<div class="expected">Waktu: <strong>${Number(f.timing.total).toFixed(2)}s</strong></div>`
             : "",
         ].join("");
-        return `<article class="fail-card${previewOnly ? " preview-only" : ""}">
+        return `<article class="fail-card">
           <div class="fail-card-head">
-            ${renderFailurePreview(f, previewOnly, idx)}
+            ${renderFailurePreview(f)}
             <div class="fail-card-meta">
               <span class="tag ${tag.cls}">${esc(tag.text)}</span>
               <span style="margin-left:0.5rem;color:var(--muted);font-size:0.75rem;">${esc(f.folder || "—")}</span>
@@ -527,8 +527,10 @@
         } else if (btn.dataset.copy === "response") {
           await copyTextToClipboard(pipelineResponseText(f));
           flashCopyBtn(btn);
-        } else if (btn.dataset.copy === "image" && f.folder && f.file) {
-          await copyImageFromUrl(datasetFileUrl(f.folder, f.file));
+        } else if (btn.dataset.copy === "image") {
+          const media = successMedia(f);
+          if (!media) return;
+          await copyImageFromUrl(media.url);
           flashCopyBtn(btn);
         }
       } catch (e) {

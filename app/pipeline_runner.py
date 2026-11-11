@@ -2043,6 +2043,7 @@ def run_pipeline_bytes(
             expected_account=expected_account,
             job_position=job_position,
             source=log_source,
+            image_bytes=raw,
         )
     except Exception:
         logging.getLogger(__name__).exception("Gagal mencatat validation failure/success log")

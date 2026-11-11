@@ -16,6 +16,7 @@ from systems.observability.validation_failure_log import (
     _pipeline_response_from_result,
     _trim_log_file,
     _truncate,
+    _upload_suffix,
 )
 from systems.validation.skck_validity import format_id_date
 
@@ -24,6 +25,8 @@ logger = logging.getLogger(__name__)
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _DEFAULT_LOG = _REPO_ROOT / "logs" / "validation_successes.jsonl"
 _CLEARED_STAMP = _REPO_ROOT / "logs" / "validation_successes.cleared"
+_UPLOAD_DIR = _REPO_ROOT / "logs" / "validation_success_files"
+_MAX_UPLOAD_BYTES = 12 * 1024 * 1024
 
 
 def _log_path() -> Path:
@@ -51,7 +54,7 @@ def append_validation_success(entry: dict[str, Any]) -> dict[str, Any]:
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
-        _trim_log_file(path, _max_entries())
+        _trim_log_file(path, _max_entries(), upload_dir=_UPLOAD_DIR)
     except Exception:
         logger.exception("validation_success_log: gagal menulis %s", path)
     return record
@@ -65,6 +68,46 @@ def _success_reason(validation: dict[str, Any]) -> str:
     return "Validasi lolos (document_matched=true)."
 
 
+def save_success_upload(entry_id: str, filename: str, data: bytes) -> str | None:
+    if not data or len(data) > _MAX_UPLOAD_BYTES:
+        return None
+    suffix = _upload_suffix(filename, data)
+    if not suffix:
+        return None
+    safe_id = Path(entry_id).name
+    if not safe_id or safe_id in {".", ".."}:
+        return None
+    name = f"{safe_id}{suffix}"
+    try:
+        _UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+        (_UPLOAD_DIR / name).write_bytes(data)
+    except OSError:
+        logger.exception("validation_success_log: gagal simpan unggahan %s", name)
+        return None
+    return name
+
+
+def resolve_success_upload(entry_id: str) -> Path | None:
+    safe_id = Path(entry_id or "").name
+    if not safe_id or safe_id in {".", ".."}:
+        return None
+    if not _UPLOAD_DIR.is_dir():
+        return None
+    matches = [path for path in _UPLOAD_DIR.glob(f"{safe_id}.*") if path.is_file()]
+    return matches[0] if matches else None
+
+
+def _delete_success_uploads() -> None:
+    if not _UPLOAD_DIR.is_dir():
+        return
+    try:
+        for path in _UPLOAD_DIR.iterdir():
+            if path.is_file():
+                path.unlink(missing_ok=True)
+    except OSError:
+        logger.exception("validation_success_log: gagal hapus unggahan")
+
+
 def record_success_from_pipeline_result(
     result: Any,
     *,
@@ -75,6 +118,7 @@ def record_success_from_pipeline_result(
     expected_account: str = "",
     job_position: str = "",
     source: str = "pipeline",
+    image_bytes: bytes | None = None,
 ) -> dict[str, Any] | None:
     if not getattr(result, "ok", False) or not getattr(result, "document_matched", False):
         return None
@@ -139,6 +183,12 @@ def record_success_from_pipeline_result(
     }
     if entry.get("issued_date") and not entry.get("issued_date_display"):
         entry["issued_date_display"] = format_id_date(entry["issued_date"])
+    entry_id = str(uuid.uuid4())
+    entry["id"] = entry_id
+    if image_bytes and not folder:
+        stored = save_success_upload(entry_id, file_name, image_bytes)
+        if stored:
+            entry["stored_file"] = stored
     llm = validation.get("llm_fallback")
     if isinstance(llm, dict) and llm.get("attempted"):
         entry["llm_fallback"] = llm
@@ -191,6 +241,7 @@ def clear_validation_successes() -> int:
         except OSError:
             logger.exception("validation_success_log: gagal hapus %s", path)
             return 0
+    _delete_success_uploads()
     try:
         _CLEARED_STAMP.parent.mkdir(parents=True, exist_ok=True)
         _CLEARED_STAMP.write_text(datetime.now(timezone.utc).isoformat() + "\n", encoding="utf-8")
