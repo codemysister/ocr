@@ -32,8 +32,9 @@ Kembalikan HANYA satu objek JSON:
 - valid_until (string): tanggal baris masa berlaku "Sampai/dengan" / "Sampai dengan" / "To" / "Until"
   yang berpasangan dengan Berlaku dari. Bukan tanggal "selama berada di Indonesia".
   Contoh tertulis "04 JUNI 2026" menjadi "2026-06-04". Kosong hanya jika baris itu tidak ada.
-- valid_until_text (string): salin persis teks tanggal di kanan "Sampai dengan" / "Until",
-  contoh "04 JUNI 2026". Jangan menukar dengan tanggal Berlaku dari.
+- valid_until_text (string): salin persis teks tanggal di kanan "Sampai dengan" / "Until"
+  pada blok masa berlaku (bukan baris "berada di Indonesia").
+  contoh "04 JUNI 2026". Tanggal ini harus sesudah Berlaku dari. Jangan ditukar.
 - confidence (number 0-100)
 - notes (string): maksimal 12 kata
 """
@@ -71,20 +72,39 @@ def _skck_date(value: Any) -> str | None:
     return extracted.get("valid_until")
 
 
+def _order_skck_dates(
+    valid_from: str | None, valid_until: str | None
+) -> tuple[str | None, str | None]:
+    """Masa berlaku tidak boleh berakhir sebelum dimulai. Label yang tertukar dibalik."""
+    if not valid_from or not valid_until:
+        return valid_from, valid_until
+    try:
+        start = date.fromisoformat(valid_from)
+        end = date.fromisoformat(valid_until)
+    except ValueError:
+        return valid_from, valid_until
+    if end < start:
+        return valid_until, valid_from
+    return valid_from, valid_until
+
+
 def _resolve_skck_dates(parsed: dict[str, Any]) -> tuple[str | None, str | None]:
     """Utamakan teks di kanan Berlaku dari dan Sampai dengan, bukan tebakan ISO."""
     from_text = str(parsed.get("valid_from_text") or "").strip()
     until_text = str(parsed.get("valid_until_text") or "").strip()
-    notes = str(parsed.get("notes") or "").strip()
-    parts = [notes]
-    if from_text:
-        parts.append(f"Berlaku dari {from_text}")
-    if until_text:
-        parts.append(f"Sampai dengan {until_text}")
-    labeled = extract_skck_validity_dates("\n".join(parts))
-    valid_from = labeled.get("valid_from") or _skck_date(from_text) or _skck_date(parsed.get("valid_from"))
-    valid_until = labeled.get("valid_until") or _skck_date(until_text) or _skck_date(parsed.get("valid_until"))
-    return valid_from, valid_until
+    valid_from = _skck_date(from_text) if from_text else None
+    valid_until = _skck_date(until_text) if until_text else None
+    if not valid_from or not valid_until:
+        notes = str(parsed.get("notes") or "").strip()
+        parts = [notes]
+        if from_text and not valid_from:
+            parts.append(f"Berlaku dari {from_text}")
+        if until_text and not valid_until:
+            parts.append(f"Sampai dengan {until_text}")
+        labeled = extract_skck_validity_dates("\n".join(parts))
+        valid_from = valid_from or labeled.get("valid_from") or _skck_date(parsed.get("valid_from"))
+        valid_until = valid_until or labeled.get("valid_until") or _skck_date(parsed.get("valid_until"))
+    return _order_skck_dates(valid_from, valid_until)
 
 
 def skck_validation_from_extraction(

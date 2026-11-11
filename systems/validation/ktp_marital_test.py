@@ -559,6 +559,24 @@ def test_skck_ai_expiry_and_name() -> None:
     )
     assert ok is False and code == "skck.expired"
 
+    swapped = skck_validation_from_extraction(
+        {
+            "is_skck": True,
+            "holder_name": "RINDA SARI",
+            "valid_from": "2026-04-16",
+            "valid_from_text": "16 APRIL 2027",
+            "valid_until": "2026-10-16",
+            "valid_until_text": "16 OKTOBER 2026",
+            "notes": "Valid dari 16 April 2027 sampai 16 Oktober 2026",
+        },
+        expected_name="Rinda Sari",
+        today=date(2026, 11, 11),
+    )
+    assert swapped["skck_valid_from"] == "2026-10-16"
+    assert swapped["skck_valid_until"] == "2027-04-16"
+    assert swapped["skck_expiry_pass"] is True
+    assert swapped["document_matched"] is True
+
 
 _KESANGGUPAN_BODY = """
 SURAT PERNYATAAN KESANGGUPAN
