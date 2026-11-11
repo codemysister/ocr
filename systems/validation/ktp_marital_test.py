@@ -1807,6 +1807,31 @@ def test_rekening_ai_accepts_partial_and_masked_name() -> None:
     assert detail_card["document_matched"] is True
     assert detail_card["error_code"] is None
 
+    detail_settings = rekening_validation_from_extraction(
+        {
+            **base,
+            "is_savings_account": False,
+            "is_account_opening": False,
+            "is_front_page": False,
+            "is_transaction_home": False,
+            "is_product_list": False,
+            "is_passbook": False,
+            "is_statement": False,
+            "bank": "mandiri",
+            "holder_name": "Mathew HF Sitanggang",
+            "account_number": "1330020587671",
+            "confidence": 90,
+            "notes": "Halaman Detail Rekening Mandiri dengan nomor rekening dan nama pemilik.",
+        },
+        expected_name="Mathew HF Sitanggang",
+        expected_bank="mandiri",
+        expected_account="1330020587671",
+    )
+    assert detail_settings["is_savings_account"] is True
+    assert detail_settings["is_front_page"] is True
+    assert detail_settings["document_matched"] is True
+    assert detail_settings["error_code"] is None
+
 
 def test_npwp_ai_format_lama_flag() -> None:
     from systems.validation.npwp_ai import npwp_validation_from_extraction
@@ -2674,6 +2699,15 @@ def test_remaining_profiles_use_ornith() -> None:
         expected_name="Siti Aminah",
     )
     assert not_diploma["error_code"] == "ijasah.wrong_document"
+
+    spelled_with_z = form_validation_from_extraction(
+        {"is_ijazah": True, "holder_name": "Mathew Hff Sitanggang", "confidence": 99},
+        profile="ijasah",
+        expected_name="Mathew HF Sitanggang",
+    )
+    assert spelled_with_z["is_ijasah"] is True
+    assert spelled_with_z["document_matched"] is True
+    assert spelled_with_z["error_code"] is None
 
     tk = bpjs_tk_validation_from_extraction(
         {"is_bpjs_tk": True, "holder_name": "", "nik": "3212017010070005"},

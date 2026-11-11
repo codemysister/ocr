@@ -41,7 +41,10 @@ Kembalikan HANYA satu objek JSON lengkap (tanpa markdown):
   Halaman depan Mandiri/Livin: layar rekening yang menampilkan gambar kartu debit,
   nomor rekening 10–13 digit di dekat kartu, dan jenis tabungan (Tabungan NOW / Payroll).
   Tetap halaman depan jika ada "Lihat Detail", "Sebagai Rekening Utama", "Intip Saldo",
-  "Push Notification", atau "Daftar Kartu" dengan nama pemilik di kartu GPN.
+  "Push Notification", atau "Daftar Kartu" dengan nama pemilik di kartu GPN atau Visa.
+  Judul "Detail Rekening" atau "Detail Rekening & Pengaturan" dengan gambar kartu,
+  nomor rekening 10–13 digit, dan nama pemilik juga halaman depan, termasuk "Tabungan Mandiri".
+  Pada layar itu is_savings_account dan is_front_page wajib true.
   Halaman depan Bank MAS: beranda dengan "Halo, NAMA" dan MAS Saving plus nomor tabungan.
   false untuk buku tabungan fisik, halaman dalam, kertas distempel, tanda tangan petugas,
   mutasi, e-statement, beranda saldo Livin, KTP, atau dokumen lain.
@@ -84,7 +87,7 @@ def rekening_user_prompt(*, expected_name: str = "", expected_bank: str = "") ->
         "Balas hanya satu objek JSON lengkap. Jangan analisis dan jangan tag think.",
         "Ambil nama pemilik dari kartu debit atau label nama orang, bukan nama produk Tabungan NOW.",
         "Salin angka 10–13 digit di bawah gambar kartu sebagai nomor rekening. Jangan dikosongkan jika angka itu terlihat. Jangan ambil nomor 16 digit yang ada di kartu.",
-        "Layar dengan gambar kartu, nomor rekening, Tabungan NOW, dan nama di kartu GPN pada Daftar Kartu adalah halaman depan. Tombol Sebagai Rekening Utama, Intip Saldo, atau Lihat Detail tidak membuatnya ditolak.",
+        "Layar dengan gambar kartu, nomor rekening, Tabungan NOW atau Tabungan Mandiri, dan nama di kartu GPN atau Visa pada Daftar Kartu adalah halaman depan. Judul Detail Rekening & Pengaturan tetap halaman depan: is_savings_account dan is_front_page true. Tombol Sebagai Rekening Utama, Intip Saldo, atau Lihat Detail tidak membuatnya ditolak.",
         "Buku tabungan kertas, stempel cabang, dan halaman dalam bukan halaman depan.",
         "Beranda biru dengan saldo Rp, Transfer Rupiah, Bayar, Top-up, tab Transaksi, atau e-Statement bukan halaman depan. is_transaction_home true dan is_front_page false.",
         "Halaman Produk Anda, Tabungan & Giro, Tabungan Emas, atau Lihat SPT bukan halaman depan. is_product_list true dan is_front_page false.",
@@ -195,6 +198,7 @@ def _notes_say_account_detail(notes: str) -> bool:
             "intipsaldo",
             "gpnsilver",
             "lihatdetail",
+            "detailrekening",
         )
     )
 

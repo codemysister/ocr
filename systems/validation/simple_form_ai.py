@@ -9,6 +9,19 @@ from systems.validation.fuzzy_compare import build_document_verdict
 from systems.validation.ornith_call import as_bool, decide_identity, run_ornith_json
 from systems.validation.user_errors import attach_user_errors
 
+# Model sering mengeja flag ijazah dengan z, sementara id profil memakai s.
+_FLAG_ALIASES: dict[str, tuple[str, ...]] = {
+    "is_ijasah": ("is_ijazah",),
+}
+
+
+def _read_flag(parsed: dict[str, Any], flag: str) -> bool:
+    for key in (flag, *_FLAG_ALIASES.get(flag, ())):
+        if key in parsed and parsed.get(key) is not None:
+            return as_bool(parsed.get(key))
+    return False
+
+
 _FORMS: dict[str, dict[str, str]] = {
     "ijasah": {
         "flag": "is_ijasah",
@@ -22,6 +35,7 @@ _FORMS: dict[str, dict[str, str]] = {
             "Jangan mengarang.\n"
             "Kembalikan HANYA satu objek JSON.\n"
             "- is_ijasah (boolean): true hanya jika ini ijazah. "
+            "Nama field is_ijazah sama artinya. "
             "false jika transkrip, surat lamaran, KTP, atau dokumen lain.\n"
             "- holder_name (string): nama pemilik ijazah, apa adanya.\n"
             "- confidence (number 0-100)\n"
@@ -112,7 +126,7 @@ def form_validation_from_extraction(
     llm: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     spec = _FORMS[profile]
-    is_doc = as_bool(parsed.get(spec["flag"]))
+    is_doc = _read_flag(parsed, spec["flag"])
     holder = str(parsed.get("holder_name") or "").strip()
     ident = decide_identity(expected_name=expected_name, holder=holder, use_nik=False)
     identity_pass = ident["identity_pass"]
