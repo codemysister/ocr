@@ -231,7 +231,8 @@
       color: var(--muted);
       flex-shrink: 0;
     }
-    .fail-preview a { color: var(--accent); font-size: 0.7rem; }
+    .fail-preview a, .fail-download { color: var(--accent); font-size: 0.75rem; }
+    .fail-file-actions { display: flex; gap: 0.6rem; margin-top: 0.35rem; }
     .fail-ocr { padding: 0.85rem 1rem; }
     .fail-section-head {
       display: flex;
@@ -374,6 +375,18 @@
       return `/api/v1/dataset/file?folder=${encodeURIComponent(folder || "")}&file=${encodeURIComponent(file || "")}`;
     }
 
+    function failureMedia(f) {
+      if (f.stored_file && f.id) {
+        const url = `/api/v1/validation-failures/${encodeURIComponent(f.id)}/file`;
+        return { url, downloadUrl: url + "?download=1", name: f.file || f.stored_file };
+      }
+      if (f.folder && f.file) {
+        const url = datasetFileUrl(f.folder, f.file);
+        return { url, downloadUrl: url, name: f.file };
+      }
+      return null;
+    }
+
     function isImageFile(name) {
       return /\.(jpe?g|png|webp)$/i.test(name || "");
     }
@@ -390,16 +403,15 @@
     }
 
     function renderFailurePreview(f, large, idx) {
-      if (!f.folder || !f.file) return "";
-      const url = datasetFileUrl(f.folder, f.file);
+      const media = failureMedia(f);
+      if (!media) return "";
       const cls = previewFull ? "fail-preview full" : large ? "fail-preview large" : "fail-preview";
-      const copyImgBtn = isImageFile(f.file)
-        ? `<button type="button" class="copy-btn copy-img-btn" data-copy="image" data-idx="${idx}" title="Copy gambar ke clipboard">Copy gambar</button>`
-        : "";
-      if (isImageFile(f.file)) {
-        return `<div class="fail-preview-wrap">${copyImgBtn}<div class="${cls}"><img src="${url}" alt="${esc(f.file)}" loading="lazy" title="Klik untuk perbesar" /></div></div>`;
+      const actions = `<div class="fail-file-actions"><a class="fail-download" href="${media.downloadUrl}" download>Unduh</a></div>`;
+      if (isImageFile(media.name) || isImageFile(f.stored_file)) {
+        const copyImgBtn = `<button type="button" class="copy-btn copy-img-btn" data-copy="image" data-idx="${idx}" title="Copy gambar ke clipboard">Copy gambar</button>`;
+        return `<div class="fail-preview-wrap">${copyImgBtn}<div class="${cls}"><img src="${media.url}" alt="${esc(media.name)}" loading="lazy" title="Klik untuk perbesar" /></div>${actions}</div>`;
       }
-      return `<div class="${cls}"><a href="${url}" target="_blank" rel="noopener">Buka file</a></div>`;
+      return `<div class="${cls}"><a href="${media.url}" target="_blank" rel="noopener">Pratinjau</a></div>${actions}`;
     }
 
     function pipelineResponseText(f) {
@@ -536,8 +548,10 @@
         } else if (btn.dataset.copy === "response") {
           await copyTextToClipboard(pipelineResponseText(f));
           flashCopyBtn(btn);
-        } else if (btn.dataset.copy === "image" && f.folder && f.file) {
-          await copyImageFromUrl(datasetFileUrl(f.folder, f.file));
+        } else if (btn.dataset.copy === "image") {
+          const media = failureMedia(f);
+          if (!media) return;
+          await copyImageFromUrl(media.url);
           flashCopyBtn(btn);
         }
       } catch (e) {

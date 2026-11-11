@@ -92,7 +92,7 @@ curl -X POST "https://checkinpro-ocr.web.id/api/v1/pipeline" \
   -F "document_type=foto_profile"
 ```
 
-Baca field **`valid`** (`true` = VALID). Tidak ada OCR.
+Baca field **`valid`** (`true` = VALID). Latar harus backdrop biru solid. Dinding yang dicat biru ditolak (`foto_profile.not_blue`).
 
 ---
 
@@ -127,14 +127,14 @@ String yang dikirim klien untuk menentukan **profil validasi**. Server menormali
 | `ktp` | KTP | **Ornith AI** — nama boleh terpotong, NIK filename bisa lolos; Helper wajib BELUM KAWIN |
 | `npwp` | NPWP | **Ornith AI** + `format_lama` (nomor bukan NIK 16 digit) |
 | `kk` | Kartu Keluarga | **Ornith AI** — nama atau NIK salah satu anggota cukup lolos |
-| `rekening` | Rekening | **Ornith AI** — nama boleh sebagian atau tersensor |
+| `rekening` | Rekening | **Ornith AI** — hanya halaman depan; `expected_bank` wajib; nama pemilik harus terlihat |
 | `mutasi` | Mutasi | **Ornith AI** — e-statement, bank + nomor rekening wajib, nama tidak dicek |
-| `skck` | SKCK | **Ornith AI** — SKCK, nama, masa berlaku (Berlaku dari–Sampai/dengan) belum lewat |
-| `bpjs` | BPJS Kesehatan (KIS) | **Ornith AI** — nama boleh terpotong, NIK filename bisa menyelamatkan |
+| `skck` | SKCK | **Ornith AI** — tanggal **Sampai dengan** wajib terbaca dan belum lewat |
+| `bpjs` | BPJS Kesehatan (KIS) | **Ornith AI** — `expected_card_number` wajib dan harus sama dengan nomor di kartu |
 | `bpjs_tk` | BPJS Ketenagakerjaan | **Ornith AI** — kartu TK, nama boleh terpotong, NIK filename bisa lolos |
 | `bpjs_kesanggupan` | Kesanggupan BPJS Kesehatan | **Ornith AI** — surat kesanggupan + materai fisik |
-| `jkn` | JKN (Info Peserta) | **Ornith AI** — Info Peserta; status AKTIF/TIDAK AKTIF tidak memblokir |
-| `iuran` | Iuran JKN (Info Iuran) | **Ornith AI** — Info Iuran, modal tanpa nama tetap lolos, NIK filename bisa lolos |
+| `jkn` | JKN (Info Peserta) | **Ornith AI** — layar Info Peserta berisi data peserta; `expected_card_number` wajib; kartu KIS ditolak |
+| `iuran` | Iuran JKN (Info Iuran) | **Ornith AI** — Info Iuran atau modal kosong; daftar riwayat pembayaran ditolak |
 | `vaksinasi_1` | Vaksinasi COVID-19 (Dosis 1) | **Ornith AI** — dosis 1, nama boleh terpotong, NIK filename bisa lolos |
 | `vaksinasi_2` | Vaksinasi COVID-19 (Dosis 2) | **Ornith AI** — dosis 2, nama boleh terpotong, NIK filename bisa lolos |
 | `vaksinasi_3` | Vaksinasi COVID-19 (Booster) | **Ornith AI** — booster, nama boleh terpotong, NIK filename bisa lolos |
@@ -143,9 +143,9 @@ String yang dikirim klien untuk menentukan **profil validasi**. Server menormali
 | `formulir_okb` | Formulir OKB | **Ornith AI** |
 | `formulir_lamaran` | Formulir Lamaran Pekerjaan | **Ornith AI** |
 | `surat_lamaran` | Surat Lamaran | **Ornith AI** |
-| `pemadanan_npwp` | Pemadanan NPWP | **Ornith AI** — kartu NPWP 16 digit atau Ikhtisar Profil, nama boleh terpotong |
+| `pemadanan_npwp` | Pemadanan NPWP | **Ornith AI** — hanya kartu NPWP 16 digit, Ikhtisar Profil, atau Surat Keterangan Aktivasi NIK |
 | `keterangan_kesehatan` | Surat Keterangan Kesehatan | **Ornith AI vision** (wajib) + gate SEHAT / tanggal / nama |
-| `foto_profile` | Foto Profil | **Gambar** (wajah + latar biru) |
+| `foto_profile` | Foto Profil | **Ornith AI** — pas foto dan backdrop biru solid; dinding biru ditolak |
 | `cv` | CV | **Ingest + match** 3 dimensi (nama / pendidikan / pengalaman) — bukan validasi OCR keyword |
 
 Daftar lengkap alias ada di [Profil dokumen](#profil-dokumen--ketentuan-validasi).
@@ -236,7 +236,7 @@ Jika AI tidak merespons: HTTP **503**, `detail.error_code` = `pipeline.portrait_
 | POST | `/api/v1/dataset/benchmark` | JSON | Benchmark pipeline terhadap file dataset (NDJSON stream) |
 | GET | `/api/v1/health-letter-ai/config` | — | Default URL/model Ornith + template prompt surat kesehatan |
 | POST | `/api/v1/health-letter-ai` | multipart | Tes/debug: ekstraksi + validasi surat kesehatan via Ornith (tanpa Paddle) |
-| GET/DELETE | `/api/v1/validation-failures` | — | Log JSONL dokumen gagal validasi (QA) |
+| GET/DELETE | `/api/v1/validation-failures` | — | Log JSONL dokumen gagal validasi (QA). File unggahan: `GET /api/v1/validation-failures/{id}/file` |
 | GET/DELETE | `/api/v1/validation-successes` | — | Log JSONL dokumen lolos validasi (QA) |
 | GET | `/dataset-test` | — | UI benchmark dataset (dev): mode batch atau file spesifik |
 | GET | `/dataset-failures` · `/dataset-successes` | — | UI review log benchmark/validasi |
@@ -348,7 +348,7 @@ curl -X POST "https://checkinpro-ocr.web.id/api/v1/pipeline?ocr_mode=mistral" \
   -F "expected_name=Siti Dwi Sarah"
 ```
 
-### Contoh — Foto profil biru (tanpa OCR)
+### Contoh — Foto profil biru (Ornith)
 
 ```bash
 curl -X POST "https://checkinpro-ocr.web.id/api/v1/pipeline" \
@@ -435,16 +435,16 @@ flowchart TD
 | Profil | `document_type` contoh | Wajib isi `expected_name`? | OCR? | Lolos jika |
 |--------|------------------------|----------------------------|------|------------|
 | KTP | `ktp`, `KTP`, `identitas` | Opsional (disarankan untuk cek milik) | ❌ (AI vision) | **Ornith** — KTP/e-KTP; nama boleh terpotong; NIK filename bisa lolos; `job_position=helper` wajib BELUM KAWIN |
-| NPWP | `npwp`, `NPWP` | Opsional | ✅ | Keyword NPWP ≥70% **dan** identitas (jika dicek) |
+| NPWP | `npwp`, `NPWP` | Opsional | ❌ (AI vision) | **Ornith** — kartu NPWP; `format_lama` jika nomor bukan 16 digit; NIK filename bisa lolos |
 | KK | `kk`, `kartu keluarga` | Opsional | ❌ (AI vision) | **Ornith** — Kartu Keluarga; nama atau NIK salah satu anggota cukup lolos |
-| Rekening | `rekening`, `rekening tabungan` | Opsional | ❌ (AI vision) | **Ornith** — bukti tabungan, `expected_bank` wajib; nama dan nomor rekening keduanya cocok bila keduanya diisi |
+| Rekening | `rekening`, `rekening tabungan` | Opsional | ❌ (AI vision) | **Ornith** — hanya halaman depan (Detail Rekening / kartu + Tabungan NOW + nama di GPN, atau beranda MAS). Bukan Produk Anda, beranda saldo, atau pembukaan rekening |
 | Mutasi | `mutasi`, `e-statement` | Tidak dipakai | ❌ (AI vision) | **Ornith** — layar mutasi/e-statement; `expected_bank` + `expected_account` wajib; nama tidak dicek |
 | SKCK | `skck` | Opsional | ❌ (AI vision) | **Ornith** — harus SKCK, nama cocok jika diisi, tanggal masa berlaku terbaca dan belum lewat |
 | BPJS KIS | `bpjs`, `bpjs kesehatan`, `kartu indonesia sehat` | **Disarankan wajib** | ❌ (AI vision) | **Ornith** — KIS; `expected_card_number` wajib dan harus sama dengan nomor di kartu |
 | BPJS TK | `bpjs_tk`, `bpjs ketenagakerjaan` | **Disarankan wajib** | ❌ (AI vision) | **Ornith** — kartu peserta ketenagakerjaan; nama boleh terpotong; NIK filename bisa lolos |
 | Kesanggupan BPJS | `bpjs_kesanggupan`, `kesanggupan bpjs` | **Disarankan wajib** | ❌ (AI vision) | **Ornith** — surat kesanggupan, nama jika diisi, **dan materai fisik** |
-| JKN | `jkn`, `info peserta` | **Disarankan wajib** | ❌ (AI vision) | **Ornith** — Info Peserta; `expected_card_number` wajib dan harus ada di nomor peserta |
-| Iuran JKN | `iuran`, `info iuran`, `iuran jkn` | **Disarankan wajib** | ❌ (AI vision) | **Ornith** — layar Info Iuran; modal tanpa nama lolos; nama boleh terpotong; NIK filename bisa lolos |
+| JKN | `jkn`, `info peserta` | **Disarankan wajib** | ❌ (AI vision) | **Ornith** — layar Info Peserta berisi nama atau nomor; `expected_card_number` wajib; kartu KIS dan layar kosong ditolak |
+| Iuran JKN | `iuran`, `info iuran`, `iuran jkn` | **Disarankan wajib** | ❌ (AI vision) | **Ornith** — Info Iuran, modal tanpa tagihan, atau chat Pandawa. Daftar riwayat pembayaran ditolak |
 | Vaksinasi 1 | `vaksinasi_1`, `vaksinasi 1`, `vaksin dosis pertama` | **Disarankan wajib** | ❌ (AI vision) | **Ornith** — dosis 1 (tahap 2 ikut tercantum tetap lolos), nama boleh terpotong, NIK filename bisa lolos |
 | Vaksinasi 2 | `vaksinasi_2`, `vaksinasi 2` | **Disarankan wajib** | ❌ (AI vision) | **Ornith** — dosis 2 (tahap 1 ikut tercantum tetap lolos), nama boleh terpotong, NIK filename bisa lolos |
 | Vaksinasi 3 | `vaksinasi_3`, `vaksinasi 3`, `vaksin booster` | **Disarankan wajib** | ❌ (AI vision) | **Ornith** — booster (tahap 1/2 ikut tercantum tetap lolos), primer 2 bukan booster |
@@ -453,10 +453,10 @@ flowchart TD
 | Formulir OKB | `formulir_okb`, `formulir okb` | Opsional | ❌ (AI vision) | **Ornith** — formulir OKB; nama jika diisi |
 | Formulir lamaran | `formulir_lamaran`, `formulir lamaran pekerjaan` | Opsional | ❌ (AI vision) | **Ornith** — formulir lamaran; nama jika diisi |
 | Surat lamaran | `surat_lamaran`, `surat lamaran` | Opsional | ❌ (AI vision) | **Ornith** — surat lamaran; nama jika diisi |
-| Pemadanan NPWP | `pemadanan_npwp`, `pemadanan npwp` | Opsional | ❌ (AI vision) | **Ornith** — kartu NPWP 16 digit atau Ikhtisar Profil; format lama 15 digit tidak lolos |
+| Pemadanan NPWP | `pemadanan_npwp`, `pemadanan npwp` | Opsional | ❌ (AI vision) | **Ornith** — hanya kartu NPWP 16 digit, Ikhtisar Profil, atau Surat Aktivasi NIK. Login dan format lama ditolak |
 | Surat keterangan kesehatan | `keterangan_kesehatan`, `keterangan kesehatan` | Opsional | ❌ (AI vision) | **Ornith** — rumah sakit, klinik, atau puskesmas (bukan bidan); tertulis SEHAT; tanggal pemeriksaan terbaca |
 | CV | `cv`, `resume`, `curriculum vitae` | Disarankan (dimensi nama) | ❌ (match struktural) | **PDF/DOCX/MD/gambar** → ingest + match nama/pendidikan/pengalaman |
-| Foto Profil | `foto_profile`, `pas foto` | Tidak dipakai | ❌ (AI vision) | **JPEG/PNG/WebP** — pas foto **dan** latar biru (Ornith) |
+| Foto Profil | `foto_profile`, `pas foto` | Tidak dipakai | ❌ (AI vision) | **Ornith** — pas foto dan backdrop biru solid. Dinding yang dicat biru ditolak |
 
 ---
 
@@ -760,6 +760,14 @@ curl -X POST "https://checkinpro-ocr.web.id/api/v1/pipeline" \
 
 **Gate:** layar Info Peserta di Mobile JKN, bukan Info Iuran dan bukan Kartu Indonesia Sehat. Kartu KIS ditolak (`jkn.wrong_document`); kartu itu dicek lewat `document_type=bpjs`. Judul "Info Peserta" atau "Kepesertaan terdaftar" tanpa nama, NIK, atau nomor peserta ditolak (`jkn.wrong_document`). `expected_card_number` wajib (nomor dari input KIS yang terpisah) dan harus sama dengan nomor peserta yang terlihat; kalau tidak ada yang sama, `jkn.card_mismatch`. Tanpa nomor di payload → HTTP 400 `pipeline.missing_expected_card_number`. Daftar keluarga berisi sisa saldo, tagihan, atau total tagihan ditolak (`jkn.wrong_document`). Nama atau NIK salah satu peserta cukup. Status `AKTIF` / `TIDAK AKTIF` dikembalikan di `jkn_status_label` dan tidak menggagalkan validasi.
 
+```bash
+curl -X POST "https://checkinpro-ocr.web.id/api/v1/pipeline" \
+  -F "file=@info_peserta.jpg" \
+  -F "document_type=jkn" \
+  -F "expected_name=Anita" \
+  -F "expected_card_number=0002885506964"
+```
+
 ---
 
 ### `iuran`
@@ -918,7 +926,7 @@ Hanya dua hal:
 | Gate | Lolos jika |
 |------|------------|
 | Foto profil | Gambar adalah pas foto / foto profil (bukan KTP, dokumen, atau screenshot) |
-| Latar biru | Latar dominan biru solid |
+| Latar biru | Backdrop biru solid. Dinding yang dicat biru, termasuk biru muda bertekstur, ditolak (`foto_profile.not_blue`) |
 
 ```
 document_matched = valid = is_profile_photo AND is_blue_background
@@ -929,7 +937,7 @@ Jumlah wajah dan ukuran wajah **tidak** memblokir.
 | `error_code` | Kapan |
 |--------------|--------|
 | `foto_profile.not_profile_photo` | Bukan pas foto |
-| `foto_profile.not_blue` | Latar bukan biru |
+| `foto_profile.not_blue` | Latar bukan backdrop biru solid, termasuk dinding yang dicat biru |
 | `pipeline.portrait_ai_unavailable` | HTTP 503 — Ornith tidak merespons |
 
 Respons: `ocr_mode: "ornith"`, `ocr.mode: "ornith_portrait_ai"`, `validation.image_validation.is_profile_photo`, `validation.image_validation.is_blue_background`.
@@ -1470,12 +1478,13 @@ curl -X POST "https://checkinpro-ocr.web.id/api/v1/health-letter-ai" \
 
 | Method | Path | Keterangan |
 |--------|------|------------|
-| GET | `/api/v1/validation-failures` | Query: `limit`, `offset`, `document_type` (filter) |
-| DELETE | `/api/v1/validation-failures` | Kosongkan log gagal |
+| GET | `/api/v1/validation-failures` | Query: `limit`, `offset`, `kind` (`validation_fail` atau `pipeline_error`) |
+| GET | `/api/v1/validation-failures/{id}/file` | Pratinjau file yang gagal. `?download=1` untuk unduh |
+| DELETE | `/api/v1/validation-failures` | Kosongkan log gagal beserta file unggahannya |
 | GET | `/api/v1/validation-successes` | Query: `limit`, `offset`, `document_type` |
 | DELETE | `/api/v1/validation-successes` | Kosongkan log sukses |
 
-Entri mencakup `error_code`, `error_message`, `issued_date`, preview file dataset bila dari benchmark.
+Entri mencakup `error_code`, `error_message`, `issued_date`, dan file yang gagal. Halaman `/dataset-failures` menampilkan pratinjau gambar (klik untuk perbesar) serta tombol unduh. File dari benchmark dataset dan unggahan pipeline sama-sama bisa dibuka.
 
 ---
 

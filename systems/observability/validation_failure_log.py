@@ -17,6 +17,9 @@ logger = logging.getLogger(__name__)
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _DEFAULT_LOG = _REPO_ROOT / "logs" / "validation_failures.jsonl"
 _CLEARED_STAMP = _REPO_ROOT / "logs" / "validation_failures.cleared"
+_UPLOAD_DIR = _REPO_ROOT / "logs" / "validation_failure_files"
+_MAX_UPLOAD_BYTES = 12 * 1024 * 1024
+_UPLOAD_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".pdf"}
 
 
 def _log_path() -> Path:
@@ -130,6 +133,82 @@ def _trim_log_file(path: Path, max_entries: int) -> None:
         path.write_text("\n".join(kept) + "\n", encoding="utf-8")
     except OSError:
         logger.exception("validation_failure_log: gagal trim %s", path)
+        return
+    names: set[str] = set()
+    for line in kept:
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        stored = row.get("stored_file") if isinstance(row, dict) else None
+        if isinstance(stored, str) and stored:
+            names.add(Path(stored).name)
+    if _UPLOAD_DIR.is_dir():
+        try:
+            for path_file in _UPLOAD_DIR.iterdir():
+                if path_file.is_file() and path_file.name not in names:
+                    path_file.unlink(missing_ok=True)
+        except OSError:
+            logger.exception("validation_failure_log: gagal rapikan unggahan")
+
+
+def _upload_suffix(filename: str, data: bytes) -> str:
+    suffix = Path(filename or "").suffix.casefold()
+    if suffix == ".jpeg":
+        suffix = ".jpg"
+    if suffix in _UPLOAD_SUFFIXES:
+        return suffix
+    if data.startswith(b"\xff\xd8"):
+        return ".jpg"
+    if data.startswith(b"\x89PNG"):
+        return ".png"
+    if data.startswith(b"RIFF") and data[8:12] == b"WEBP":
+        return ".webp"
+    if data.startswith(b"%PDF"):
+        return ".pdf"
+    return ""
+
+
+def save_failure_upload(entry_id: str, filename: str, data: bytes) -> str | None:
+    if not data or len(data) > _MAX_UPLOAD_BYTES:
+        return None
+    suffix = _upload_suffix(filename, data)
+    if not suffix:
+        return None
+    safe_id = Path(entry_id).name
+    if not safe_id or safe_id in {".", ".."}:
+        return None
+    name = f"{safe_id}{suffix}"
+    try:
+        _UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+        (_UPLOAD_DIR / name).write_bytes(data)
+    except OSError:
+        logger.exception("validation_failure_log: gagal simpan unggahan %s", name)
+        return None
+    return name
+
+
+def resolve_failure_upload(entry_id: str) -> Path | None:
+    safe_id = Path(entry_id or "").name
+    if not safe_id or safe_id in {".", ".."}:
+        return None
+    if not _UPLOAD_DIR.is_dir():
+        return None
+    matches = [path for path in _UPLOAD_DIR.glob(f"{safe_id}.*") if path.is_file()]
+    return matches[0] if matches else None
+
+
+def _delete_upload_files(names: set[str] | None = None) -> None:
+    if not _UPLOAD_DIR.is_dir():
+        return
+    try:
+        for path in _UPLOAD_DIR.iterdir():
+            if not path.is_file():
+                continue
+            if names is None or path.name not in names:
+                path.unlink(missing_ok=True)
+    except OSError:
+        logger.exception("validation_failure_log: gagal hapus unggahan")
 
 
 def append_validation_failure(entry: dict[str, Any]) -> dict[str, Any]:
@@ -159,6 +238,7 @@ def record_from_pipeline_result(
     expected_account: str = "",
     job_position: str = "",
     source: str = "pipeline",
+    image_bytes: bytes | None = None,
 ) -> dict[str, Any] | None:
     skip_kinds = {"empty_file", "empty_document_type", "unknown_document_type"}
     kind, reason = _failure_detail(result)
@@ -223,6 +303,12 @@ def record_from_pipeline_result(
     }
     if entry.get("issued_date") and not entry.get("issued_date_display"):
         entry["issued_date_display"] = format_id_date(entry["issued_date"])
+    entry_id = str(uuid.uuid4())
+    entry["id"] = entry_id
+    if image_bytes and not folder:
+        stored = save_failure_upload(entry_id, file_name, image_bytes)
+        if stored:
+            entry["stored_file"] = stored
     llm = validation.get("llm_fallback")
     if isinstance(llm, dict) and llm.get("attempted"):
         entry["llm_fallback"] = llm
@@ -356,6 +442,7 @@ def clear_validation_failures() -> int:
         except OSError:
             logger.exception("validation_failure_log: gagal hapus %s", path)
             return 0
+    _delete_upload_files()
     try:
         _CLEARED_STAMP.parent.mkdir(parents=True, exist_ok=True)
         _CLEARED_STAMP.write_text(datetime.now(timezone.utc).isoformat() + "\n", encoding="utf-8")

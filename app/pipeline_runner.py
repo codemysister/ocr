@@ -2032,6 +2032,7 @@ def run_pipeline_bytes(
             expected_account=expected_account,
             job_position=job_position,
             source=log_source,
+            image_bytes=raw,
         )
         record_success_from_pipeline_result(
             result,

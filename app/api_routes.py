@@ -39,6 +39,7 @@ from systems.observability.validation_failure_log import (
     count_validation_failures,
     failure_log_stats,
     read_validation_failures,
+    resolve_failure_upload,
 )
 from systems.observability.validation_success_log import (
     clear_validation_successes,
@@ -882,6 +883,36 @@ def api_validation_failures(
         "total": stats["total"],
         "filtered_count": len(entries),
     }
+
+
+@router.get("/validation-failures/{entry_id}/file")
+def api_validation_failure_file(
+    entry_id: str,
+    download: bool = Query(False, description="true = unduh, false = pratinjau"),
+) -> FileResponse:
+    """Gambar atau PDF yang gagal validasi, untuk pratinjau dan unduh."""
+    path = resolve_failure_upload(entry_id)
+    if path is None:
+        raise HTTPException(status_code=404, detail="File gagal tidak ditemukan.")
+    download_name = path.name
+    for row in read_validation_failures(limit=2000, offset=0):
+        if row.get("id") == entry_id and isinstance(row.get("file"), str) and row["file"].strip():
+            download_name = row["file"].rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+            break
+    media_type = {
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".png": "image/png",
+        ".webp": "image/webp",
+        ".gif": "image/gif",
+        ".pdf": "application/pdf",
+    }.get(path.suffix.casefold(), "application/octet-stream")
+    return FileResponse(
+        path,
+        media_type=media_type,
+        filename=download_name,
+        content_disposition_type="attachment" if download else "inline",
+    )
 
 
 @router.delete("/validation-failures")
