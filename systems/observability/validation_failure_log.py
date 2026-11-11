@@ -75,6 +75,44 @@ def _ocr_text_from_result(result: Any) -> str | None:
     return None
 
 
+def _sent(value: str | None) -> str | None:
+    text = (value or "").strip()
+    return text or None
+
+
+def request_payload_from_fields(
+    *,
+    document_type: str = "",
+    filename: str = "",
+    expected_name: str = "",
+    expected_bank: str = "",
+    expected_account: str = "",
+    expected_card_number: str = "",
+    job_position: str = "",
+    ocr_mode: str = "",
+    cv_education_query: str = "",
+    cv_experience_query: str = "",
+) -> dict[str, Any]:
+    """Field permintaan yang dikirim klien, terpisah dari respons pipeline."""
+    payload: dict[str, Any] = {
+        "document_type": _sent(document_type),
+        "filename": _sent(filename),
+        "expected_name": _sent(expected_name),
+        "expected_bank": _sent(expected_bank),
+        "expected_account": _sent(expected_account),
+        "expected_card_number": _sent(expected_card_number),
+        "job_position": _sent(job_position),
+        "ocr_mode": _sent(ocr_mode),
+    }
+    education = _sent(cv_education_query)
+    experience = _sent(cv_experience_query)
+    if education:
+        payload["cv_education_query"] = education
+    if experience:
+        payload["cv_experience_query"] = experience
+    return payload
+
+
 def _pipeline_response_from_result(result: Any) -> dict[str, Any] | None:
     payload = getattr(result, "payload", None) or {}
     if not isinstance(payload, dict):
@@ -242,7 +280,11 @@ def record_from_pipeline_result(
     expected_name: str = "",
     expected_bank: str = "",
     expected_account: str = "",
+    expected_card_number: str = "",
     job_position: str = "",
+    ocr_mode: str = "",
+    cv_education_query: str = "",
+    cv_experience_query: str = "",
     source: str = "pipeline",
     image_bytes: bytes | None = None,
 ) -> dict[str, Any] | None:
@@ -277,7 +319,20 @@ def record_from_pipeline_result(
         "expected_name": (expected_name or "").strip() or None,
         "expected_bank": (expected_bank or "").strip() or None,
         "expected_account": (expected_account or "").strip() or None,
+        "expected_card_number": (expected_card_number or "").strip() or None,
         "job_position": (job_position or "").strip() or validation.get("job_position"),
+        "request_payload": request_payload_from_fields(
+            document_type=document_type,
+            filename=file_name,
+            expected_name=expected_name,
+            expected_bank=expected_bank,
+            expected_account=expected_account,
+            expected_card_number=expected_card_number,
+            job_position=job_position,
+            ocr_mode=ocr_mode,
+            cv_education_query=cv_education_query,
+            cv_experience_query=cv_experience_query,
+        ),
         "identity_pass": validation.get("identity_pass"),
         "identity_or_account_pass": validation.get("identity_or_account_pass"),
         "bank_pass": validation.get("bank_pass"),

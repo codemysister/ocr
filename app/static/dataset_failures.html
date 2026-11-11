@@ -129,8 +129,8 @@
     }
     .fail-preview {
       flex-shrink: 0;
-      width: 140px;
-      height: 100px;
+      width: 72px;
+      height: 96px;
       border-radius: 8px;
       border: 1px solid var(--border);
       background: #151c26;
@@ -139,28 +139,15 @@
       justify-content: center;
       overflow: hidden;
     }
-    .fail-preview.large {
-      width: 100%;
-      height: auto;
-      min-height: 200px;
-      max-height: min(420px, 55vh);
-    }
-    .fail-preview.large img {
-      width: 100%;
-      height: auto;
-      max-height: min(420px, 55vh);
-      object-fit: contain;
-    }
     .fail-preview.full {
-      width: 100%;
-      height: auto;
-      min-height: 0;
-      max-height: none;
+      width: 160px;
+      height: 210px;
+      max-height: 210px;
     }
     .fail-preview.full img {
       width: 100%;
-      height: auto;
-      max-height: none;
+      height: 100%;
+      max-height: 210px;
       object-fit: contain;
     }
     .fail-preview img {
@@ -264,13 +251,8 @@
       max-height: 220px;
       overflow: auto;
     }
-    .fail-preview-wrap { position: relative; width: 100%; }
-    .fail-preview-wrap .copy-img-btn {
-      position: absolute;
-      top: 0.5rem;
-      right: 0.5rem;
-      z-index: 2;
-    }
+    .fail-preview-wrap { position: relative; width: 72px; flex: 0 0 72px; }
+    .fail-preview-wrap:has(.fail-preview.full) { width: 160px; flex-basis: 160px; }
     button.copy-btn {
       font-size: 0.7rem;
       font-weight: 600;
@@ -336,7 +318,7 @@
 
     let filter = "";
     let lastFailures = [];
-    let previewFull = sessionStorage.getItem("failPreviewFull") !== "0";
+    let previewFull = sessionStorage.getItem("failPreviewFull") === "1";
 
     function esc(s) {
       return String(s ?? "")
@@ -391,33 +373,48 @@
       return /\.(jpe?g|png|webp)$/i.test(name || "");
     }
 
-    function isPreviewOnlyFailure(f) {
-      if (f.document_type === "foto_profile") return true;
-      if (!f.ocr_text && isImageFile(f.file)) return true;
-      return false;
-    }
-
     function syncFullButton() {
       btnFull.classList.toggle("active", previewFull);
       btnFull.textContent = previewFull ? "Mode penuh" : "Mode ringkas";
     }
 
-    function renderFailurePreview(f, large, idx) {
+    function renderFailurePreview(f, idx) {
       const media = failureMedia(f);
       if (!media) return "";
-      const cls = previewFull ? "fail-preview full" : large ? "fail-preview large" : "fail-preview";
-      const actions = `<div class="fail-file-actions"><a class="fail-download" href="${media.downloadUrl}" download>Unduh</a></div>`;
-      if (isImageFile(media.name) || isImageFile(f.stored_file)) {
-        const copyImgBtn = `<button type="button" class="copy-btn copy-img-btn" data-copy="image" data-idx="${idx}" title="Copy gambar ke clipboard">Copy gambar</button>`;
-        return `<div class="fail-preview-wrap">${copyImgBtn}<div class="${cls}"><img src="${media.url}" alt="${esc(media.name)}" loading="lazy" title="Klik untuk perbesar" /></div>${actions}</div>`;
+      const cls = previewFull ? "fail-preview full" : "fail-preview";
+      const image = isImageFile(media.name) || isImageFile(f.stored_file);
+      const actions = `<div class="fail-file-actions"><a class="fail-download" href="${media.downloadUrl}" download>Unduh</a>${
+        image ? `<button type="button" class="copy-btn" data-copy="image" data-idx="${idx}">Copy</button>` : ""
+      }</div>`;
+      if (image) {
+        return `<div class="fail-preview-wrap"><div class="${cls}"><img src="${media.url}" alt="${esc(media.name)}" loading="lazy" title="Klik untuk perbesar" /></div>${actions}</div>`;
       }
       return `<div class="${cls}"><a href="${media.url}" target="_blank" rel="noopener">Pratinjau</a></div>${actions}`;
     }
 
+    function requestPayloadOf(f) {
+      if (f.request_payload && typeof f.request_payload === "object") return f.request_payload;
+      return {
+        document_type: f.document_type || null,
+        filename: f.file || null,
+        expected_name: f.expected_name || null,
+        expected_bank: f.expected_bank || null,
+        expected_account: f.expected_account || null,
+        expected_card_number: f.expected_card_number || null,
+        job_position: f.job_position || null,
+        ocr_mode: f.ocr_mode || null,
+      };
+    }
+
     function pipelineResponseText(f) {
-      if (!f.pipeline_response) return "";
+      const body = { request_payload: requestPayloadOf(f) };
+      if (f.pipeline_response && typeof f.pipeline_response === "object") {
+        for (const [key, value] of Object.entries(f.pipeline_response)) {
+          if (key !== "request_payload") body[key] = value;
+        }
+      }
       try {
-        return JSON.stringify(f.pipeline_response, null, 2);
+        return JSON.stringify(body, null, 2);
       } catch {
         return "";
       }
@@ -473,8 +470,16 @@
       }
       contentEl.innerHTML = `<div class="fail-cards">${lastFailures.map((f, idx) => {
         const tag = failureKindLabel(f.failure_kind);
-        const previewOnly = previewFull || isPreviewOnlyFailure(f);
+        const previewOnly = previewFull;
         const responseText = pipelineResponseText(f);
+        const payloadText = JSON.stringify(requestPayloadOf(f), null, 2);
+        const payloadBlock = `<div class="fail-ocr">
+              <div class="fail-section-head">
+                <label>Payload dikirim</label>
+                <button type="button" class="copy-btn" data-copy="payload" data-idx="${idx}">Copy JSON</button>
+              </div>
+              <pre>${esc(payloadText)}</pre>
+            </div>`;
         const ocrBlock = f.ocr_text
           ? `<div class="fail-ocr">
               <div class="fail-section-head">
@@ -518,7 +523,7 @@
         ].join("");
         return `<article class="fail-card${previewOnly ? " preview-only" : ""}">
           <div class="fail-card-head">
-            ${renderFailurePreview(f, previewOnly, idx)}
+            ${renderFailurePreview(f, idx)}
             <div class="fail-card-meta">
               <span class="tag ${tag.cls}">${esc(tag.text)}</span>
               <span style="margin-left:0.5rem;color:var(--muted);font-size:0.75rem;">${esc(f.folder || "—")}</span>
@@ -529,6 +534,7 @@
               ${expected}
             </div>
           </div>
+          ${payloadBlock}
           ${ocrBlock}
           ${responseBlock}
         </article>`;
@@ -544,6 +550,9 @@
       try {
         if (btn.dataset.copy === "ocr") {
           await copyTextToClipboard(f.ocr_text || "");
+          flashCopyBtn(btn);
+        } else if (btn.dataset.copy === "payload") {
+          await copyTextToClipboard(JSON.stringify(requestPayloadOf(f), null, 2));
           flashCopyBtn(btn);
         } else if (btn.dataset.copy === "response") {
           await copyTextToClipboard(pipelineResponseText(f));

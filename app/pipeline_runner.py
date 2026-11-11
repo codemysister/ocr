@@ -2030,7 +2030,11 @@ def run_pipeline_bytes(
             expected_name=expected_name,
             expected_bank=expected_bank,
             expected_account=expected_account,
+            expected_card_number=expected_card_number,
             job_position=job_position,
+            ocr_mode=str(ocr_mode or ""),
+            cv_education_query=cv_education_query,
+            cv_experience_query=cv_experience_query,
             source=log_source,
             image_bytes=raw,
         )

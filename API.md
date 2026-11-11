@@ -1484,7 +1484,7 @@ curl -X POST "https://checkinpro-ocr.web.id/api/v1/health-letter-ai" \
 | GET | `/api/v1/validation-successes` | Query: `limit`, `offset`, `document_type` |
 | DELETE | `/api/v1/validation-successes` | Kosongkan log sukses |
 
-Entri mencakup `error_code`, `error_message`, `issued_date`, dan file yang gagal. Halaman `/dataset-failures` menampilkan pratinjau gambar (klik untuk perbesar) serta tombol unduh. File dari benchmark dataset dan unggahan pipeline sama-sama bisa dibuka.
+Entri mencakup `error_code`, `error_message`, `issued_date`, `request_payload` (field yang dikirim klien: jenis dokumen, nama, bank, nomor rekening, nomor kartu, jabatan), dan file yang gagal. Halaman `/dataset-failures` menampilkan payload itu, pratinjau gambar (klik untuk perbesar), serta tombol unduh. File dari benchmark dataset dan unggahan pipeline sama-sama bisa dibuka. Entri lama tanpa `request_payload` tetap menampilkan field yang tersimpan (`expected_name`, `expected_bank`, `expected_account`).
 
 ---
 
