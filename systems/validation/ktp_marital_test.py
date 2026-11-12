@@ -969,6 +969,44 @@ def test_health_letter_issuer_rejects_bidan() -> None:
     assert _issuer_type({"clinic_name": "Klinik Sehat", "issuer_type": "lain"}) == "klinik"
     assert _issuer_type({"clinic_name": "Puskesmas Sukmajaya"}) == "puskesmas"
     assert _issuer_type({"clinic_name": "Klinik Bidan Melati", "issuer_type": "klinik"}) == "bidan"
+    assert _issuer_type({
+        "clinic_name": "Praktek Dokter Mandiri",
+        "issuer_type": "lain",
+        "doctor_name": "Dr. Hillery Sitanggang",
+    }) == "klinik"
+    assert _issuer_type({
+        "clinic_name": "Klinik Linge",
+        "issuer_type": "bidan",
+        "doctor_name": "Dr./Bidan",
+        "notes": "Surat Keterangan Sehat. Kolom Dr./Bidan.",
+    }) == "klinik"
+
+    from systems.validation.keterangan_kesehatan_ai import _marked_healthy
+
+    assert _marked_healthy(
+        {
+            "health_conclusion": "tidak_sehat",
+            "document_type_label": "Surat Keterangan Sehat",
+            "health_conclusion_text": "Keadaan keseluruhan dinyatakan Sehat",
+        },
+        False,
+    ) is True
+    assert _marked_healthy(
+        {
+            "health_conclusion": "tidak_jelas",
+            "document_type_label": "Surat Keterangan Sehat",
+            "health_conclusion_text": "dalam keadaan Baik / Sehat dan tidak cacat",
+        },
+        False,
+    ) is True
+    assert _marked_healthy(
+        {
+            "health_conclusion": "tidak_sehat",
+            "document_type_label": "Surat Keterangan Dokter",
+            "health_conclusion_text": "dinyatakan tidak sehat",
+        },
+        False,
+    ) is False
 
     overlaid = overlay_health_ai_on_validation(
         {

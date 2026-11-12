@@ -34,15 +34,18 @@ Kembalikan HANYA satu objek JSON (tanpa markdown) dengan kunci persis:
   Bukan nama dokter. Jangan potong menjadi nama belakang saja.
 - identity_number (string): NIK jika ada (hanya digit), else ""
 - issuer_type (string): salah satu "rumah_sakit", "klinik", "puskesmas", "bidan", "lain".
-  "bidan" jika surat dari bidan atau praktik bidan, meskipun ada kata klinik.
+  "klinik" untuk klinik, praktek dokter, atau praktik dokter, termasuk Praktek Dokter Mandiri.
+  "bidan" hanya jika penerbitnya praktik bidan atau nama fasilitas memuat bidan.
+  Kolom tanda tangan "Dr./Bidan" bukan jenis penerbit. Jika kopnya klinik atau praktek dokter, isi "klinik".
   "lain" jika penerbit tidak terbaca.
 - clinic_name (string): nama rumah sakit, klinik, atau puskesmas
 - city (string): kota/tempat surat diterbitkan
 - doctor_name (string): nama dokter pemeriksa
 - health_conclusion (string): salah satu "sehat", "tidak_sehat", "tidak_jelas".
-  "sehat" jika tertulis SEHAT, atau pilihan "baik / sehat" yang dilingkari, digarisbawahi, atau dipilih.
-  Surat Keterangan Dokter dari klinik tetap surat kesehatan. Jangan isi tidak_jelas hanya karena judulnya bukan "sehat".
-  "tidak_sehat" hanya jika hasil yang dipilih adalah tidak sehat.
+  "sehat" jika judulnya Surat Keterangan Sehat, jika tertulis SEHAT (termasuk tulisan tangan),
+  atau kalimat "dalam keadaan Baik / Sehat". Hasil buta warna negatif bukan tidak sehat.
+  Surat Keterangan Dokter dari klinik atau praktek dokter tetap surat kesehatan.
+  "tidak_sehat" hanya jika hasil yang dipilih tertulis tidak sehat atau sakit.
 - health_conclusion_text (string): kutip baris hasilnya, termasuk "baik / sehat" bila itu yang tercetak
 - issued_date (string|null): tanggal dibuat, yaitu tanggal di samping nama kota di atas tanda tangan dokter.
   Bukan tanggal lahir dan bukan tanggal di nomor surat bila berbeda. Format YYYY-MM-DD. null jika tidak terbaca.
@@ -145,9 +148,10 @@ def _parse_health_json(text: str) -> dict[str, Any] | None:
 def health_letter_user_prompt(*, expected_name: str = "", expected_nik: str = "") -> str:
     lines = [
         "Baca gambar surat keterangan kesehatan ini. Jika foto miring, baca setelah tegak.",
-        "Surat harus dari rumah sakit, klinik, atau puskesmas. Surat bidan tidak lolos.",
-        "Salin nama pasien utuh dari baris Nama, bukan nama dokter.",
-        "Jika baik/sehat dilingkari atau dipilih, health_conclusion adalah sehat.",
+        "Surat harus dari rumah sakit, klinik, puskesmas, atau praktek dokter. Praktik bidan tidak lolos.",
+        "Kolom Dr./Bidan pada tanda tangan tetap klinik bila kopnya klinik atau praktek dokter.",
+        "Salin nama pasien utuh dari baris Nama, bukan nama dokter. Nama satu kata tetap nama pasien.",
+        "Judul Surat Keterangan Sehat, tulisan Sehat, atau kalimat Baik / Sehat berarti health_conclusion sehat.",
         "Ambil tanggal pemeriksaan atau tanggal surat, dan masa berlaku jika ada.",
     ]
     if expected_name.strip():
@@ -286,27 +290,56 @@ def _synthetic_ocr(parsed: dict[str, Any]) -> str:
     return "\n".join(p for p in parts if p)
 
 
+def _letters(value: Any) -> str:
+    return re.sub(r"[^a-z]", "", str(value or "").casefold())
+
+
+def _has_facility(text: str, *marks: str) -> bool:
+    return any(mark in text for mark in marks)
+
+
 def _issuer_type(parsed: dict[str, Any]) -> str:
     explicit = str(parsed.get("issuer_type") or "").strip().casefold().replace(" ", "_")
-    blob = " ".join(
-        str(parsed.get(key) or "")
-        for key in ("clinic_name", "document_type_label", "doctor_name", "notes", "issuer_type")
+    clinic = _letters(parsed.get("clinic_name"))
+    notes = _letters(
+        " ".join(
+            str(parsed.get(key) or "")
+            for key in ("document_type_label", "notes", "clinic_name")
+        )
     )
-    compact = re.sub(r"[^a-z]", "", blob.casefold())
-    if "bidan" in compact or explicit == "bidan":
+    if "bidan" in clinic:
         return "bidan"
-    if "puskesmas" in compact or explicit == "puskesmas":
+    if _has_facility(notes, "puskesmas") or explicit == "puskesmas":
         return "puskesmas"
-    if any(mark in compact for mark in ("rumahsakit", "rsud", "rsu", "hospital")) or explicit in {
-        "rumah_sakit",
-        "rs",
-    }:
+    if _has_facility(notes, "rumahsakit", "rsud", "rsu", "hospital") or explicit in {"rumah_sakit", "rs"}:
         return "rumah_sakit"
-    if "klinik" in compact or "praktikdokter" in compact or explicit == "klinik":
+    if _has_facility(notes, "klinik", "praktekdokter", "praktikdokter") or explicit == "klinik":
         return "klinik"
+    doctor = _letters(parsed.get("doctor_name"))
+    if explicit == "bidan" or "bidan" in doctor or "praktekbidan" in notes or "praktikbidan" in notes:
+        return "bidan"
     if explicit in {"rumah_sakit", "klinik", "puskesmas"}:
         return explicit
     return "lain"
+
+
+def _certificate_seen(parsed: dict[str, Any]) -> bool:
+    if parsed.get("is_health_certificate") is True:
+        return True
+    if str(parsed.get("is_health_certificate") or "").strip().casefold() in {"true", "ya", "yes", "1"}:
+        return True
+    blob = _letters(
+        " ".join(
+            str(parsed.get(key) or "")
+            for key in ("document_type_label", "notes", "health_conclusion_text", "clinic_name")
+        )
+    )
+    if "vaksin" in blob or "kartutandapenduduk" in blob:
+        return False
+    return any(
+        mark in blob
+        for mark in ("suratketerangansehat", "suratketerangandokter", "suratketerangankesehatan", "keterangankesehatan")
+    )
 
 
 def _normalize_conclusion(value: Any) -> str:
@@ -335,20 +368,19 @@ def _trailing_patient_name(holder: str, expected: str) -> bool:
 
 
 def _marked_healthy(parsed: dict[str, Any], gate_pass: bool) -> bool:
+    from systems.validation.keterangan_kesehatan import extract_health_conclusion
+
     conclusion = str(parsed.get("health_conclusion") or "").strip().casefold()
-    if conclusion == "sehat":
+    quoted = " ".join(
+        str(parsed.get(key) or "")
+        for key in ("document_type_label", "health_conclusion_text", "notes")
+    )
+    written_healthy = bool(extract_health_conclusion(quoted)["healthy"])
+    if conclusion == "sehat" or written_healthy:
         return True
     if conclusion == "tidak_sehat":
         return False
-    if gate_pass:
-        return True
-    from systems.validation.keterangan_kesehatan import extract_health_conclusion
-
-    blob = " ".join(
-        str(parsed.get(key) or "")
-        for key in ("document_type_label", "health_conclusion_text")
-    )
-    return bool(extract_health_conclusion(blob)["healthy"])
+    return gate_pass
 
 
 def _orient_health_bytes(data: bytes) -> tuple[bytes, dict[str, Any]]:
@@ -499,7 +531,7 @@ def analyze_health_letter_image(
             gate["valid_until"] = recomputed.isoformat()
             parsed["valid_until"] = recomputed.isoformat()
 
-    is_health = bool(parsed.get("is_health_certificate"))
+    is_health = _certificate_seen(parsed)
     conclusion = parsed.get("health_conclusion")
     health_status_pass = _marked_healthy(parsed, bool(gate.get("health_status_pass")))
 
