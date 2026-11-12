@@ -27,17 +27,23 @@ Jangan mengarang.
 Kembalikan HANYA satu objek JSON.
 - is_info_peserta (boolean): true hanya jika ada kartu peserta yang terlihat
   (nama, nomor peserta, NIK, tanggal lahir, atau Faskes).
+  true juga untuk kartu baru di bawah "Kepesertaan terdaftar": badge Aktif/Tidak Aktif,
+  pita "PENANGGUHAN PEMBAYARAN", nama, label Peserta beserta nomornya, Kelas, Lahir, Tipe, dan Faskes.
+  Pita itu status kepesertaan, bukan tagihan.
   false jika yang terlihat hanya judul "Info Peserta" dan "Kepesertaan terdaftar" tanpa data peserta.
   false untuk Kartu Indonesia Sehat / kartu BPJS (header hijau, barcode, label Nomor Kartu).
   false juga untuk Info Iuran, sisa saldo, tagihan, total tagihan, riwayat pembayaran,
   mutasi, kartu BPJS Ketenagakerjaan, atau KTP.
   Daftar keluarga yang tiap kartunya berisi "Sisa Saldo" dan "Tagihan" adalah Info Iuran, bukan Info Peserta.
 - is_kis_card (boolean): true jika gambar adalah Kartu Indonesia Sehat, bukan layar Info Peserta.
-- is_info_iuran (boolean): true jika judulnya Info Iuran atau ada tagihan/sisa saldo.
+- is_info_iuran (boolean): true jika judulnya Info Iuran atau ada nominal tagihan/sisa saldo.
+  false untuk kartu Info Peserta yang hanya memuat pita "PENANGGUHAN PEMBAYARAN".
 - has_tagihan (boolean): true jika nominal tagihan atau total tagihan terlihat.
+  false jika yang terlihat hanya pita "PENANGGUHAN PEMBAYARAN" tanpa angka rupiah.
 - members (array): peserta yang terlihat. Setiap item
   {"name": string, "nik": string, "card_number": string, "status": "AKTIF" atau "TIDAK AKTIF" atau ""}.
-  card_number adalah nomor peserta di kartu Info Peserta, bukan NIK. Jika satu peserta, tetap pakai array.
+  card_number adalah nomor di bawah label Peserta pada kartu Info Peserta, bukan NIK.
+  Jika satu peserta, tetap pakai array.
   Jika tidak ada peserta, isi array kosong. Jangan mengarang nama dari judul layar.
 - bpjs_card_number (string): nomor kartu pada Kartu Indonesia Sehat jika ikut terlihat di gambar yang sama, else "".
 - bpjs_nik (string): NIK pada kartu KIS jika ikut terlihat, else "".
@@ -92,6 +98,34 @@ def _members(parsed: dict[str, Any]) -> list[dict[str, str]]:
     return rows
 
 
+_BILL_TOKENS = ("infoiuran", "sisasaldo", "totaltagihan", "tagihan")
+_MEMBERSHIP_TOKENS = (
+    "kepesertaanterdaftar",
+    "jenistampilan",
+    "infopeserta",
+    "faskes",
+    "penangguhanpembayaran",
+)
+
+
+def _compact(text: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", (text or "").casefold())
+
+
+def _visible_text(parsed: dict[str, Any], rows: list[dict[str, str]]) -> str:
+    parts = [str(parsed.get("notes") or "")]
+    for row in rows:
+        parts.extend(str(row.get(key) or "") for key in ("name", "status", "card_number"))
+    return _compact(" ".join(parts))
+
+
+def _membership_card(rows: list[dict[str, str]], visible: str) -> bool:
+    has_person = any(row["name"] or norm_card_number(row.get("card_number", "")) for row in rows)
+    if not has_person:
+        return False
+    return any(token in visible for token in _MEMBERSHIP_TOKENS)
+
+
 def jkn_validation_from_extraction(
     parsed: dict[str, Any],
     *,
@@ -104,15 +138,25 @@ def jkn_validation_from_extraction(
     profile = "jkn"
     is_doc = as_bool(parsed.get("is_info_peserta"))
     notes_raw = str(parsed.get("notes") or "")
-    compact = re.sub(r"[^a-z0-9]", "", notes_raw.casefold())
-    iuran_screen = as_bool(parsed.get("is_info_iuran")) or as_bool(parsed.get("has_tagihan")) or any(
-        token in compact
-        for token in ("infoiuran", "sisasaldo", "totaltagihan", "tagihan", "pembayaraniuran")
+    compact = _compact(notes_raw)
+    blob = _compact(json.dumps(parsed, ensure_ascii=False))
+    rows_for_screen = _members(parsed)
+    visible = _visible_text(parsed, rows_for_screen)
+    bill_screen = any(token in visible for token in _BILL_TOKENS) or "pembayaraniuran" in visible
+    membership = _membership_card(rows_for_screen, visible)
+    iuran_screen = (
+        not (membership and not bill_screen)
+        and (
+            as_bool(parsed.get("is_info_iuran"))
+            or as_bool(parsed.get("has_tagihan"))
+            or bill_screen
+        )
     )
-    blob = re.sub(r"[^a-z0-9]", "", json.dumps(parsed, ensure_ascii=False).casefold())
     peserta_app = any(token in blob for token in ("kepesertaanterdaftar", "jenistampilan"))
     kis_only = (as_bool(parsed.get("is_kis_card")) or "kartuindonesiasehat" in blob) and not peserta_app
-    if iuran_screen or kis_only:
+    if membership and not bill_screen and not kis_only:
+        is_doc = True
+    elif iuran_screen or kis_only:
         is_doc = False
     rows = _members(parsed)
     kis_card = str(parsed.get("bpjs_card_number") or "").strip()
@@ -298,6 +342,7 @@ def analyze_jkn_image(
 ) -> dict[str, Any]:
     lines = [
         "Apakah ini layar Info Peserta JKN? Ambil nama, nomor peserta, NIK, dan status hanya jika kartu peserta terlihat.",
+        "Kartu dengan badge Tidak Aktif dan pita Penangguhan Pembayaran tetap Info Peserta. Nomor di bawah label Peserta adalah card_number. Jangan tandai sebagai tagihan.",
         "Judul Info Peserta tanpa nama atau nomor peserta bukan data. members kosong.",
         "Kartu Indonesia Sehat bukan Info Peserta. is_kis_card true dan is_info_peserta false.",
         "Jika kartu KIS ikut terlihat, isi bpjs_card_number terpisah. Jangan samakan nomor yang berbeda.",

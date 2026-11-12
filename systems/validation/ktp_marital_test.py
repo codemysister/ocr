@@ -2448,6 +2448,20 @@ def test_iuran_ai_modal_name_and_nik() -> None:
     assert pandawa["document_matched"] is True
     assert pandawa["name_match_method"] == "masked"
 
+    penangguhan = iuran_validation_from_extraction(
+        {
+            "is_info_iuran": True,
+            "is_info_peserta": False,
+            "has_tagihan": True,
+            "holder_name": "MATHEW H F SITANGGANG",
+            "name_displayed": True,
+            "notes": "Info Peserta. Kepesertaan terdaftar. Penangguhan pembayaran. Faskes Klinik Citama.",
+        },
+        expected_name="MATHEW H F SITANGGANG",
+    )
+    assert penangguhan["document_matched"] is False
+    assert penangguhan["error_code"] == "iuran.wrong_document"
+
     keluarga = iuran_validation_from_extraction(
         {
             "is_info_iuran": True,
@@ -2793,6 +2807,29 @@ def test_remaining_profiles_use_ornith() -> None:
     assert jkn["document_matched"] is True
     assert jkn["jkn_status_label"] == "tidak_aktif"
     assert jkn["error_code"] is None
+
+    penangguhan = jkn_validation_from_extraction(
+        {
+            "is_info_peserta": False,
+            "is_info_iuran": True,
+            "has_tagihan": True,
+            "members": [
+                {
+                    "name": "MATHEW H F SITANGGANG",
+                    "nik": "",
+                    "card_number": "0001799578247",
+                    "status": "TIDAK AKTIF",
+                }
+            ],
+            "notes": "Info Peserta. Kepesertaan terdaftar. Penangguhan pembayaran. Kelas III. Faskes Klinik Citama.",
+        },
+        expected_name="MATHEW H F SITANGGANG",
+        expected_card_number="0001799578247",
+    )
+    assert penangguhan["is_info_peserta"] is True
+    assert penangguhan["document_matched"] is True
+    assert penangguhan["jkn_status_label"] == "tidak_aktif"
+    assert penangguhan["error_code"] is None
 
     iuran_bukan_peserta = jkn_validation_from_extraction(
         {

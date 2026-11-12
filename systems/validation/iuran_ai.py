@@ -35,6 +35,8 @@ Kembalikan HANYA satu objek JSON:
   Layar berjudul "Info Peserta" dengan "Jenis Tampilan: Kepesertaan Terdaftar",
   kartu anggota (Peserta, Istri, Anak), tanggal lahir, dan Faskes
   BUKAN iuran. Untuk layar itu is_info_iuran = false dan is_info_peserta = true.
+  Kartu yang sama dengan badge Tidak Aktif dan pita "PENANGGUHAN PEMBAYARAN"
+  juga bukan iuran selama tidak ada nominal tagihan atau sisa saldo.
 - is_info_peserta (boolean): true jika judulnya Info Peserta atau daftar Kepesertaan Terdaftar.
 - is_payment_history (boolean): true jika ini daftar Info Riwayat Pembayaran yang sudah ada nominal, channel, tanggal bayar, atau status lunas.
 - has_tagihan (boolean): true hanya jika ada tagihan, sisa saldo, atau judul Info Iuran.
@@ -111,13 +113,15 @@ def iuran_validation_from_extraction(
         modal = False
     peserta_screen = _as_bool(parsed.get("is_info_peserta")) or any(
         token in compact
-        for token in ("infopeserta", "kepesertaanterdaftar", "jenistampilan", "faskes1")
+        for token in ("infopeserta", "kepesertaanterdaftar", "jenistampilan", "faskes1", "faskes")
     )
+    bill_words = any(token in compact for token in ("infoiuran", "totaltagihan", "sisasaldo", "tagihan"))
+    suspension_card = "penangguhanpembayaran" in compact and peserta_screen and not bill_words
     iuran_signal = (
         modal_notes
         or pandawa
-        or _as_bool(parsed.get("has_tagihan"))
-        or any(token in compact for token in ("infoiuran", "totaltagihan", "sisasaldo", "tagihan"))
+        or (not suspension_card and _as_bool(parsed.get("has_tagihan")))
+        or bill_words
     )
     if peserta_screen and not iuran_signal:
         is_doc = False
