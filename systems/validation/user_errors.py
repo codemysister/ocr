@@ -392,15 +392,6 @@ def infer_error_cases(validation: dict[str, Any]) -> list[dict[str, str]]:
     ):
         add("keterangan_kesehatan.not_healthy")
 
-    if "HEALTH_CHECK_EXPIRY" in blockers or (
-        profile == "keterangan_kesehatan" and validation.get("health_expiry_pass") is False
-    ):
-        reason = str((validation.get("health_check") or {}).get("reason") or "").casefold()
-        if "tidak terbaca" in reason:
-            add("keterangan_kesehatan.date_missing")
-        else:
-            add("keterangan_kesehatan.expired")
-
     if "HELPER_MARITAL" in blockers or (
         profile == "ktp" and validation.get("marital_pass") is False
     ):

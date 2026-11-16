@@ -553,25 +553,11 @@ def analyze_health_letter_image(
 
     exam = gate.get("exam_date") or parsed.get("issued_date")
     until = gate.get("valid_until") or parsed.get("valid_until")
-    as_of = today or date.today()
-    expiry_pass = False
-    if exam:
-        expiry_pass = True
-        try:
-            exam_day = date.fromisoformat(str(exam)[:10])
-        except ValueError:
-            exam_day = None
-        if exam_day and exam_day > as_of:
-            expiry_pass = False
-        if until:
-            try:
-                expiry_pass = date.fromisoformat(str(until)[:10]) >= as_of
-            except ValueError:
-                expiry_pass = True
+    expiry_pass = True
 
     issuer = str(parsed.get("issuer_type") or "lain")
     issuer_pass = issuer in {"rumah_sakit", "klinik", "puskesmas"}
-    matched = is_health and issuer_pass and health_status_pass and expiry_pass
+    matched = is_health and issuer_pass and health_status_pass
     if identity_pass is not None:
         matched = matched and identity_pass
 
@@ -584,12 +570,8 @@ def analyze_health_letter_image(
         reasons.append("Nama pada surat tidak cocok dengan referensi.")
     if not health_status_pass:
         reasons.append("Tidak tertera dinyatakan SEHAT.")
-    if not exam:
-        reasons.append("Tanggal dibuat tidak terbaca.")
-    elif not expiry_pass:
-        reasons.append("Surat kesehatan kadaluarsa.")
     if not reasons:
-        reasons.append("Surat keterangan kesehatan lolos: SEHAT, nama cocok, tanggal dibuat terbaca.")
+        reasons.append("Surat keterangan kesehatan lolos: SEHAT dan nama cocok.")
 
     blockers: list[str] = []
     if not is_health:
@@ -598,16 +580,9 @@ def analyze_health_letter_image(
         blockers.append("HEALTH_ISSUER")
     if not health_status_pass:
         blockers.append("HEALTH_STATUS")
-    if not expiry_pass:
-        blockers.append("HEALTH_CHECK_EXPIRY")
     if identity_pass is False:
         blockers.append("IDENTITY")
-    if not exam:
-        expiry_reason = "Tanggal pemeriksaan tidak terbaca."
-    elif not expiry_pass:
-        expiry_reason = "Surat kesehatan kadaluarsa."
-    else:
-        expiry_reason = ""
+    expiry_reason = ""
 
     out["validation"] = {
         "document_profile_id": "keterangan_kesehatan",
@@ -669,27 +644,15 @@ def overlay_health_ai_on_validation(validation: dict[str, Any], ai_out: dict[str
             hc["valid_until"] = until
             out["health_valid_until"] = until
         out["health_check"] = hc
-        exam_day = None
-        try:
-            exam_day = date.fromisoformat(str(exam)[:10])
-        except ValueError:
-            exam_day = None
-        if out.get("health_expiry_pass") is False and not until and exam_day and exam_day <= date.today():
-            out["health_expiry_pass"] = True
-            explanation = dict(out.get("explanation") or {})
-            blockers = [
-                b
-                for b in (explanation.get("primary_blockers") or [])
-                if b != "HEALTH_CHECK_EXPIRY"
-            ]
-            explanation["primary_blockers"] = blockers
-            out["explanation"] = explanation
-            if (
-                out.get("document_type_pass")
-                and out.get("health_status_pass")
-                and (out.get("identity_pass") is not False)
-            ):
-                out["document_matched"] = True
+        out["health_expiry_pass"] = True
+        explanation = dict(out.get("explanation") or {})
+        blockers = [
+            b
+            for b in (explanation.get("primary_blockers") or [])
+            if b != "HEALTH_CHECK_EXPIRY"
+        ]
+        explanation["primary_blockers"] = blockers
+        out["explanation"] = explanation
     if ext.get("is_health_certificate") is False:
         out["document_type_pass"] = False
         out["document_matched"] = False

@@ -707,8 +707,8 @@ def test_keterangan_kesehatan_sehat_and_expiry() -> None:
         today=date(2026, 6, 20),
     )
     assert missing_date["health_status_pass"] is True
-    assert missing_date["health_expiry_pass"] is False
-    assert missing_date["error_code"] == "keterangan_kesehatan.date_missing"
+    assert missing_date["document_matched"] is True
+    assert missing_date["error_code"] is None
 
     from systems.validation.keterangan_kesehatan_ai import _marked_healthy, _trailing_patient_name
 
@@ -734,9 +734,9 @@ def test_keterangan_kesehatan_sehat_and_expiry() -> None:
         expected_name="CITRA AMELIA",
         today=date(2026, 9, 27),
     )
-    assert expired["health_expiry_pass"] is False
-    assert expired["document_matched"] is False
-    assert expired["error_code"] == "keterangan_kesehatan.expired"
+    assert expired["health_status_pass"] is True
+    assert expired["document_matched"] is True
+    assert expired["error_code"] is None
 
     form = validate_document_ocr(
         "SURAT KETERANGAN DOKTER\nNama: WULAN PUTRI\n"
@@ -769,7 +769,7 @@ def test_keterangan_kesehatan_sehat_and_expiry() -> None:
     )
     assert gina and gina["exam_date"] == "2026-06-02"
     assert gina["valid_until"] == "2026-09-02"
-    assert gina["health_expiry_pass"] is False
+    assert gina["health_expiry_pass"] is True
 
     ayu = evaluate_keterangan_kesehatan_gates(
         "SURAT KETERANGAN KESEHATAN\nNama: AYU SAFITRI\ndinyatakan SEHAT.\n"
@@ -2737,6 +2737,36 @@ def test_ktp_ai_name_nik_and_helper() -> None:
         expected_name="Tiara Putri",
     )
     assert not_ktp["error_code"] == "ktp.wrong_document"
+
+    mislabeled_kk = ktp_validation_from_extraction(
+        {
+            "is_ktp": False,
+            "holder_name": "ERISKA SEPTIA LAELYROHMAH",
+            "nik": "3302106309030002",
+            "marital_status": "BELUM KAWIN",
+            "confidence": 98,
+            "notes": "Ini adalah Kartu Keluarga (KK), bukan KTP. NIK dan nama terbaca jelas.",
+        },
+        expected_name="Eriska Septia Laelyrohmah",
+        job_position="helper",
+    )
+    assert mislabeled_kk["is_ktp"] is True
+    assert mislabeled_kk["document_matched"] is True
+    assert mislabeled_kk["marital_pass"] is True
+    assert mislabeled_kk["error_code"] is None
+
+    real_kk = ktp_validation_from_extraction(
+        {
+            "is_ktp": False,
+            "holder_name": "ERISKA SEPTIA LAELYROHMAH",
+            "nik": "3302106309030002",
+            "marital_status": "BELUM KAWIN",
+            "notes": "Kartu Keluarga. Kepala keluarga. Daftar anggota.",
+        },
+        expected_name="Eriska Septia Laelyrohmah",
+        job_position="helper",
+    )
+    assert real_kk["error_code"] == "ktp.wrong_document"
 
     helper_ok = ktp_validation_from_extraction(
         {

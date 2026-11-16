@@ -28,8 +28,11 @@ Jangan mengarang. Salin teks yang terlihat.
 
 Kembalikan HANYA satu objek JSON valid. Kunci wajib pakai tanda kutip ganda.
 Jangan awali dengan kata JSON, jangan pakai bullet, jangan pakai markdown.
-- is_ktp (boolean): true hanya jika ini KTP atau e-KTP (kartu tanda penduduk).
-  false jika KK, SIM, NPWP, paspor, BPJS, ijazah, atau dokumen lain.
+- is_ktp (boolean): true untuk KTP / e-KTP: kartu dengan NIK, Nama, Tempat/Tgl Lahir,
+  Gol. Darah, RT/RW, Kel/Desa, Kecamatan, Agama, Status Perkawinan, foto, Berlaku Hingga.
+  Kartu Keluarga bukan KTP: judul KARTU KELUARGA, nomor KK, Kepala Keluarga, tabel anggota.
+  Jangan menandai KTP sebagai KK hanya karena ada NIK dan nama.
+  false jika SIM, NPWP, paspor, BPJS, ijazah, atau dokumen lain.
 - holder_name (string): nama pada field Nama, apa adanya (boleh terpotong).
   Bukan nama provinsi, kabupaten, alamat, atau agama.
 - nik (string): NIK 16 digit jika terlihat, else "".
@@ -44,6 +47,7 @@ Jangan awali dengan kata JSON, jangan pakai bullet, jangan pakai markdown.
 def ktp_user_prompt(*, expected_name: str = "") -> str:
     lines = [
         "Apakah ini KTP atau e-KTP? Ambil nama, NIK, dan status perkawinan.",
+        "Kartu biru dengan NIK, Gol. Darah, Kecamatan, dan Berlaku Hingga adalah KTP, bukan Kartu Keluarga.",
         "Kembalikan JSON saja.",
     ]
     if expected_name.strip():
@@ -74,6 +78,51 @@ def _normalize_marital(value: str) -> str | None:
     return None
 
 
+_KTP_MARKS = (
+    "goldarah",
+    "golongandarah",
+    "seumurhidup",
+    "berlakuhingga",
+    "kartutandapenduduk",
+    "ektp",
+    "tempatgllahir",
+    "kewarganegaraan",
+    "keldesa",
+)
+_KK_MARKS = (
+    "kepalakeluarga",
+    "nomorkartukeluarga",
+    "daftaranggota",
+    "susunankeluarga",
+)
+
+
+def _letters(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(value or "").casefold())
+
+
+def _looks_like_ktp(
+    parsed: dict[str, Any],
+    *,
+    holder: str,
+    nik: str,
+    marital_code: str | None,
+) -> bool:
+    blob = _letters(
+        " ".join(
+            str(parsed.get(key) or "")
+            for key in ("notes", "document_type_label", "holder_name", "marital_status")
+        )
+    )
+    if any(mark in blob for mark in _KTP_MARKS):
+        return True
+    if any(mark in blob for mark in _KK_MARKS):
+        return False
+    notes = str(parsed.get("notes") or "").casefold()
+    called_kk = "kartukeluarga" in blob or "bukan ktp" in notes or "bukan e-ktp" in notes
+    return bool(called_kk and holder and len(nik) == 16 and marital_code)
+
+
 def _marital_ocr_text(status: str | None) -> str:
     label = _STATUS_LABELS.get(status or "")
     if not label:
@@ -99,6 +148,10 @@ def ktp_validation_from_extraction(
     if len(nik) != 16:
         nik = ""
     marital_code = _normalize_marital(str(parsed.get("marital_status") or ""))
+    if not is_ktp and _looks_like_ktp(
+        parsed, holder=holder, nik=nik, marital_code=marital_code
+    ):
+        is_ktp = True
     exp_name = (expected_name or "").strip()
     exp_nik = _digits(expected_nik)
     if len(exp_nik) != 16:

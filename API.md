@@ -660,8 +660,7 @@ curl -X POST "https://checkinpro-ocr.web.id/api/v1/pipeline" \
 | Jenis dokumen | Surat keterangan kesehatan dari **rumah sakit, klinik, atau puskesmas**. Surat **bidan** ditolak |
 | `identity_pass` | Jika `expected_name` diisi — fuzzy nama ≥ 65 |
 | `health_status_pass` | Surat harus menyatakan kondisi **SEHAT** |
-| `health_expiry_pass` | Tanggal pemeriksaan terbaca dan tidak di masa depan; kadaluarsa hanya jika surat menulis masa berlaku |
-| `issued_date` | ISO `YYYY-MM-DD` + `issued_date_display` (Bahasa Indonesia), mis. `4 Juni 2026` |
+| `issued_date` | ISO `YYYY-MM-DD` + `issued_date_display` (Bahasa Indonesia), mis. `4 Juni 2026`. Tanggal hanya dicatat, tidak menolak |
 
 **Kode error validasi (HTTP 200, `document_matched: false`):**
 
@@ -671,8 +670,6 @@ curl -X POST "https://checkinpro-ocr.web.id/api/v1/pipeline" \
 | `keterangan_kesehatan.wrong_issuer` | Surat harus dari rumah sakit, klinik, atau puskesmas, bukan bidan |
 | `keterangan_kesehatan.name_mismatch` | Nama pada surat tidak cocok |
 | `keterangan_kesehatan.not_healthy` | Tidak dinyatakan SEHAT |
-| `keterangan_kesehatan.date_missing` | Tanggal cek kesehatan tidak terbaca |
-| `keterangan_kesehatan.expired` | Surat sudah kadaluarsa |
 
 **Error transport (Ornith down / respons kosong):** HTTP **503**, `detail.error_code`: `pipeline.health_ai_unavailable`, pesan: *OCR AI surat kesehatan tidak merespons. Coba lagi nanti.*
 

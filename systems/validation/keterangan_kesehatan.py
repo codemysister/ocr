@@ -843,35 +843,17 @@ def evaluate_keterangan_kesehatan_gates(
     else:
         health_reason = "Surat keterangan kesehatan terbaca: dinyatakan SEHAT."
 
+    expiry_pass = True
     if exam is None and until is None:
-        expiry_pass = False
-        expiry_reason = (
-            "Surat keterangan kesehatan tidak lolos: tanggal cek kesehatan "
-            "tidak terbaca di OCR."
-        )
-    elif exam is not None and exam > as_of:
-        expiry_pass = False
-        expiry_reason = (
-            "Surat keterangan kesehatan tidak lolos: tanggal cek di masa depan "
-            f"({exam.isoformat()}, hari ini {as_of.isoformat()})."
-        )
-    elif until is not None and until < as_of:
-        expiry_pass = False
-        expiry_reason = (
-            "Surat keterangan kesehatan tidak lolos: sudah kadaluarsa "
-            f"(berlaku sampai {until.isoformat()}, hari ini {as_of.isoformat()})."
-        )
+        expiry_reason = "Tanggal cek kesehatan tidak dicek; yang diuji nama dan status SEHAT."
     elif until is not None:
-        expiry_pass = True
         expiry_reason = (
-            "Tanggal cek kesehatan masih berlaku sampai "
-            f"{until.isoformat()} (hari ini {as_of.isoformat()})."
+            f"Tanggal surat terbaca{f' {exam.isoformat()}' if exam else ''}"
+            f" (sampai {until.isoformat()}, tidak dipakai menolak)."
         )
     else:
-        expiry_pass = True
         expiry_reason = (
-            f"Tanggal surat {exam.isoformat()} (dokumen tidak menulis "
-            f"tanggal kadaluarsa, hari ini {as_of.isoformat()})."
+            f"Tanggal surat {exam.isoformat()} (tidak dipakai menolak)."
         )
 
     return {
@@ -954,14 +936,6 @@ def apply_keterangan_kesehatan_gates(
         if "HEALTH_STATUS" not in blockers:
             blockers.insert(0, "HEALTH_STATUS")
         explanation["summary"] = gate["health_reason"]
-    if not gate["health_expiry_pass"]:
-        failed = True
-        if "HEALTH_CHECK_EXPIRY" not in blockers:
-            blockers.insert(0, "HEALTH_CHECK_EXPIRY")
-        if not gate["health_status_pass"]:
-            explanation["summary"] = gate["health_reason"]
-        else:
-            explanation["summary"] = gate["expiry_reason"]
 
     if failed:
         out["document_matched"] = False
